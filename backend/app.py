@@ -344,6 +344,11 @@ def register():
 
                 "address": address,
 
+                "gender": (
+                    str(data.get("gender", "")).strip()
+                    or None
+                ),
+
                 "email": email,
 
                 "password_hash": (
@@ -417,6 +422,7 @@ def login():
                     "address,"
                     "email,"
                     "avatar_url,"
+                    "gender,"
                     "password_hash"
                 ),
 
@@ -468,6 +474,7 @@ def login():
             "email": user["email"],
 
             "avatarUrl": user.get("avatar_url") or "",
+            "gender": user.get("gender") or "",
         },
     }), 200
 
@@ -476,7 +483,7 @@ def login():
 # Get / Update User
 # ---------------------------------------------------------------------------
 
-SELECT_FIELDS = "id,first_name,middle_name,last_name,dob,contact,address,email,avatar_url,created_at"
+SELECT_FIELDS = "id,first_name,middle_name,last_name,dob,gender,contact,address,email,avatar_url,created_at"
 
 
 def _serialize_user(u: dict) -> dict:
@@ -486,6 +493,7 @@ def _serialize_user(u: dict) -> dict:
         "middleName": u.get("middle_name") or "",
         "lastName": u.get("last_name") or "",
         "dob": u.get("dob") or "",
+        "gender": u.get("gender") or "",
         "contact": u.get("contact") or "",
         "address": u.get("address") or "",
         "email": u.get("email") or "",
@@ -527,6 +535,7 @@ def user_profile(user_id):
         "email": "email",
         "avatarUrl": "avatar_url",
         "profilePhoto": "avatar_url",
+        "gender": "gender",
     }
     for key, col in field_map.items():
         if key in data:

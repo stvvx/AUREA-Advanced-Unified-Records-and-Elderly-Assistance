@@ -8,6 +8,7 @@ type User = {
   email: string;
   middleName?: string;
   dob?: string;
+  gender?: string;
   contact?: string;
   address?: string;
   avatarUrl?: string | null;
@@ -71,6 +72,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       email: userData.email,
       middleName: userData.middleName ?? '',
       dob: userData.dob ?? '',
+      gender: userData.gender ?? '',
       contact: userData.contact ?? '',
       address: userData.address ?? '',
       avatarUrl: userData.avatarUrl ?? userData.profilePhoto ?? null,

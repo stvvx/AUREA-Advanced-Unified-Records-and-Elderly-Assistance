@@ -135,6 +135,8 @@ export default function RegisterScreen() {
     return base;
   });
   const [barangayOpen, setBarangayOpen] = useState(false);
+  const [gender, setGender] = useState('');
+  const [genderOpen, setGenderOpen] = useState(false);
   const [address, setAddress] = useState({ barangay: '', houseNo: '', street: '', subdivision: '' });
   const [toast, setToast] = useState<{ visible: boolean; message: string; type: 'success' | 'error' }>({
     visible: false, message: '', type: 'success',
@@ -176,6 +178,7 @@ export default function RegisterScreen() {
       if (!form.firstName?.trim()) return 'Please enter your first name.';
       if (!form.lastName?.trim()) return 'Please enter your last name.';
       if (!form.dob?.trim()) return 'Please select your date of birth.';
+      if (!gender) return 'Please select your gender.';
       if (!form.contact?.trim()) return 'Please enter a contact number.';
       return null;
     }
@@ -218,6 +221,7 @@ export default function RegisterScreen() {
         middleName: form.middleName?.trim() ?? '',
         lastName: form.lastName.trim(),
         dob: form.dob.trim(),
+        gender,
         contact: form.contact.trim(),
         address: buildAddress(),
         email: form.email.trim().toLowerCase(),
@@ -229,6 +233,7 @@ export default function RegisterScreen() {
         middleName: form.middleName?.trim() ?? '',
         lastName: form.lastName.trim(),
         dob: form.dob.trim(),
+        gender,
         contact: form.contact.trim(),
         address: buildAddress(),
         email: form.email.trim().toLowerCase(),
@@ -439,6 +444,21 @@ export default function RegisterScreen() {
                       </TouchableOpacity>
                     )}
                   </View>
+
+                  {/* Gender picker */}
+                  <View style={styles.fieldBlock}>
+                    <Text style={styles.label}>Gender <Text style={styles.required}>*</Text></Text>
+                    <TouchableOpacity
+                      style={styles.dropdown}
+                      onPress={() => setGenderOpen(true)}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={gender ? styles.dropdownValue : styles.dropdownPlaceholder}>
+                        {gender || 'Select gender'}
+                      </Text>
+                      <Ionicons name="chevron-down" size={20} color={colors.inkSoft} />
+                    </TouchableOpacity>
+                  </View>
                 </>
               )}
 
@@ -578,6 +598,26 @@ export default function RegisterScreen() {
             </Pressable>
           </Modal>
         )}
+
+      {/* Gender Picker Modal */}
+      <Modal visible={genderOpen} transparent animationType="fade" onRequestClose={() => setGenderOpen(false)}>
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setGenderOpen(false)}>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHandle} />
+            <Text style={styles.modalTitle}>Select Gender</Text>
+            {['Male', 'Female'].map((item) => (
+              <TouchableOpacity
+                key={item}
+                style={[styles.modalItem, item === gender && styles.modalItemActive]}
+                onPress={() => { setGender(item); setGenderOpen(false); }}
+              >
+                <Text style={[styles.modalItemText, item === gender && styles.modalItemTextActive]}>{item}</Text>
+                {item === gender && <Ionicons name="checkmark-circle" size={22} color={colors.primaryDeep} />}
+              </TouchableOpacity>
+            ))}
+          </View>
+        </TouchableOpacity>
+      </Modal>
 
       {/* Barangay Picker Modal */}
       <Modal visible={barangayOpen} transparent animationType="fade" onRequestClose={() => setBarangayOpen(false)}>

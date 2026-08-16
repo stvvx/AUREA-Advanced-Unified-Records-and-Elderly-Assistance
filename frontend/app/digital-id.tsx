@@ -12,7 +12,6 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import QRCode from 'react-native-qrcode-svg';
 import { useAuth } from '../context/AuthContext';
@@ -37,6 +36,9 @@ const C = {
 
 const sp = (n: number) => n * 4;
 
+// Standard ID/credit-card ratio (85.60 x 53.98mm)
+const CARD_RATIO = 85.6 / 53.98;
+
 function shadow(color: string, opacity: number, radius = 14, height = 6) {
   return Platform.select({
     ios: { shadowColor: color, shadowOpacity: opacity, shadowRadius: radius, shadowOffset: { width: 0, height } },
@@ -47,7 +49,6 @@ function shadow(color: string, opacity: number, radius = 14, height = 6) {
 
 function formatDob(dob: string): string {
   if (!dob) return '—';
-  // Handle MM/DD/YYYY
   const match = dob.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
   if (match) {
     const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
@@ -67,7 +68,13 @@ function getAge(dob: string): string {
   let age = today.getFullYear() - birth.getFullYear();
   const m = today.getMonth() - birth.getMonth();
   if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) age--;
-  return `${age} yrs old`;
+  return `${age}`;
+}
+
+function formatIdNo(id?: number): string {
+  if (!id) return '—';
+  const padded = String(id).padStart(8, '0');
+  return `${padded.slice(0, 4)}-${padded.slice(4)}`;
 }
 
 export default function DigitalIdScreen() {
@@ -78,6 +85,7 @@ export default function DigitalIdScreen() {
     middleName: string;
     lastName: string;
     dob: string;
+    gender: string;
     contact: string;
     address: string;
     avatarUrl: string | null;
@@ -94,6 +102,7 @@ export default function DigitalIdScreen() {
           middleName: p.middleName ?? '',
           lastName: p.lastName,
           dob: p.dob ?? '',
+          gender: p.gender ?? '',
           contact: p.contact ?? '',
           address: p.address ?? '',
           avatarUrl: p.avatarUrl ?? p.profilePhoto ?? null,
@@ -107,6 +116,7 @@ export default function DigitalIdScreen() {
             middleName: user.middleName ?? '',
             lastName: user.lastName,
             dob: user.dob ?? '',
+            gender: user.gender ?? '',
             contact: user.contact ?? '',
             address: user.address ?? '',
             avatarUrl: user.avatarUrl ?? user.profilePhoto ?? null,
@@ -142,6 +152,7 @@ export default function DigitalIdScreen() {
         id: profile.id,
         name: fullName,
         dob: profile.dob,
+        gender: profile.gender,
         contact: profile.contact,
         address: profile.address,
         municipality: 'Pateros',
@@ -176,107 +187,99 @@ export default function DigitalIdScreen() {
           </View>
         ) : (
           <>
-            {/* ── ID CARD ── */}
-            <View style={[s.card, shadow(C.primaryDark, 0.22, 20, 8)]}>
+            {/* ── ID CARD — fixed ATM/credit-card ratio ── */}
+            <View style={[s.card, shadow(C.primaryDark, 0.22, 18, 8)]}>
 
-              {/* Card header strip */}
-              <LinearGradient
-                colors={[C.primaryDark, C.primaryMid]}
-                start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
-                style={s.cardHeader}
-              >
+              <View style={s.bgBlobTop} pointerEvents="none" />
+              <View style={s.bgBlobBottom} pointerEvents="none" />
+
+              {/* Header strip */}
+              <View style={s.headerRow}>
                 <Image
                   source={require('../assets/images/pateros-logo.png')}
-                  style={s.headerLogo}
+                  style={s.headerSeal}
                   resizeMode="contain"
                 />
-                <View style={s.headerText}>
-                  <Text style={s.headerEyebrow}>REPUBLIC OF THE PHILIPPINES</Text>
-                  <Text style={s.headerTitle}>MUNICIPALITY OF PATEROS</Text>
-                  <Text style={s.headerSub}>Office for Senior Citizens Affairs</Text>
+                <View style={s.headerTitles}>
+                  <Text style={s.headerEyebrow} numberOfLines={1}>REPUBLIKA NG PILIPINAS</Text>
+                  <Text style={s.headerMain} numberOfLines={1}>MUNISIPYO NG PATEROS</Text>
+                  <Text style={s.headerSub} numberOfLines={1}>Senior Citizen Digital ID</Text>
                 </View>
-              </LinearGradient>
+                <View style={s.headerBadge}>
+                  <Ionicons name="finger-print" size={14} color={C.primaryDark} />
+                </View>
+              </View>
 
-              {/* Gold accent bar */}
               <View style={s.goldBar} />
 
-              {/* Card body */}
-              <View style={s.cardBody}>
+              {/* Main body: photo+details (left) | QR (right) */}
+              <View style={s.bodyRow}>
 
-                {/* Avatar + name block */}
-                <View style={s.topSection}>
-                  <View style={s.avatarWrap}>
-                    {profile?.avatarUrl ? (
-                      <Image source={{ uri: profile.avatarUrl }} style={s.avatar} />
-                    ) : (
-                      <View style={s.avatarFallback}>
-                        <Ionicons name="person" size={36} color={C.primaryDark} />
-                      </View>
-                    )}
-                    <View style={s.avatarBadge}>
-                      <Ionicons name="shield-checkmark" size={10} color={C.white} />
-                    </View>
+                {profile?.avatarUrl ? (
+                  <Image source={{ uri: profile.avatarUrl }} style={s.avatar} />
+                ) : (
+                  <View style={[s.avatar, s.avatarFallback]}>
+                    <Ionicons name="person" size={26} color={C.primaryDark} />
+                  </View>
+                )}
+
+                <View style={s.detailsCol}>
+                  <Text style={s.fullName} numberOfLines={1} ellipsizeMode="tail">
+                    {fullName || '—'}
+                  </Text>
+                  <Text style={s.idNo} numberOfLines={1}>
+                    ID No. {formatIdNo(profile?.id)}
+                  </Text>
+
+                  <View style={s.detailLine}>
+                    <DetailChip icon="calendar-outline" text={formatDob(profile?.dob ?? '')} />
+                    <DetailChip icon="hourglass-outline" text={profile?.dob ? `${getAge(profile.dob)} yrs` : '—'} />
+                    <DetailChip icon="male-female-outline" text={profile?.gender || '—'} />
                   </View>
 
-                  <View style={s.nameBlock}>
-                    <Text style={s.idLabel}>SENIOR CITIZEN ID</Text>
-                    <Text style={s.fullName} numberOfLines={2}>{fullName || '—'}</Text>
-                    {profile?.dob ? (
-                      <Text style={s.age}>{getAge(profile.dob)}</Text>
-                    ) : null}
-                    <View style={s.idNumberRow}>
-                      <Text style={s.idNumberLabel}>ID No. </Text>
-                      <Text style={s.idNumber}>
-                        {profile?.id ? String(profile.id).padStart(8, '0') : '—'}
-                      </Text>
-                    </View>
+                  <View style={s.detailLine}>
+                    <Ionicons name="call-outline" size={9} color={C.inkFaint} />
+                    <Text style={s.detailText} numberOfLines={1} ellipsizeMode="tail">
+                      {profile?.contact || '—'}
+                    </Text>
+                  </View>
+
+                  <View style={s.detailLine}>
+                    <Ionicons name="location-outline" size={9} color={C.inkFaint} />
+                    <Text style={s.detailText} numberOfLines={1} ellipsizeMode="tail">
+                      {profile?.address || '—'}
+                    </Text>
                   </View>
                 </View>
 
-                {/* Divider */}
-                <View style={s.divider} />
-
-                {/* Info rows */}
-                <View style={s.infoGrid}>
-                  <InfoRow icon="calendar-outline" label="Date of Birth" value={formatDob(profile?.dob ?? '')} />
-                  <InfoRow icon="call-outline" label="Contact" value={profile?.contact || '—'} />
-                  <InfoRow icon="location-outline" label="Address" value={profile?.address || '—'} />
-                </View>
-
-                {/* Divider */}
-                <View style={s.divider} />
-
-                {/* QR Code */}
-                <View style={s.qrSection}>
-                  <Text style={s.qrLabel}>Scan to Verify</Text>
+                <View style={s.qrCol}>
                   <View style={s.qrWrap}>
                     {qrData ? (
                       <QRCode
                         value={qrData}
-                        size={130}
+                        size={58}
                         color={C.primaryDark}
                         backgroundColor={C.white}
                       />
                     ) : (
                       <View style={s.qrPlaceholder}>
-                        <Ionicons name="qr-code-outline" size={40} color={C.inkFaint} />
+                        <Ionicons name="qr-code-outline" size={22} color={C.inkFaint} />
                       </View>
                     )}
                   </View>
-                  <Text style={s.qrSub}>Municipality of Pateros — OSCA</Text>
+                  <View style={s.verifiedBadge}>
+                    <Ionicons name="shield-checkmark" size={9} color={C.white} />
+                    <Text style={s.verifiedBadgeTxt}>VERIFIED</Text>
+                  </View>
                 </View>
               </View>
 
-              {/* Card footer */}
-              <LinearGradient
-                colors={[C.primaryDark, C.primaryMid]}
-                start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
-                style={s.cardFooter}
-              >
-                <Text style={s.footerTxt}>
-                  This card is the property of the Municipality of Pateros.
+              {/* Footer strip */}
+              <View style={s.cardFooter}>
+                <Text style={s.footerTxt} numberOfLines={1}>
+                  Property of the Municipality of Pateros — OSCA
                 </Text>
-              </LinearGradient>
+              </View>
             </View>
 
             {/* Note */}
@@ -293,16 +296,11 @@ export default function DigitalIdScreen() {
   );
 }
 
-function InfoRow({ icon, label, value }: { icon: string; label: string; value: string }) {
+function DetailChip({ icon, text }: { icon: string; text: string }) {
   return (
-    <View style={s.infoRow}>
-      <View style={s.infoIconWrap}>
-        <Ionicons name={icon as any} size={14} color={C.primaryDark} />
-      </View>
-      <View style={s.infoText}>
-        <Text style={s.infoLabel}>{label}</Text>
-        <Text style={s.infoValue} numberOfLines={2}>{value}</Text>
-      </View>
+    <View style={s.chip}>
+      <Ionicons name={icon as any} size={9} color={C.inkFaint} />
+      <Text style={s.chipTxt} numberOfLines={1}>{text}</Text>
     </View>
   );
 }
@@ -317,6 +315,9 @@ const s = StyleSheet.create({
     paddingHorizontal: sp(4),
     paddingVertical: sp(3),
     backgroundColor: C.bg,
+    width: '100%',
+    maxWidth: 460,
+    alignSelf: 'center',
   },
   backBtn: {
     width: 38, height: 38, borderRadius: 12,
@@ -337,6 +338,9 @@ const s = StyleSheet.create({
     paddingHorizontal: sp(4),
     paddingBottom: sp(10),
     paddingTop: sp(2),
+    width: '100%',
+    maxWidth: 460,
+    alignSelf: 'center',
   },
 
   centered: {
@@ -377,207 +381,194 @@ const s = StyleSheet.create({
     color: C.white,
   },
 
-  // Card
+  // Card — fixed landscape ratio like a physical ID/ATM card
   card: {
-    backgroundColor: C.card,
-    borderRadius: 20,
+    width: '100%',
+    aspectRatio: CARD_RATIO,
+    backgroundColor: C.primarySoft,
+    borderRadius: 16,
     overflow: 'hidden',
     marginBottom: sp(4),
+    borderWidth: 1,
+    borderColor: C.line,
+    padding: sp(2.5),
+  },
+  bgBlobTop: {
+    position: 'absolute',
+    top: -50, right: -50,
+    width: 130, height: 130,
+    borderRadius: 999,
+    backgroundColor: 'rgba(196,137,46,0.10)',
+  },
+  bgBlobBottom: {
+    position: 'absolute',
+    bottom: -60, left: -40,
+    width: 150, height: 150,
+    borderRadius: 999,
+    backgroundColor: 'rgba(31,92,62,0.08)',
   },
 
-  cardHeader: {
+  headerRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: sp(4),
-    paddingVertical: sp(4),
-    gap: sp(3),
+    gap: 6,
   },
-  headerLogo: {
-    width: 48, height: 48,
+  headerSeal: {
+    width: 22, height: 22,
   },
-  headerText: { flex: 1 },
+  headerTitles: { flex: 1 },
   headerEyebrow: {
     fontFamily: 'InterBody',
     fontWeight: '700',
-    fontSize: 8,
-    letterSpacing: 1.2,
-    color: 'rgba(255,255,255,0.7)',
-    marginBottom: 2,
+    fontSize: 7.5,
+    color: C.primaryDark,
+    letterSpacing: 0.3,
   },
-  headerTitle: {
+  headerMain: {
     fontFamily: 'FraunTitle',
-    fontSize: 13,
-    color: C.white,
-    lineHeight: 17,
+    fontSize: 12,
+    color: C.ink,
+    lineHeight: 14,
   },
   headerSub: {
     fontFamily: 'InterBody',
-    fontSize: 9.5,
-    color: 'rgba(255,255,255,0.75)',
-    marginTop: 2,
+    fontSize: 7.5,
+    color: C.inkSoft,
+  },
+  headerBadge: {
+    width: 22, height: 22,
+    borderRadius: 11,
+    backgroundColor: C.goldSoft,
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#EEDDB8',
   },
 
   goldBar: {
-    height: 4,
+    height: 2,
     backgroundColor: C.gold,
+    borderRadius: 1,
+    marginVertical: 6,
   },
 
-  cardBody: {
-    padding: sp(5),
-  },
-
-  topSection: {
+  bodyRow: {
+    flex: 1,
     flexDirection: 'row',
-    gap: sp(4),
-    marginBottom: sp(4),
+    alignItems: 'flex-start',
+    gap: 8,
+    backgroundColor: C.white,
+    borderRadius: 10,
+    padding: 8,
   },
-  avatarWrap: {
-    width: 88, height: 88,
-    borderRadius: 12,
-    backgroundColor: C.primarySoft,
-    alignItems: 'center', justifyContent: 'center',
-    overflow: 'visible',
-    borderWidth: 2,
-    borderColor: C.line,
-  },
+
   avatar: {
-    width: 88, height: 88,
-    borderRadius: 12,
+    width: 54, height: 54,
+    borderRadius: 8,
+    backgroundColor: C.primarySoft,
   },
   avatarFallback: {
-    width: 88, height: 88,
-    borderRadius: 12,
-    backgroundColor: C.primarySoft,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  avatarBadge: {
-    position: 'absolute',
-    bottom: -6, right: -6,
-    width: 20, height: 20,
-    borderRadius: 10,
-    backgroundColor: C.primaryDark,
-    alignItems: 'center', justifyContent: 'center',
-    borderWidth: 2, borderColor: C.white,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: C.line,
   },
 
-  nameBlock: { flex: 1, justifyContent: 'center' },
-  idLabel: {
-    fontFamily: 'InterBody',
-    fontWeight: '700',
-    fontSize: 9,
-    letterSpacing: 1.4,
-    color: C.gold,
-    marginBottom: 4,
+  detailsCol: {
+    flex: 1,
+    justifyContent: 'flex-start',
+    gap: 3,
+    minWidth: 0,
   },
   fullName: {
     fontFamily: 'FraunTitle',
-    fontSize: 18,
-    color: C.ink,
-    lineHeight: 23,
-    marginBottom: 3,
-  },
-  age: {
-    fontFamily: 'InterBody',
-    fontSize: 12,
-    color: C.inkSoft,
-    marginBottom: 6,
-  },
-  idNumberRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: C.primarySoft,
-    borderRadius: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    alignSelf: 'flex-start',
-  },
-  idNumberLabel: {
-    fontFamily: 'InterBody',
-    fontSize: 10,
-    color: C.inkSoft,
-  },
-  idNumber: {
-    fontFamily: 'InterBody',
-    fontWeight: '700',
-    fontSize: 11,
-    color: C.primaryDark,
-    letterSpacing: 1,
-  },
-
-  divider: {
-    height: 1,
-    backgroundColor: C.line,
-    marginVertical: sp(3),
-  },
-
-  infoGrid: { gap: sp(3) },
-  infoRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: sp(3),
-  },
-  infoIconWrap: {
-    width: 28, height: 28,
-    borderRadius: 8,
-    backgroundColor: C.primarySoft,
-    alignItems: 'center', justifyContent: 'center',
-    marginTop: 1,
-  },
-  infoText: { flex: 1 },
-  infoLabel: {
-    fontFamily: 'InterBody',
-    fontSize: 10,
-    color: C.inkFaint,
-    marginBottom: 2,
-    fontWeight: '600',
-    letterSpacing: 0.4,
-  },
-  infoValue: {
-    fontFamily: 'InterBody',
     fontSize: 13.5,
     color: C.ink,
-    fontWeight: '600',
   },
-
-  qrSection: {
-    alignItems: 'center',
-    gap: sp(2),
-  },
-  qrLabel: {
+  idNo: {
     fontFamily: 'InterBody',
     fontWeight: '700',
-    fontSize: 11,
-    letterSpacing: 1,
-    color: C.inkFaint,
+    fontSize: 8.5,
+    color: C.primaryDark,
+    letterSpacing: 0.4,
+    marginBottom: 2,
+  },
+
+  detailLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    flexWrap: 'wrap',
+  },
+  detailText: {
+    fontFamily: 'InterBody',
+    fontSize: 9,
+    color: C.inkSoft,
+    flexShrink: 1,
+  },
+
+  chip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    backgroundColor: C.primarySoft,
+    borderRadius: 5,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+  },
+  chipTxt: {
+    fontFamily: 'InterBody',
+    fontWeight: '600',
+    fontSize: 8,
+    color: C.inkSoft,
+  },
+
+  qrCol: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    paddingLeft: 8,
+    borderLeftWidth: 1,
+    borderLeftColor: C.line,
+    alignSelf: 'stretch',
   },
   qrWrap: {
-    padding: sp(3),
+    padding: 4,
     backgroundColor: C.white,
-    borderRadius: 12,
+    borderRadius: 6,
     borderWidth: 1,
     borderColor: C.line,
   },
   qrPlaceholder: {
-    width: 130, height: 130,
+    width: 58, height: 58,
     alignItems: 'center', justifyContent: 'center',
   },
-  qrSub: {
+  verifiedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: C.primaryDark,
+    borderRadius: 999,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  verifiedBadgeTxt: {
     fontFamily: 'InterBody',
-    fontSize: 10,
-    color: C.inkFaint,
+    fontWeight: '700',
+    fontSize: 7,
+    color: C.white,
+    letterSpacing: 0.4,
   },
 
   cardFooter: {
-    paddingVertical: sp(3),
-    paddingHorizontal: sp(4),
     alignItems: 'center',
+    marginTop: 6,
   },
   footerTxt: {
     fontFamily: 'InterBody',
-    fontSize: 9,
-    color: 'rgba(255,255,255,0.7)',
+    fontSize: 7,
+    color: C.inkFaint,
     textAlign: 'center',
-    letterSpacing: 0.3,
+    letterSpacing: 0.2,
   },
 
   // Note
