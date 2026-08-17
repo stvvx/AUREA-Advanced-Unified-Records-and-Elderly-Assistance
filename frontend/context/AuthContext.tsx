@@ -13,6 +13,7 @@ type User = {
   address?: string;
   avatarUrl?: string | null;
   profilePhoto?: string | null;
+  role?: string;
 };
 
 type AuthContextType = {
@@ -77,6 +78,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       address: userData.address ?? '',
       avatarUrl: userData.avatarUrl ?? userData.profilePhoto ?? null,
       profilePhoto: userData.profilePhoto ?? userData.avatarUrl ?? null,
+      role: userData.role ?? 'user',
     };
 
     await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(normalizedUser));

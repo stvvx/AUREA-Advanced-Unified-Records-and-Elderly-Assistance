@@ -62,7 +62,9 @@ export default function LoginScreen() {
       const data = await loginUser({ email: email.trim(), password });
       await login(data.user);
       showToast('Welcome back! Logging you in…', 'success');
-      setTimeout(() => router.replace('/(tabs)'), 1500);
+      const adminRoles = ['osca admin', 'med admin', 'super admin'];
+      const dest = adminRoles.includes(data.user.role ?? '') ? '/admin-dashboard' : '/(tabs)';
+      setTimeout(() => router.replace(dest as any), 1500);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Invalid email or password.';
       showToast(message, 'error');

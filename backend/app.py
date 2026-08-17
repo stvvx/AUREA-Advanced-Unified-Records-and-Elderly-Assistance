@@ -423,6 +423,7 @@ def login():
                     "email,"
                     "avatar_url,"
                     "gender,"
+                    "role,"
                     "password_hash"
                 ),
 
@@ -475,6 +476,7 @@ def login():
 
             "avatarUrl": user.get("avatar_url") or "",
             "gender": user.get("gender") or "",
+            "role": user.get("role") or "user",
         },
     }), 200
 
@@ -483,7 +485,7 @@ def login():
 # Get / Update User
 # ---------------------------------------------------------------------------
 
-SELECT_FIELDS = "id,first_name,middle_name,last_name,dob,gender,contact,address,email,avatar_url,created_at"
+SELECT_FIELDS = "id,first_name,middle_name,last_name,dob,gender,contact,address,email,avatar_url,role,created_at"
 
 
 def _serialize_user(u: dict) -> dict:
@@ -498,6 +500,7 @@ def _serialize_user(u: dict) -> dict:
         "address": u.get("address") or "",
         "email": u.get("email") or "",
         "avatarUrl": u.get("avatar_url") or "",
+        "role": u.get("role") or "user",
         "createdAt": u.get("created_at") or "",
     }
 
@@ -637,6 +640,42 @@ def upload_avatar(user_id):
         pass  # URL is still returned even if DB update fails
 
     return jsonify({"avatarUrl": public_url}), 200
+
+
+# ---------------------------------------------------------------------------
+# Admin — Users & Transactions
+# ---------------------------------------------------------------------------
+
+ADMIN_ROLES = {"osca admin", "med admin", "super admin"}
+
+
+@app.route("/api/admin/users", methods=["GET", "OPTIONS"])
+def admin_users():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    try:
+        ensure_users_table()
+        result = supabase_rest(
+            "GET", SUPABASE_USERS_TABLE,
+            params={"select": SELECT_FIELDS, "order": "created_at.desc"},
+        )
+        return jsonify({"users": [_serialize_user(u) for u in result]}), 200
+    except RuntimeError as exc:
+        return jsonify({"message": str(exc)}), 500
+
+
+@app.route("/api/admin/transactions", methods=["GET", "OPTIONS"])
+def admin_transactions():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    try:
+        result = supabase_rest(
+            "GET", "transactions",
+            params={"select": "*", "order": "created_at.desc"},
+        )
+        return jsonify({"transactions": result}), 200
+    except RuntimeError as exc:
+        return jsonify({"message": str(exc)}), 500
 
 
 # ---------------------------------------------------------------------------

@@ -80,7 +80,7 @@ export async function registerUser(payload: RegisterPayload): Promise<{ message:
   return request('/api/auth/register', payload);
 }
 
-export async function loginUser(payload: LoginPayload): Promise<{ message: string; user: { id: number; firstName: string; middleName?: string; lastName: string; dob?: string; gender?: string; contact?: string; address?: string; email: string; avatarUrl?: string | null; profilePhoto?: string | null } }> {
+export async function loginUser(payload: LoginPayload): Promise<{ message: string; user: { id: number; firstName: string; middleName?: string; lastName: string; dob?: string; gender?: string; contact?: string; address?: string; email: string; avatarUrl?: string | null; profilePhoto?: string | null; role?: string } }> {
   return request('/api/auth/login', payload);
 }
 
