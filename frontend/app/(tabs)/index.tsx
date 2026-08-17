@@ -6,17 +6,20 @@ import {
   StyleSheet,
   StatusBar,
   TouchableOpacity,
+  Pressable,
+  TextInput,
   ImageBackground,
   Image,
   useWindowDimensions,
   Platform,
 } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../../context/AuthContext';
 import Toast from '../../components/Toast';
+import { BENEFIT_ITEMS } from '../../data/benefits';
 
 /**
  * DashboardScreen — AUREA
@@ -80,17 +83,6 @@ const BANNERS = [
   },
 ];
 
-// Available benefits — colored circular icon buttons. Category tiles
-// (NGAs/LGUs/Travel/Health/Report) were removed: this grid is only
-// the actual benefits a resident can apply for.
-const BENEFIT_ITEMS = [
-  { icon: 'medkit',    label: 'Medicine',      color: '#B3432E', bg: '#FBE3DD', benefit: 'request for medicine' },
-  { icon: 'cash',      label: 'Financial Aid', color: '#0F766E', bg: '#DAF3EE', benefit: 'application for financial assistance' },
-  { icon: 'card',      label: 'Physical ID',   color: '#1D4ED8', bg: '#DCE9FF', benefit: 'application for Physical ID' },
-  { icon: 'film',      label: 'Movie Center',  color: '#7C3AED', bg: '#EBE0FE', benefit: 'appointment for movie center' },
-  { icon: 'calendar',  label: 'Check-up',      color: '#0F766E', bg: '#DAF3EE', benefit: 'appointment for check-up' },
-  { icon: 'warning',   label: 'Emergency',     color: '#B3432E', bg: '#FBE3DD', benefit: 'emergency alert' },
-];
 
 const STEPS = [
   { number: '1', title: 'Register',        text: 'Create your AUREA account with a family member or on your own.' },
@@ -163,7 +155,6 @@ export default function DashboardScreen() {
   const router = useRouter();
   const { user, logout } = useAuth();
   const { width } = useWindowDimensions();
-  const insets = useSafeAreaInsets();
   const small = width < 360;
 
   // Width-driven breakpoints — the same component renders on a phone
@@ -194,13 +185,60 @@ export default function DashboardScreen() {
   const [toast, setToast] = React.useState({
     visible: false, message: '', type: 'success' as 'success' | 'error',
   });
+  const [searchQuery, setSearchQuery] = React.useState('');
+  const [menuOpen, setMenuOpen] = React.useState(false);
+
+  const filteredBenefits = React.useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) {
+      return [];
+    }
+
+    return BENEFIT_ITEMS.filter((item) => {
+      const label = item.label.toLowerCase();
+      const applicationText = item.applicationValue.toLowerCase();
+      return label.includes(query) || applicationText.includes(query);
+    });
+  }, [searchQuery]);
+
+  const handleSearchSubmit = () => {
+    if (!user) {
+      showToast('Please log in to search and apply for benefits.', 'error');
+      router.push('/login');
+      return;
+    }
+
+    const trimmedQuery = searchQuery.trim();
+    if (!trimmedQuery) {
+      router.push('/benefit-selection');
+      return;
+    }
+
+    const normalizedQuery = trimmedQuery.toLowerCase();
+    const exactMatch = BENEFIT_ITEMS.find((item) =>
+      item.label.toLowerCase() === normalizedQuery || item.applicationValue.toLowerCase() === normalizedQuery,
+    );
+
+    if (exactMatch) {
+      router.push({ pathname: '/benefit-application', params: { benefitId: exactMatch.id } });
+      return;
+    }
+
+    router.push({ pathname: '/benefit-selection', params: { query: trimmedQuery } });
+  };
 
   const showToast = (message: string, type: 'success' | 'error' = 'success') =>
     setToast({ visible: true, message, type });
 
   const handleLogout = async () => {
+    setMenuOpen(false);
     await logout();
     showToast('You have been logged out.');
+  };
+
+  const handleNotifications = () => {
+    setMenuOpen(false);
+    showToast('No new notifications right now.');
   };
 
   const today = new Date().toLocaleDateString('en-US', {
@@ -232,8 +270,9 @@ export default function DashboardScreen() {
 
       <ScrollView
         style={[s.scroll, isWeb && s.scrollWeb]}
-        contentContainerStyle={[s.container, { paddingTop: Math.max(insets.top, sp(2)) }]}
+        contentContainerStyle={[s.container, { paddingTop: sp(2) }]}
         showsVerticalScrollIndicator={false}
+        onScrollBeginDrag={() => setMenuOpen(false)}
       >
         {/* Full width on phones. On tablet/desktop the column widens
             with the viewport (not a fixed narrow cap), and past 1024px
@@ -258,40 +297,83 @@ export default function DashboardScreen() {
               )}
             </View>
 
-            <View style={s.headerActions}>
-              {user && (
-                <TouchableOpacity
-                  style={[s.iconBtn, webPointer]}
-                  activeOpacity={0.8}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  accessibilityRole="button"
-                  accessibilityLabel="Notifications"
-                >
-                  <Ionicons name="notifications-outline" size={22} color={C.primaryDark} />
-                </TouchableOpacity>
-              )}
-              {user ? (
-                <TouchableOpacity
-                  style={[s.avatarButton, webPointer]}
-                  onPress={() => router.push('/profile')}
-                  activeOpacity={0.8}
-                  accessibilityRole="button"
-                  accessibilityLabel="Open profile"
-                >
-                  <Ionicons name="person-circle" size={38} color={C.primaryDark} />
-                </TouchableOpacity>
-              ) : (
-                <TouchableOpacity
-                  style={[s.loginPill, webPointer]}
-                  onPress={() => router.push('/login')}
-                  accessibilityRole="button"
-                  accessibilityLabel="Log in"
-                >
-                  <Text style={s.loginPillText}>Log in</Text>
-                </TouchableOpacity>
+            <View style={s.headerActionsWrap}>
+              <View style={s.headerActions}>
+                {user && (
+                  <TouchableOpacity
+                    style={[s.iconBtn, webPointer]}
+                    onPress={() => setMenuOpen((prev) => !prev)}
+                    activeOpacity={0.8}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    accessibilityRole="button"
+                    accessibilityLabel="Open menu"
+                  >
+                    <Ionicons name={menuOpen ? 'close' : 'menu'} size={22} color={C.primaryDark} />
+                  </TouchableOpacity>
+                )}
+                {user ? (
+                  <TouchableOpacity
+                    style={[s.avatarButton, webPointer]}
+                    onPress={() => {
+                      setMenuOpen(false);
+                      router.push('/profile');
+                    }}
+                    activeOpacity={0.8}
+                    accessibilityRole="button"
+                    accessibilityLabel="Open profile"
+                  >
+                    <Ionicons name="person-circle" size={38} color={C.primaryDark} />
+                  </TouchableOpacity>
+                ) : (
+                  <TouchableOpacity
+                    style={[s.loginPill, webPointer]}
+                    onPress={() => router.push('/login')}
+                    accessibilityRole="button"
+                    accessibilityLabel="Log in"
+                  >
+                    <Text style={s.loginPillText}>Log in</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              {user && menuOpen && (
+                <View style={s.headerMenu}>
+                  <TouchableOpacity
+                    style={[s.headerMenuItem, webPointer]}
+                    onPress={handleNotifications}
+                    activeOpacity={0.8}
+                    accessibilityRole="button"
+                    accessibilityLabel="Open notifications"
+                  >
+                    <Ionicons name="notifications-outline" size={16} color={C.ink} />
+                    <Text style={s.headerMenuText}>Notifications</Text>
+                  </TouchableOpacity>
+
+                  <View style={s.headerMenuDivider} />
+
+                  <TouchableOpacity
+                    style={[s.headerMenuItem, webPointer]}
+                    onPress={handleLogout}
+                    activeOpacity={0.8}
+                    accessibilityRole="button"
+                    accessibilityLabel="Log out"
+                  >
+                    <Ionicons name="log-out-outline" size={16} color="#B3432E" />
+                    <Text style={[s.headerMenuText, s.headerMenuTextDanger]}>Log out</Text>
+                  </TouchableOpacity>
+                </View>
               )}
             </View>
           </View>
+
+          {user && menuOpen && (
+            <Pressable
+              style={s.menuBackdrop}
+              onPress={() => setMenuOpen(false)}
+              accessibilityRole="button"
+              accessibilityLabel="Close menu"
+            />
+          )}
 
           <View style={s.locationBar}>
             <Ionicons name="location-outline" size={16} color={C.inkSoft} />
@@ -300,16 +382,51 @@ export default function DashboardScreen() {
           </View>
 
           {/* ── SEARCH ───────────────────────────────────────── */}
-          <TouchableOpacity
-            style={[s.searchBar, webPointer]}
-            activeOpacity={0.9}
-            onPress={() => router.push('/benefit-selection')}
-            accessibilityRole="button"
-            accessibilityLabel="Search services"
-          >
-            <Ionicons name="search" size={20} color={C.inkFaint} />
-            <Text style={s.searchText}>Search services, e.g. Physical ID</Text>
-          </TouchableOpacity>
+          <View style={s.searchWrap}>
+            <View style={s.searchBar}>
+              <Ionicons name="search" size={20} color={C.inkFaint} />
+              <TextInput
+                style={s.searchInput}
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+                placeholder="Search services, e.g. Physical ID"
+                placeholderTextColor={C.inkFaint}
+                returnKeyType="search"
+                onSubmitEditing={handleSearchSubmit}
+                accessibilityLabel="Search services"
+              />
+              <TouchableOpacity
+                style={[s.searchGoBtn, webPointer]}
+                activeOpacity={0.85}
+                onPress={handleSearchSubmit}
+                accessibilityRole="button"
+                accessibilityLabel="Run search"
+              >
+                <Ionicons name="arrow-forward" size={16} color={C.white} />
+              </TouchableOpacity>
+            </View>
+
+            {user && filteredBenefits.length > 0 && (
+              <View style={s.searchResults}>
+                {filteredBenefits.slice(0, 4).map((item) => (
+                  <TouchableOpacity
+                    key={item.id}
+                    style={[s.searchResultItem, webPointer]}
+                    onPress={() => {
+                      setSearchQuery(item.label);
+                      router.push({ pathname: '/benefit-application', params: { benefitId: item.id } });
+                    }}
+                    activeOpacity={0.8}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Open ${item.label}`}
+                  >
+                    <Ionicons name={item.icon as any} size={16} color={item.color} />
+                    <Text style={s.searchResultText}>{item.label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </View>
 
           {/* ── BANNER CAROUSEL ──────────────────────────────── */}
           <ScrollView
@@ -345,38 +462,40 @@ export default function DashboardScreen() {
               the wide viewport is doing something with the space
               instead of framing a narrow centered card. */}
           <View style={[s.splitRow, isDesktop && s.splitRowDesktop]}>
-            <View style={[s.splitMain, isDesktop && s.splitMainDesktop]}>
-              <View style={s.sectionHead}>
-                <Text style={s.sectionTitle}>Available Benefits</Text>
-              </View>
-              <View style={s.serviceGrid}>
-                {BENEFIT_ITEMS.map((item) => (
-                  <View key={item.label} style={{ width: tileWidthPct }}>
-                    <TouchableOpacity
-                      style={[s.serviceItem, webPointer]}
-                      onPress={() =>
-                        router.push({ pathname: '/benefit-application', params: { benefit: item.benefit } })
-                      }
-                      activeOpacity={0.8}
-                      accessibilityRole="button"
-                      accessibilityLabel={item.label}
-                    >
-                      <View
-                        style={[
-                          s.serviceCircle,
-                          { width: tileSize, height: tileSize, borderRadius: tileSize / 2, backgroundColor: item.bg },
-                        ]}
+            {user && (
+              <View style={[s.splitMain, isDesktop && s.splitMainDesktop]}>
+                <View style={s.sectionHead}>
+                  <Text style={s.sectionTitle}>Available Benefits</Text>
+                </View>
+                <View style={s.serviceGrid}>
+                  {BENEFIT_ITEMS.map((item) => (
+                    <View key={item.label} style={{ width: tileWidthPct }}>
+                      <TouchableOpacity
+                        style={[s.serviceItem, webPointer]}
+                        onPress={() =>
+                          router.push({ pathname: '/benefit-application', params: { benefitId: item.id } })
+                        }
+                        activeOpacity={0.8}
+                        accessibilityRole="button"
+                        accessibilityLabel={item.label}
                       >
-                        <Ionicons name={item.icon as any} size={tileIcon} color={item.color} />
-                      </View>
-                      <Text style={s.serviceLabel} numberOfLines={1}>{item.label}</Text>
-                    </TouchableOpacity>
-                  </View>
-                ))}
+                        <View
+                          style={[
+                            s.serviceCircle,
+                            { width: tileSize, height: tileSize, borderRadius: tileSize / 2, backgroundColor: item.bg },
+                          ]}
+                        >
+                          <Ionicons name={item.icon as any} size={tileIcon} color={item.color} />
+                        </View>
+                        <Text style={s.serviceLabel} numberOfLines={1}>{item.label}</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </View>
               </View>
-            </View>
+            )}
 
-            <View style={[s.splitSide, isDesktop && s.splitSideDesktop]}>
+            <View style={[s.splitSide, isDesktop && (user ? s.splitSideDesktop : s.splitSideDesktopFull)]}>
               <View style={s.sectionHead}>
                 <Text style={s.sectionTitle}>Announcements</Text>
               </View>
@@ -472,18 +591,6 @@ export default function DashboardScreen() {
             </>
           )}
 
-          {user && (
-            <TouchableOpacity
-              style={[s.logoutRow, webPointer]}
-              onPress={handleLogout}
-              activeOpacity={0.8}
-              accessibilityRole="button"
-              accessibilityLabel="Log out"
-            >
-              <Ionicons name="log-out-outline" size={18} color={C.inkFaint} />
-              <Text style={s.logoutText}>Log out</Text>
-            </TouchableOpacity>
-          )}
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -499,7 +606,7 @@ const s = StyleSheet.create({
   // Grows with the viewport instead of capping at a fixed narrow
   // width — a phone gets full width, a tablet/desktop browser gets
   // a wider column, so there's no permanent blank gutter either side.
-  contentInner: { width: '100%' },
+  contentInner: { width: '100%', position: 'relative' },
   contentInnerTablet: {
     maxWidth: 860,
     alignSelf: 'center',
@@ -516,6 +623,12 @@ const s = StyleSheet.create({
     alignItems: 'flex-start',
     justifyContent: 'space-between',
     marginBottom: sp(4),
+    zIndex: 40,
+  },
+  menuBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 25,
+    backgroundColor: 'transparent',
   },
   brandText: {
     fontFamily: 'FraunTitle',
@@ -529,6 +642,11 @@ const s = StyleSheet.create({
     fontWeight: '600',
     color: C.inkSoft,
     marginTop: 2,
+  },
+  headerActionsWrap: {
+    position: 'relative',
+    alignItems: 'flex-end',
+    zIndex: 30,
   },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: sp(2) },
   iconBtn: {
@@ -550,6 +668,40 @@ const s = StyleSheet.create({
     paddingHorizontal: 18,
   },
   loginPillText: { fontFamily: 'InterBody', fontWeight: '700', color: C.white, fontSize: 14 },
+  headerMenu: {
+    position: 'absolute',
+    top: 48,
+    right: 0,
+    minWidth: 162,
+    backgroundColor: C.card,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: C.line,
+    overflow: 'hidden',
+    zIndex: 60,
+    elevation: 12,
+    ...shadow(C.ink, 0.08, 10, 3),
+  },
+  headerMenuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+  },
+  headerMenuDivider: {
+    height: 1,
+    backgroundColor: C.line,
+  },
+  headerMenuText: {
+    fontFamily: 'InterBody',
+    fontSize: 13.5,
+    fontWeight: '600',
+    color: C.ink,
+  },
+  headerMenuTextDanger: {
+    color: '#B3432E',
+  },
 
   /* Location bar */
   locationBar: {
@@ -576,6 +728,9 @@ const s = StyleSheet.create({
   dateText: { fontFamily: 'InterBody', fontWeight: '500', fontSize: 11.5, color: C.inkFaint },
 
   /* Search */
+  searchWrap: {
+    marginBottom: sp(5),
+  },
   searchBar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -585,11 +740,47 @@ const s = StyleSheet.create({
     borderWidth: 1,
     borderColor: C.line,
     paddingHorizontal: 16,
-    paddingVertical: 14,
-    marginBottom: sp(5),
+    paddingVertical: 10,
     ...shadow(C.ink, 0.04, 8, 2),
   },
-  searchText: { fontFamily: 'InterBody', fontSize: 14.5, color: C.inkFaint },
+  searchInput: {
+    flex: 1,
+    fontFamily: 'InterBody',
+    fontSize: 14.5,
+    color: C.ink,
+    paddingVertical: 4,
+  },
+  searchGoBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: C.primary,
+  },
+  searchResults: {
+    backgroundColor: C.card,
+    borderWidth: 1,
+    borderColor: C.line,
+    borderRadius: 14,
+    marginTop: 8,
+    overflow: 'hidden',
+  },
+  searchResultItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: C.line,
+  },
+  searchResultText: {
+    fontFamily: 'InterBody',
+    fontSize: 14,
+    color: C.ink,
+    fontWeight: '600',
+  },
 
   /* Banner carousel */
   bannerScrollWrap: { marginBottom: sp(6) },
@@ -651,6 +842,7 @@ const s = StyleSheet.create({
   splitMainDesktop: { flex: 2 },
   splitSide: { width: '100%' },
   splitSideDesktop: { flex: 1, minWidth: 280 },
+  splitSideDesktopFull: { flex: 1 },
 
   /* Benefit grid — percentage-wide columns (not fixed pixel tiles),
      so columns line up evenly across any container width instead of
@@ -756,10 +948,4 @@ const s = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
 
-  /* Logout */
-  logoutRow: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    paddingVertical: sp(3),
-  },
-  logoutText: { fontFamily: 'InterBody', fontWeight: '600', fontSize: 13, color: C.inkFaint },
 });

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -16,6 +16,141 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../context/AuthContext';
 import Toast from '../components/Toast';
+import { getBenefitById } from '../data/benefits';
+import { getUser } from '../lib/authApi';
+
+type HealthCenter = {
+  id: string;
+  name: string;
+  address: string;
+  lat: number;
+  lon: number;
+  keywords: string[];
+};
+
+type LocatedCenter = {
+  name: string;
+  address: string;
+  distanceKm: number | null;
+  source: 'gps' | 'keyword' | 'fallback';
+};
+
+const HEALTH_CENTERS: HealthCenter[] = [
+  {
+    id: 'pateros-main',
+    name: 'Pateros Municipal Health Center',
+    address: 'B. Morcilla Street, Poblacion, Pateros',
+    lat: 14.5456,
+    lon: 121.0689,
+    keywords: ['poblacion', 'morcilla', 'martires', 'sta. ana'],
+  },
+  {
+    id: 'aguho',
+    name: 'Aguho Barangay Health Center',
+    address: 'Aguho, Pateros',
+    lat: 14.545,
+    lon: 121.076,
+    keywords: ['aguho'],
+  },
+  {
+    id: 'san-pedro',
+    name: 'San Pedro Barangay Health Center',
+    address: 'San Pedro, Pateros',
+    lat: 14.5388,
+    lon: 121.0705,
+    keywords: ['san pedro'],
+  },
+  {
+    id: 'santa-ana',
+    name: 'Santa Ana Barangay Health Center',
+    address: 'Sta. Ana, Pateros',
+    lat: 14.5468,
+    lon: 121.0744,
+    keywords: ['sta ana', 'santa ana'],
+  },
+];
+
+function calculateAgeFromDob(dob?: string): string {
+  if (!dob) return '';
+  const date = new Date(dob);
+  if (Number.isNaN(date.getTime())) return '';
+
+  const today = new Date();
+  let age = today.getFullYear() - date.getFullYear();
+  const monthDiff = today.getMonth() - date.getMonth();
+
+  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < date.getDate())) {
+    age -= 1;
+  }
+
+  return String(Math.max(age, 0));
+}
+
+function toRadians(value: number): number {
+  return (value * Math.PI) / 180;
+}
+
+function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const earthRadiusKm = 6371;
+  const dLat = toRadians(lat2 - lat1);
+  const dLon = toRadians(lon2 - lon1);
+
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+  return earthRadiusKm * c;
+}
+
+function normalizeText(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+async function geocodeAddress(address: string): Promise<{ lat: number; lon: number } | null> {
+  const query = `${address}, Pateros, Metro Manila, Philippines`;
+  const endpoint = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(query)}`;
+
+  try {
+    const response = await fetch(endpoint, {
+      headers: {
+        Accept: 'application/json',
+      },
+    });
+
+    if (!response.ok) return null;
+
+    const data = (await response.json()) as Array<{ lat: string; lon: string }>;
+    if (!Array.isArray(data) || data.length === 0) return null;
+
+    const first = data[0];
+    const lat = Number(first.lat);
+    const lon = Number(first.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+
+    return { lat, lon };
+  } catch {
+    return null;
+  }
+}
+
+function locateByKeyword(address: string): LocatedCenter | null {
+  const normalizedAddress = normalizeText(address);
+  if (!normalizedAddress) return null;
+
+  const matched = HEALTH_CENTERS.find((center) =>
+    center.keywords.some((keyword) => normalizedAddress.includes(normalizeText(keyword))),
+  );
+
+  if (!matched) return null;
+
+  return {
+    name: matched.name,
+    address: matched.address,
+    distanceKm: null,
+    source: 'keyword',
+  };
+}
 
 const FIELD_STYLE = {
   borderWidth: 1,
@@ -31,13 +166,17 @@ const FIELD_STYLE = {
 
 export default function BenefitApplicationScreen() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ benefit?: string }>();
+  const params = useLocalSearchParams<{ benefit?: string; benefitId?: string }>();
   const { user } = useAuth();
+  const benefitId = typeof params.benefitId === 'string' ? params.benefitId : undefined;
 
   const selectedBenefit = useMemo(() => {
-    const value = typeof params.benefit === 'string' ? params.benefit : 'benefit request';
+    const benefitById = getBenefitById(benefitId);
+    const value = benefitById?.applicationValue ?? (typeof params.benefit === 'string' ? params.benefit : 'benefit request');
     return value.replace(/\s+/g, ' ').trim();
-  }, [params.benefit]);
+  }, [benefitId, params.benefit]);
+
+  const isCheckUp = benefitId === 'check-up';
 
   const [form, setForm] = useState({
     applicantName: user ? `${user.firstName} ${user.lastName}`.trim() : '',
@@ -45,6 +184,22 @@ export default function BenefitApplicationScreen() {
     amount: '',
     notes: '',
   });
+  const [checkUpForm, setCheckUpForm] = useState({
+    name: user ? `${user.firstName} ${user.lastName}`.trim() : '',
+    age: calculateAgeFromDob(user?.dob),
+    sex: user?.gender ?? '',
+    address: user?.address ?? '',
+    contactNumber: user?.contact ?? '',
+    emergencyContact: '',
+    relationshipToEmergencyContact: '',
+    existingMedicalCondition: '',
+    currentMedication: '',
+    allergies: '',
+    previousMedicalHistory: '',
+    reasonForConsultation: '',
+  });
+  const [nearestCenter, setNearestCenter] = useState<LocatedCenter | null>(null);
+  const [locatingCenter, setLocatingCenter] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [toast, setToast] = useState({ visible: false, message: '', type: 'success' as 'success' | 'error' });
 
@@ -52,7 +207,133 @@ export default function BenefitApplicationScreen() {
     setForm((prev) => ({ ...prev, [key]: value }));
   };
 
+  const updateCheckUpField = (key: keyof typeof checkUpForm, value: string) => {
+    setCheckUpForm((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const locateNearestCenter = async (addressInput: string) => {
+    const trimmedAddress = addressInput.trim();
+    if (!trimmedAddress) {
+      setNearestCenter(null);
+      return;
+    }
+
+    setLocatingCenter(true);
+
+    try {
+      const coordinates = await geocodeAddress(trimmedAddress);
+
+      if (coordinates) {
+        let bestCenter: HealthCenter | null = null;
+        let bestDistance = Number.POSITIVE_INFINITY;
+
+        for (const center of HEALTH_CENTERS) {
+          const distance = haversineKm(coordinates.lat, coordinates.lon, center.lat, center.lon);
+          if (distance < bestDistance) {
+            bestDistance = distance;
+            bestCenter = center;
+          }
+        }
+
+        if (bestCenter) {
+          setNearestCenter({
+            name: bestCenter.name,
+            address: bestCenter.address,
+            distanceKm: Number(bestDistance.toFixed(2)),
+            source: 'gps',
+          });
+          return;
+        }
+      }
+
+      const keywordMatch = locateByKeyword(trimmedAddress);
+      if (keywordMatch) {
+        setNearestCenter(keywordMatch);
+        return;
+      }
+
+      const fallbackCenter = HEALTH_CENTERS[0];
+      setNearestCenter({
+        name: fallbackCenter.name,
+        address: fallbackCenter.address,
+        distanceKm: null,
+        source: 'fallback',
+      });
+    } finally {
+      setLocatingCenter(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!isCheckUp || !user?.id) return;
+
+    let active = true;
+
+    getUser(user.id)
+      .then(({ user: profile }) => {
+        if (!active) return;
+
+        setCheckUpForm((prev) => ({
+          ...prev,
+          name: `${profile.firstName ?? ''} ${profile.lastName ?? ''}`.replace(/\s+/g, ' ').trim(),
+          age: calculateAgeFromDob(profile.dob || user.dob),
+          sex: profile.gender ?? user.gender ?? '',
+          address: profile.address ?? user.address ?? '',
+          contactNumber: profile.contact ?? user.contact ?? '',
+        }));
+      })
+      .catch(() => {
+        // Keep session data fallback if API profile fetch is unavailable.
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [isCheckUp, user?.id, user?.address, user?.contact, user?.dob, user?.gender]);
+
+  useEffect(() => {
+    if (!isCheckUp) return;
+    if (!checkUpForm.address.trim()) return;
+
+    locateNearestCenter(checkUpForm.address);
+  }, [isCheckUp]);
+
   const handleSubmit = async () => {
+    if (isCheckUp) {
+      if (!checkUpForm.name.trim()) {
+        setToast({ visible: true, message: 'Please enter the name.', type: 'error' });
+        return;
+      }
+      if (!checkUpForm.age.trim()) {
+        setToast({ visible: true, message: 'Please enter the age.', type: 'error' });
+        return;
+      }
+      if (!checkUpForm.sex.trim()) {
+        setToast({ visible: true, message: 'Please enter sex (gender).', type: 'error' });
+        return;
+      }
+      if (!checkUpForm.address.trim()) {
+        setToast({ visible: true, message: 'Please enter the address.', type: 'error' });
+        return;
+      }
+      if (!checkUpForm.contactNumber.trim()) {
+        setToast({ visible: true, message: 'Please enter a contact number.', type: 'error' });
+        return;
+      }
+      if (!checkUpForm.emergencyContact.trim()) {
+        setToast({ visible: true, message: 'Please enter an emergency contact.', type: 'error' });
+        return;
+      }
+      if (!checkUpForm.relationshipToEmergencyContact.trim()) {
+        setToast({ visible: true, message: 'Please enter relationship to emergency contact.', type: 'error' });
+        return;
+      }
+      if (!checkUpForm.reasonForConsultation.trim()) {
+        setToast({ visible: true, message: 'Please provide the reason for consultation/check-up.', type: 'error' });
+        return;
+      }
+    }
+
     if (!form.applicantName.trim()) {
       setToast({ visible: true, message: 'Please enter the applicant name.', type: 'error' });
       return;
@@ -68,19 +349,55 @@ export default function BenefitApplicationScreen() {
       const existingRaw = await AsyncStorage.getItem('@aurea_benefit_applications');
       const existing = existingRaw ? JSON.parse(existingRaw) : [];
 
-      const application = {
-        id: Date.now(),
-        benefit: selectedBenefit,
-        applicantName: form.applicantName.trim(),
-        contactNumber: form.contactNumber.trim(),
-        amount: form.amount.trim(),
-        notes: form.notes.trim(),
-        createdAt: new Date().toISOString(),
-      };
+      let application: Record<string, unknown>;
+
+      if (isCheckUp) {
+        if (!nearestCenter && checkUpForm.address.trim()) {
+          await locateNearestCenter(checkUpForm.address);
+        }
+
+        application = {
+          id: Date.now(),
+          benefit: selectedBenefit,
+          benefitId,
+          type: 'check-up',
+          checkUpDetails: {
+            name: checkUpForm.name.trim(),
+            age: checkUpForm.age.trim(),
+            sex: checkUpForm.sex.trim(),
+            address: checkUpForm.address.trim(),
+            contactNumber: checkUpForm.contactNumber.trim(),
+            emergencyContact: checkUpForm.emergencyContact.trim(),
+            relationshipToEmergencyContact: checkUpForm.relationshipToEmergencyContact.trim(),
+            existingMedicalCondition: checkUpForm.existingMedicalCondition.trim(),
+            currentMedication: checkUpForm.currentMedication.trim(),
+            allergies: checkUpForm.allergies.trim(),
+            previousMedicalHistory: checkUpForm.previousMedicalHistory.trim(),
+            reasonForConsultation: checkUpForm.reasonForConsultation.trim(),
+          },
+          nearestHealthCenter: nearestCenter,
+          createdAt: new Date().toISOString(),
+        };
+      } else {
+        application = {
+          id: Date.now(),
+          benefit: selectedBenefit,
+          benefitId,
+          applicantName: form.applicantName.trim(),
+          contactNumber: form.contactNumber.trim(),
+          amount: form.amount.trim(),
+          notes: form.notes.trim(),
+          createdAt: new Date().toISOString(),
+        };
+      }
 
       await AsyncStorage.setItem('@aurea_benefit_applications', JSON.stringify([...existing, application]));
 
-      setToast({ visible: true, message: 'Benefit application submitted successfully.', type: 'success' });
+      setToast({
+        visible: true,
+        message: isCheckUp ? 'Check-up appointment submitted successfully.' : 'Benefit application submitted successfully.',
+        type: 'success',
+      });
       setTimeout(() => router.back(), 1200);
     } catch (error) {
       setToast({
@@ -121,6 +438,22 @@ export default function BenefitApplicationScreen() {
           <Text style={s.headerTitle}>Apply for benefit</Text>
         </View>
 
+        {!user ? (
+          <View style={s.lockCard}>
+            <Ionicons name="lock-closed-outline" size={24} color="#1F5C3E" style={{ marginBottom: 10 }} />
+            <Text style={s.lockTitle}>Login required</Text>
+            <Text style={s.lockText}>Please log in first before applying for any benefit.</Text>
+            <TouchableOpacity
+              style={s.lockButton}
+              onPress={() => router.replace('/login')}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel="Go to login"
+            >
+              <Text style={s.lockButtonText}>Go to Login</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
         <View style={s.card}>
           <Text style={s.label}>Selected benefit</Text>
           <View style={s.selectedPill}>
@@ -128,54 +461,241 @@ export default function BenefitApplicationScreen() {
             <Text style={s.selectedText}>{selectedBenefit}</Text>
           </View>
 
-          <View style={s.fieldRow}>
-            <Text style={s.label}>Applicant name</Text>
-            <TextInput
-              style={FIELD_STYLE}
-              value={form.applicantName}
-              onChangeText={(value) => updateField('applicantName', value)}
-              placeholder="Juan Dela Cruz"
-              placeholderTextColor="#71857A"
-            />
-          </View>
+          {isCheckUp ? (
+            <>
+              <Text style={s.formCaption}>Personal Information</Text>
+              <View style={s.fieldRow}>
+                <Text style={s.label}>Name</Text>
+                <TextInput
+                  style={FIELD_STYLE}
+                  value={checkUpForm.name}
+                  onChangeText={(value) => updateCheckUpField('name', value)}
+                  placeholder="Juan Dela Cruz"
+                  placeholderTextColor="#71857A"
+                />
+              </View>
 
-          <View style={s.fieldRow}>
-            <Text style={s.label}>Contact number</Text>
-            <TextInput
-              style={FIELD_STYLE}
-              value={form.contactNumber}
-              onChangeText={(value) => updateField('contactNumber', value)}
-              keyboardType="phone-pad"
-              placeholder="09XXXXXXXXX"
-              placeholderTextColor="#71857A"
-            />
-          </View>
+              <View style={s.doubleRow}>
+                <View style={s.doubleCol}>
+                  <Text style={s.label}>Age</Text>
+                  <TextInput
+                    style={FIELD_STYLE}
+                    value={checkUpForm.age}
+                    onChangeText={(value) => updateCheckUpField('age', value.replace(/[^0-9]/g, ''))}
+                    keyboardType="numeric"
+                    placeholder="65"
+                    placeholderTextColor="#71857A"
+                  />
+                </View>
+                <View style={s.doubleCol}>
+                  <Text style={s.label}>Sex (Gender)</Text>
+                  <TextInput
+                    style={FIELD_STYLE}
+                    value={checkUpForm.sex}
+                    onChangeText={(value) => updateCheckUpField('sex', value)}
+                    placeholder="Male / Female"
+                    placeholderTextColor="#71857A"
+                  />
+                </View>
+              </View>
 
-          <View style={s.fieldRow}>
-            <Text style={s.label}>Amount needed (optional)</Text>
-            <TextInput
-              style={FIELD_STYLE}
-              value={form.amount}
-              onChangeText={(value) => updateField('amount', value)}
-              keyboardType="numeric"
-              placeholder="5000"
-              placeholderTextColor="#71857A"
-            />
-          </View>
+              <View style={s.fieldRow}>
+                <Text style={s.label}>Address</Text>
+                <TextInput
+                  style={[FIELD_STYLE, s.textAreaCompact]}
+                  value={checkUpForm.address}
+                  onChangeText={(value) => updateCheckUpField('address', value)}
+                  onEndEditing={() => locateNearestCenter(checkUpForm.address)}
+                  multiline
+                  textAlignVertical="top"
+                  placeholder="House #, Street, Barangay, Pateros"
+                  placeholderTextColor="#71857A"
+                />
+              </View>
 
-          <View style={s.fieldRow}>
-            <Text style={s.label}>Additional details</Text>
-            <TextInput
-              style={[FIELD_STYLE, s.textArea]}
-              value={form.notes}
-              onChangeText={(value) => updateField('notes', value)}
-              multiline
-              numberOfLines={5}
-              textAlignVertical="top"
-              placeholder="Tell us more about your request..."
-              placeholderTextColor="#71857A"
-            />
-          </View>
+              <View style={s.doubleRow}>
+                <View style={s.doubleCol}>
+                  <Text style={s.label}>Contact Number</Text>
+                  <TextInput
+                    style={FIELD_STYLE}
+                    value={checkUpForm.contactNumber}
+                    onChangeText={(value) => updateCheckUpField('contactNumber', value)}
+                    keyboardType="phone-pad"
+                    placeholder="09XXXXXXXXX"
+                    placeholderTextColor="#71857A"
+                  />
+                </View>
+                <View style={s.doubleCol}>
+                  <Text style={s.label}>Emergency Contact</Text>
+                  <TextInput
+                    style={FIELD_STYLE}
+                    value={checkUpForm.emergencyContact}
+                    onChangeText={(value) => updateCheckUpField('emergencyContact', value)}
+                    placeholder="0917XXXXXXX"
+                    keyboardType="phone-pad"
+                    placeholderTextColor="#71857A"
+                  />
+                </View>
+              </View>
+
+              <View style={s.fieldRow}>
+                <Text style={s.label}>Relationship to Emergency Contact</Text>
+                <TextInput
+                  style={FIELD_STYLE}
+                  value={checkUpForm.relationshipToEmergencyContact}
+                  onChangeText={(value) => updateCheckUpField('relationshipToEmergencyContact', value)}
+                  placeholder="Son / Daughter / Spouse"
+                  placeholderTextColor="#71857A"
+                />
+              </View>
+
+              <Text style={s.formCaption}>Medical Information</Text>
+              <View style={s.fieldRow}>
+                <Text style={s.label}>Existing Medical Condition</Text>
+                <TextInput
+                  style={FIELD_STYLE}
+                  value={checkUpForm.existingMedicalCondition}
+                  onChangeText={(value) => updateCheckUpField('existingMedicalCondition', value)}
+                  placeholder="Hypertension, diabetes, etc."
+                  placeholderTextColor="#71857A"
+                />
+              </View>
+
+              <View style={s.fieldRow}>
+                <Text style={s.label}>Current Medication</Text>
+                <TextInput
+                  style={FIELD_STYLE}
+                  value={checkUpForm.currentMedication}
+                  onChangeText={(value) => updateCheckUpField('currentMedication', value)}
+                  placeholder="List your current medication"
+                  placeholderTextColor="#71857A"
+                />
+              </View>
+
+              <View style={s.fieldRow}>
+                <Text style={s.label}>Allergies</Text>
+                <TextInput
+                  style={FIELD_STYLE}
+                  value={checkUpForm.allergies}
+                  onChangeText={(value) => updateCheckUpField('allergies', value)}
+                  placeholder="Food, medicine, or others"
+                  placeholderTextColor="#71857A"
+                />
+              </View>
+
+              <View style={s.fieldRow}>
+                <Text style={s.label}>Previous Medical History</Text>
+                <TextInput
+                  style={[FIELD_STYLE, s.textArea]}
+                  value={checkUpForm.previousMedicalHistory}
+                  onChangeText={(value) => updateCheckUpField('previousMedicalHistory', value)}
+                  multiline
+                  numberOfLines={4}
+                  textAlignVertical="top"
+                  placeholder="Include surgeries, confinement, or major illnesses"
+                  placeholderTextColor="#71857A"
+                />
+              </View>
+
+              <View style={s.fieldRow}>
+                <Text style={s.label}>Reason for Consultation / Check-up</Text>
+                <TextInput
+                  style={[FIELD_STYLE, s.textArea]}
+                  value={checkUpForm.reasonForConsultation}
+                  onChangeText={(value) => updateCheckUpField('reasonForConsultation', value)}
+                  multiline
+                  numberOfLines={4}
+                  textAlignVertical="top"
+                  placeholder="Describe the reason for your check-up"
+                  placeholderTextColor="#71857A"
+                />
+              </View>
+
+              <View style={s.centerCard}>
+                <View style={s.centerHeader}>
+                  <Text style={s.centerTitle}>Nearest Health Center</Text>
+                  <TouchableOpacity
+                    style={s.recheckButton}
+                    onPress={() => locateNearestCenter(checkUpForm.address)}
+                    disabled={locatingCenter}
+                    activeOpacity={0.85}
+                  >
+                    {locatingCenter ? (
+                      <ActivityIndicator color="#1F5C3E" size="small" />
+                    ) : (
+                      <Text style={s.recheckText}>Recheck</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+
+                {nearestCenter ? (
+                  <>
+                    <Text style={s.centerName}>{nearestCenter.name}</Text>
+                    <Text style={s.centerAddress}>{nearestCenter.address}</Text>
+                    <Text style={s.centerMeta}>
+                      {nearestCenter.distanceKm !== null
+                        ? `Approx. ${nearestCenter.distanceKm} km away`
+                        : 'Located using nearest address match'}
+                    </Text>
+                  </>
+                ) : (
+                  <Text style={s.centerAddress}>Enter your address to locate the nearest health center.</Text>
+                )}
+              </View>
+            </>
+          ) : (
+            <>
+
+              <View style={s.fieldRow}>
+                <Text style={s.label}>Applicant name</Text>
+                <TextInput
+                  style={FIELD_STYLE}
+                  value={form.applicantName}
+                  onChangeText={(value) => updateField('applicantName', value)}
+                  placeholder="Juan Dela Cruz"
+                  placeholderTextColor="#71857A"
+                />
+              </View>
+
+              <View style={s.fieldRow}>
+                <Text style={s.label}>Contact number</Text>
+                <TextInput
+                  style={FIELD_STYLE}
+                  value={form.contactNumber}
+                  onChangeText={(value) => updateField('contactNumber', value)}
+                  keyboardType="phone-pad"
+                  placeholder="09XXXXXXXXX"
+                  placeholderTextColor="#71857A"
+                />
+              </View>
+
+              <View style={s.fieldRow}>
+                <Text style={s.label}>Amount needed (optional)</Text>
+                <TextInput
+                  style={FIELD_STYLE}
+                  value={form.amount}
+                  onChangeText={(value) => updateField('amount', value)}
+                  keyboardType="numeric"
+                  placeholder="5000"
+                  placeholderTextColor="#71857A"
+                />
+              </View>
+
+              <View style={s.fieldRow}>
+                <Text style={s.label}>Additional details</Text>
+                <TextInput
+                  style={[FIELD_STYLE, s.textArea]}
+                  value={form.notes}
+                  onChangeText={(value) => updateField('notes', value)}
+                  multiline
+                  numberOfLines={5}
+                  textAlignVertical="top"
+                  placeholder="Tell us more about your request..."
+                  placeholderTextColor="#71857A"
+                />
+              </View>
+            </>
+          )}
 
           <TouchableOpacity
             style={[s.submitButton, submitting && s.submitButtonDisabled]}
@@ -190,6 +710,7 @@ export default function BenefitApplicationScreen() {
             )}
           </TouchableOpacity>
         </View>
+        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -245,6 +766,40 @@ const s = StyleSheet.create({
       android: { elevation: 4 },
     }),
   },
+  lockCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#DCE7D8',
+    padding: 20,
+  },
+  lockTitle: {
+    fontFamily: 'InterBody',
+    fontWeight: '700',
+    fontSize: 20,
+    color: '#132018',
+    marginBottom: 6,
+  },
+  lockText: {
+    fontFamily: 'InterBody',
+    fontSize: 14,
+    lineHeight: 20,
+    color: '#3E5246',
+    marginBottom: 14,
+  },
+  lockButton: {
+    backgroundColor: '#1F5C3E',
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+  },
+  lockButtonText: {
+    color: '#FFFFFF',
+    fontFamily: 'InterBody',
+    fontWeight: '700',
+    fontSize: 14,
+  },
   label: {
     fontFamily: 'InterBody',
     fontWeight: '700',
@@ -273,9 +828,84 @@ const s = StyleSheet.create({
   fieldRow: {
     marginBottom: 16,
   },
+  doubleRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 16,
+  },
+  doubleCol: {
+    flex: 1,
+  },
+  formCaption: {
+    fontFamily: 'InterBody',
+    fontWeight: '700',
+    fontSize: 15,
+    color: '#1F5C3E',
+    marginBottom: 10,
+    marginTop: 4,
+  },
   textArea: {
     minHeight: 110,
     paddingTop: 12,
+  },
+  textAreaCompact: {
+    minHeight: 76,
+    paddingTop: 12,
+  },
+  centerCard: {
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: '#DCE7D8',
+    borderRadius: 16,
+    padding: 14,
+    backgroundColor: '#F8FCF9',
+  },
+  centerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  centerTitle: {
+    fontFamily: 'InterBody',
+    fontWeight: '700',
+    fontSize: 13,
+    color: '#1F5C3E',
+  },
+  recheckButton: {
+    borderWidth: 1,
+    borderColor: '#B9D4C2',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: '#FFFFFF',
+    minWidth: 70,
+    alignItems: 'center',
+  },
+  recheckText: {
+    fontFamily: 'InterBody',
+    fontWeight: '700',
+    fontSize: 12,
+    color: '#1F5C3E',
+  },
+  centerName: {
+    fontFamily: 'InterBody',
+    fontWeight: '700',
+    fontSize: 14,
+    color: '#132018',
+    marginBottom: 3,
+  },
+  centerAddress: {
+    fontFamily: 'InterBody',
+    fontSize: 13,
+    lineHeight: 19,
+    color: '#3E5246',
+  },
+  centerMeta: {
+    fontFamily: 'InterBody',
+    fontSize: 12,
+    color: '#597265',
+    marginTop: 5,
   },
   submitButton: {
     marginTop: 8,

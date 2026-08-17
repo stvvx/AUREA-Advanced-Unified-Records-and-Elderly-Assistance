@@ -98,6 +98,7 @@ export default function ProfileScreen() {
       email: user.email ?? '',
       middleName: user.middleName ?? '',
       dob: user.dob ?? '',
+      gender: user.gender ?? '',
       contact: user.contact ?? '',
       address: user.address ?? '',
       profilePhoto: user.profilePhoto ?? user.avatarUrl ?? null,
@@ -453,7 +454,7 @@ export default function ProfileScreen() {
                 <View style={styles.divider} />
 
                 <View style={styles.fieldRow}>
-                  <View style={styles.fieldHalf}>
+                  <View style={styles.fieldFull}>
                     <Text style={styles.label}>Email</Text>
                     <TextInput
                       style={styles.input}
@@ -465,7 +466,6 @@ export default function ProfileScreen() {
                       placeholderTextColor={C.inkFaint}
                     />
                   </View>
-                  <View style={styles.fieldHalf} />
                 </View>
 
                 <Text style={styles.label}>Address</Text>
@@ -688,6 +688,9 @@ const styles = StyleSheet.create({
   },
   fieldHalf: {
     flex: 1,
+  },
+  fieldFull: {
+    width: '100%',
   },
   label: {
     fontFamily: 'InterBody',
