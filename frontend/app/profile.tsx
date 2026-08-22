@@ -74,6 +74,7 @@ export default function ProfileScreen() {
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [genderOpen, setGenderOpen] = useState(false);
+  const [civilStatusOpen, setCivilStatusOpen] = useState(false);
   const [form, setForm] = useState({
     firstName: user?.firstName ?? '',
     lastName: user?.lastName ?? '',
@@ -81,6 +82,7 @@ export default function ProfileScreen() {
     middleName: user?.middleName ?? '',
     dob: user?.dob ?? '',
     gender: user?.gender ?? '',
+    civilStatus: user?.civilStatus ?? '',
     contact: user?.contact ?? '',
     address: user?.address ?? '',
     profilePhoto: user?.profilePhoto ?? user?.avatarUrl ?? null,
@@ -99,6 +101,7 @@ export default function ProfileScreen() {
       middleName: user.middleName ?? '',
       dob: user.dob ?? '',
       gender: user.gender ?? '',
+      civilStatus: user.civilStatus ?? '',
       contact: user.contact ?? '',
       address: user.address ?? '',
       profilePhoto: user.profilePhoto ?? user.avatarUrl ?? null,
@@ -114,6 +117,7 @@ export default function ProfileScreen() {
           middleName: profile.middleName ?? sessionFallback.middleName,
           dob: profile.dob ?? sessionFallback.dob,
           gender: profile.gender ?? (user?.gender ?? ''),
+          civilStatus: profile.civilStatus ?? (user?.civilStatus ?? ''),
           contact: profile.contact ?? sessionFallback.contact,
           address: profile.address ?? sessionFallback.address,
           profilePhoto: nextProfilePhoto,
@@ -124,7 +128,7 @@ export default function ProfileScreen() {
         console.warn('[Profile] getUser failed:', err?.message);
         setForm(sessionFallback);
       });
-  }, [user?.id, user?.firstName, user?.lastName, user?.email, user?.middleName, user?.dob, user?.contact, user?.address]);
+  }, [user?.id, user?.firstName, user?.lastName, user?.email, user?.middleName, user?.dob, user?.gender, user?.civilStatus, user?.contact, user?.address]);
 
   const handlePickAvatar = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -189,6 +193,7 @@ export default function ProfileScreen() {
         middleName: form.middleName.trim(),
         dob: form.dob.trim(),
         gender: form.gender.trim(),
+        civilStatus: form.civilStatus.trim(),
         contact: form.contact.trim(),
         address: form.address.trim(),
       });
@@ -315,6 +320,7 @@ export default function ProfileScreen() {
                           name: [form.firstName, form.middleName, form.lastName].filter(Boolean).join(' '),
                           dob: form.dob,
                           gender: form.gender,
+                          civilStatus: form.civilStatus,
                           contact: form.contact,
                           address: form.address,
                           municipality: 'Pateros',
@@ -439,6 +445,22 @@ export default function ProfileScreen() {
                   </View>
 
                   <View style={styles.fieldHalf}>
+                    <Text style={styles.label}>Civil Status</Text>
+                    <TouchableOpacity
+                      style={[styles.input, styles.readOnly, webPointer, { justifyContent: 'space-between' }]}
+                      onPress={() => setCivilStatusOpen(true)}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={form.civilStatus ? styles.readOnlyText : styles.placeholderText}>
+                        {form.civilStatus || 'Select civil status'}
+                      </Text>
+                      <Ionicons name="chevron-down" size={14} color={C.inkFaint} />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                <View style={styles.fieldRow}>
+                  <View style={styles.fieldHalf}>
                     <Text style={styles.label}>Contact</Text>
                     <TextInput
                       style={styles.input}
@@ -522,6 +544,26 @@ export default function ProfileScreen() {
               >
                 <Text style={[styles.modalItemText, item === form.gender && styles.modalItemTextActive]}>{item}</Text>
                 {item === form.gender && <Ionicons name="checkmark-circle" size={22} color={C.primaryDark} />}
+              </TouchableOpacity>
+            ))}
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Civil Status Picker Modal */}
+      <Modal visible={civilStatusOpen} transparent animationType="fade" onRequestClose={() => setCivilStatusOpen(false)}>
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setCivilStatusOpen(false)}>
+          <View style={styles.modalSheet}>
+            {Platform.OS !== 'web' && <View style={styles.modalHandle} />}
+            <Text style={styles.modalTitle}>Select Civil Status</Text>
+            {['Single', 'Married', 'Widowed', 'Separated', 'Divorced'].map((item) => (
+              <TouchableOpacity
+                key={item}
+                style={[styles.modalItem, webPointer, item === form.civilStatus && styles.modalItemActive]}
+                onPress={() => { updateField('civilStatus', item); setCivilStatusOpen(false); }}
+              >
+                <Text style={[styles.modalItemText, item === form.civilStatus && styles.modalItemTextActive]}>{item}</Text>
+                {item === form.civilStatus && <Ionicons name="checkmark-circle" size={22} color={C.primaryDark} />}
               </TouchableOpacity>
             ))}
           </View>

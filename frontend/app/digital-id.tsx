@@ -86,6 +86,7 @@ export default function DigitalIdScreen() {
     lastName: string;
     dob: string;
     gender: string;
+    civilStatus: string;
     contact: string;
     address: string;
     avatarUrl: string | null;
@@ -103,6 +104,7 @@ export default function DigitalIdScreen() {
           lastName: p.lastName,
           dob: p.dob ?? '',
           gender: p.gender ?? '',
+          civilStatus: p.civilStatus ?? '',
           contact: p.contact ?? '',
           address: p.address ?? '',
           avatarUrl: p.avatarUrl ?? p.profilePhoto ?? null,
@@ -117,6 +119,7 @@ export default function DigitalIdScreen() {
             lastName: user.lastName,
             dob: user.dob ?? '',
             gender: user.gender ?? '',
+            civilStatus: user.civilStatus ?? '',
             contact: user.contact ?? '',
             address: user.address ?? '',
             avatarUrl: user.avatarUrl ?? user.profilePhoto ?? null,
@@ -153,6 +156,7 @@ export default function DigitalIdScreen() {
         name: fullName,
         dob: profile.dob,
         gender: profile.gender,
+        civilStatus: profile.civilStatus,
         contact: profile.contact,
         address: profile.address,
         municipality: 'Pateros',
@@ -235,6 +239,7 @@ export default function DigitalIdScreen() {
                     <DetailChip icon="calendar-outline" text={formatDob(profile?.dob ?? '')} />
                     <DetailChip icon="hourglass-outline" text={profile?.dob ? `${getAge(profile.dob)} yrs` : '—'} />
                     <DetailChip icon="male-female-outline" text={profile?.gender || '—'} />
+                    <DetailChip icon="heart-outline" text={profile?.civilStatus || '—'} />
                   </View>
 
                   <View style={s.detailLine}>

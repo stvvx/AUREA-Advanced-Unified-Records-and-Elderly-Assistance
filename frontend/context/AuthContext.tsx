@@ -9,6 +9,7 @@ type User = {
   middleName?: string;
   dob?: string;
   gender?: string;
+  civilStatus?: string;
   contact?: string;
   address?: string;
   avatarUrl?: string | null;
@@ -74,6 +75,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       middleName: userData.middleName ?? '',
       dob: userData.dob ?? '',
       gender: userData.gender ?? '',
+      civilStatus: userData.civilStatus ?? '',
       contact: userData.contact ?? '',
       address: userData.address ?? '',
       avatarUrl: userData.avatarUrl ?? userData.profilePhoto ?? null,

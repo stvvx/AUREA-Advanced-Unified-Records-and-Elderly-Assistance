@@ -137,6 +137,8 @@ export default function RegisterScreen() {
   const [barangayOpen, setBarangayOpen] = useState(false);
   const [gender, setGender] = useState('');
   const [genderOpen, setGenderOpen] = useState(false);
+  const [civilStatus, setCivilStatus] = useState('');
+  const [civilStatusOpen, setCivilStatusOpen] = useState(false);
   const [address, setAddress] = useState({ barangay: '', houseNo: '', street: '', subdivision: '' });
   const [toast, setToast] = useState<{ visible: boolean; message: string; type: 'success' | 'error' }>({
     visible: false, message: '', type: 'success',
@@ -222,6 +224,7 @@ export default function RegisterScreen() {
         lastName: form.lastName.trim(),
         dob: form.dob.trim(),
         gender,
+        civilStatus,
         contact: form.contact.trim(),
         address: buildAddress(),
         email: form.email.trim().toLowerCase(),
@@ -234,6 +237,7 @@ export default function RegisterScreen() {
         lastName: form.lastName.trim(),
         dob: form.dob.trim(),
         gender,
+        civilStatus,
         contact: form.contact.trim(),
         address: buildAddress(),
         email: form.email.trim().toLowerCase(),
@@ -459,6 +463,21 @@ export default function RegisterScreen() {
                       <Ionicons name="chevron-down" size={20} color={colors.inkSoft} />
                     </TouchableOpacity>
                   </View>
+
+                  {/* Civil Status picker */}
+                  <View style={styles.fieldBlock}>
+                    <Text style={styles.label}>Civil Status <Text style={styles.optional}>(optional)</Text></Text>
+                    <TouchableOpacity
+                      style={styles.dropdown}
+                      onPress={() => setCivilStatusOpen(true)}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={civilStatus ? styles.dropdownValue : styles.dropdownPlaceholder}>
+                        {civilStatus || 'Select civil status'}
+                      </Text>
+                      <Ionicons name="chevron-down" size={20} color={colors.inkSoft} />
+                    </TouchableOpacity>
+                  </View>
                 </>
               )}
 
@@ -613,6 +632,26 @@ export default function RegisterScreen() {
               >
                 <Text style={[styles.modalItemText, item === gender && styles.modalItemTextActive]}>{item}</Text>
                 {item === gender && <Ionicons name="checkmark-circle" size={22} color={colors.primaryDeep} />}
+              </TouchableOpacity>
+            ))}
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Civil Status Picker Modal */}
+      <Modal visible={civilStatusOpen} transparent animationType="fade" onRequestClose={() => setCivilStatusOpen(false)}>
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setCivilStatusOpen(false)}>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHandle} />
+            <Text style={styles.modalTitle}>Select Civil Status</Text>
+            {['Single', 'Married', 'Widowed', 'Separated', 'Divorced'].map((item) => (
+              <TouchableOpacity
+                key={item}
+                style={[styles.modalItem, item === civilStatus && styles.modalItemActive]}
+                onPress={() => { setCivilStatus(item); setCivilStatusOpen(false); }}
+              >
+                <Text style={[styles.modalItemText, item === civilStatus && styles.modalItemTextActive]}>{item}</Text>
+                {item === civilStatus && <Ionicons name="checkmark-circle" size={22} color={colors.primaryDeep} />}
               </TouchableOpacity>
             ))}
           </View>

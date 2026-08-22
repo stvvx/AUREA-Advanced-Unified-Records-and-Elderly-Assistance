@@ -349,6 +349,11 @@ def register():
                     or None
                 ),
 
+                "civil_status": (
+                    str(data.get("civilStatus", "")).strip()
+                    or None
+                ),
+
                 "email": email,
 
                 "password_hash": (
@@ -423,6 +428,7 @@ def login():
                     "email,"
                     "avatar_url,"
                     "gender,"
+                    "civil_status,"
                     "role,"
                     "password_hash"
                 ),
@@ -476,6 +482,7 @@ def login():
 
             "avatarUrl": user.get("avatar_url") or "",
             "gender": user.get("gender") or "",
+            "civilStatus": user.get("civil_status") or "",
             "role": user.get("role") or "user",
         },
     }), 200
@@ -485,7 +492,7 @@ def login():
 # Get / Update User
 # ---------------------------------------------------------------------------
 
-SELECT_FIELDS = "id,first_name,middle_name,last_name,dob,gender,contact,address,email,avatar_url,role,created_at"
+SELECT_FIELDS = "id,first_name,middle_name,last_name,dob,gender,civil_status,contact,address,email,avatar_url,role,created_at"
 
 
 def _serialize_user(u: dict) -> dict:
@@ -496,6 +503,7 @@ def _serialize_user(u: dict) -> dict:
         "lastName": u.get("last_name") or "",
         "dob": u.get("dob") or "",
         "gender": u.get("gender") or "",
+        "civilStatus": u.get("civil_status") or "",
         "contact": u.get("contact") or "",
         "address": u.get("address") or "",
         "email": u.get("email") or "",
@@ -539,6 +547,7 @@ def user_profile(user_id):
         "avatarUrl": "avatar_url",
         "profilePhoto": "avatar_url",
         "gender": "gender",
+        "civilStatus": "civil_status",
     }
     for key, col in field_map.items():
         if key in data:
