@@ -230,20 +230,20 @@ export default function RegisterScreen() {
         email: form.email.trim().toLowerCase(),
         password: form.password,
       });
-      await login({
-        id: data.userId,
-        firstName: form.firstName.trim(),
-        middleName: form.middleName?.trim() ?? '',
-        lastName: form.lastName.trim(),
-        dob: form.dob.trim(),
-        gender,
-        civilStatus,
-        contact: form.contact.trim(),
-        address: buildAddress(),
-        email: form.email.trim().toLowerCase(),
-      });
-      showToast('Account created! Welcome to AUREA.', 'success');
-      setTimeout(() => router.replace('/(tabs)'), 1800);
+
+      showToast('Account created! Please set up your Biometric Face ID…', 'success');
+      setTimeout(() => {
+        router.replace({
+          pathname: '/face-verification',
+          params: {
+            userId: data.userId.toString(),
+            userName: form.firstName.trim(),
+            avatarUrl: '',
+            role: 'user',
+            isEnrollment: 'true',
+          },
+        } as any);
+      }, 1200);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Registration failed. Please try again.';
       showToast(message, 'error');

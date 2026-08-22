@@ -1,3 +1,5 @@
+import base64
+import mimetypes
 import os
 from datetime import datetime
 from pathlib import Path
@@ -6,6 +8,8 @@ import requests
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request
 from werkzeug.security import check_password_hash, generate_password_hash
+
+import face_verifier
 
 
 # ---------------------------------------------------------------------------
@@ -484,8 +488,219 @@ def login():
             "gender": user.get("gender") or "",
             "civilStatus": user.get("civil_status") or "",
             "role": user.get("role") or "user",
+            "hasEnrolledFace": bool(user.get("avatar_url")),
         },
     }), 200
+
+
+# ---------------------------------------------------------------------------
+# Facial Biometric Verification & Enrollment
+# ---------------------------------------------------------------------------
+
+def _fetch_user_reference_photo(avatar_url: str, user_id: int) -> tuple[bool, bytes | None, str]:
+    """Fetches the enrolled reference image bytes for a user from public URL or Supabase storage."""
+    if not avatar_url:
+        return False, None, "User does not have an enrolled face photo."
+
+    # 1. Try direct HTTP fetch from avatar_url
+    if avatar_url.startswith("http://") or avatar_url.startswith("https://"):
+        try:
+            resp = requests.get(avatar_url, timeout=10)
+            if resp.ok and resp.content:
+                return True, resp.content, "Photo retrieved."
+        except Exception:
+            pass
+
+    # 2. Fallback to Supabase Storage REST API using service role key
+    try:
+        bucket = SUPABASE_STORAGE_BUCKET
+        file_candidates = [
+            f"user_{user_id}/avatar.jpg",
+            f"user_{user_id}/avatar.png",
+            f"user_{user_id}/avatar.jpeg",
+        ]
+        for path in file_candidates:
+            storage_url = f"{SUPABASE_URL}/storage/v1/object/authenticated/{bucket}/{path}"
+            headers = {
+                "apikey": SUPABASE_SERVICE_ROLE_KEY,
+                "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+            }
+            resp = requests.get(storage_url, headers=headers, timeout=10)
+            if resp.ok and resp.content:
+                return True, resp.content, "Photo retrieved from storage."
+    except Exception as exc:
+        print(f"[AUREA Face] Storage fallback error: {exc}")
+
+    return False, None, "Could not load registered face photo from storage."
+
+
+@app.route("/api/auth/verify-face", methods=["POST", "OPTIONS"])
+def verify_face():
+    """
+    Verifies a live camera capture selfie against the user's enrolled profile photo.
+    """
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    data = request.get_json(silent=True) or {}
+    user_id = data.get("userId") or data.get("id")
+    live_image = data.get("image")  # base64 string
+
+    if not user_id:
+        return jsonify({"message": "User ID is required.", "verified": False}), 400
+
+    if not live_image:
+        return jsonify({"message": "No live selfie image provided for verification.", "verified": False}), 400
+
+    try:
+        ensure_users_table()
+
+        # Retrieve user profile
+        result = supabase_rest(
+            "GET",
+            SUPABASE_USERS_TABLE,
+            params={
+                "select": SELECT_FIELDS,
+                "id": f"eq.{user_id}",
+                "limit": "1",
+            },
+        )
+
+        if not result:
+            return jsonify({"message": "User not found.", "verified": False}), 404
+
+        user = result[0]
+        avatar_url = user.get("avatar_url")
+
+        if not avatar_url:
+            return jsonify({
+                "verified": False,
+                "requiresEnrollment": True,
+                "message": "No registered face photo found on this account. Please enroll your face first.",
+                "user": _serialize_user(user),
+            }), 400
+
+        # Retrieve reference photo
+        ok, ref_bytes, msg = _fetch_user_reference_photo(avatar_url, user_id)
+        if not ok or not ref_bytes:
+            return jsonify({
+                "verified": False,
+                "requiresEnrollment": True,
+                "message": msg,
+                "user": _serialize_user(user),
+            }), 400
+
+        # Perform OpenCV Biometric Face Verification
+        res = face_verifier.verify_faces(reference_data=ref_bytes, live_data=live_image)
+
+        if res["verified"]:
+            return jsonify({
+                "verified": True,
+                "confidence": res["confidence"],
+                "score": res["score"],
+                "message": res["message"],
+                "user": _serialize_user(user),
+            }), 200
+        else:
+            return jsonify({
+                "verified": False,
+                "confidence": res["confidence"],
+                "score": res["score"],
+                "message": res["message"],
+            }), 401
+
+    except Exception as exc:
+        print(f"[AUREA Face] Error during verification: {exc}")
+        return jsonify({
+            "verified": False,
+            "message": f"Server verification error: {str(exc)}",
+        }), 500
+
+
+@app.route("/api/auth/enroll-face", methods=["POST", "OPTIONS"])
+def enroll_face():
+    """
+    Validates and enrolls a new biometric face photo for a user.
+    """
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    data = request.get_json(silent=True) or {}
+    user_id = data.get("userId") or data.get("id")
+    image_b64 = data.get("image")
+    mime_type = data.get("mimeType", "image/jpeg")
+
+    if not user_id:
+        return jsonify({"message": "User ID is required."}), 400
+
+    if not image_b64:
+        return jsonify({"message": "No image provided for enrollment."}), 400
+
+    try:
+        ensure_users_table()
+
+        # Validate that a clear face is present
+        validation = face_verifier.validate_enrollment_photo(image_b64)
+        if not validation["valid"]:
+            return jsonify({
+                "success": False,
+                "message": validation["message"],
+            }), 400
+
+        # Decode image
+        try:
+            clean_b64 = image_b64.split(",", 1)[1] if "," in image_b64 else image_b64
+            image_bytes = base64.b64decode(clean_b64.strip())
+        except Exception:
+            return jsonify({"message": "Invalid base64 image data."}), 400
+
+        ext = mimetypes.guess_extension(mime_type) or ".jpg"
+        if ext == ".jpe":
+            ext = ".jpg"
+        file_path = f"user_{user_id}/avatar{ext}"
+
+        # Upload to Supabase Storage
+        storage_url = f"{SUPABASE_URL}/storage/v1/object/{SUPABASE_STORAGE_BUCKET}/{file_path}"
+        headers = {
+            "apikey": SUPABASE_SERVICE_ROLE_KEY,
+            "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+            "Content-Type": mime_type,
+            "x-upsert": "true",
+        }
+
+        resp = requests.put(storage_url, headers=headers, data=image_bytes, timeout=30)
+        if not resp.ok:
+            detail = resp.text or resp.reason
+            return jsonify({"message": f"Storage upload failed: {detail}"}), 500
+
+        public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_STORAGE_BUCKET}/{file_path}"
+
+        # Save to users table
+        patch_url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_USERS_TABLE}"
+        patch_resp = requests.patch(
+            patch_url,
+            headers=_rest_headers(prefer_return=True),
+            params={"id": f"eq.{user_id}"},
+            json={"avatar_url": public_url},
+            timeout=15,
+        )
+
+        updated_user = {}
+        if patch_resp.ok and patch_resp.content:
+            rows = patch_resp.json()
+            if rows:
+                updated_user = rows[0]
+
+        return jsonify({
+            "success": True,
+            "avatarUrl": public_url,
+            "message": "Face biometric registered successfully!",
+            "user": _serialize_user(updated_user) if updated_user else None,
+        }), 200
+
+    except Exception as exc:
+        print(f"[AUREA Face] Enrollment error: {exc}")
+        return jsonify({"message": str(exc)}), 500
 
 
 # ---------------------------------------------------------------------------

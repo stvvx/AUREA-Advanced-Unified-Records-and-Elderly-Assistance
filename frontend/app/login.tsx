@@ -60,11 +60,20 @@ export default function LoginScreen() {
     setLoading(true);
     try {
       const data = await loginUser({ email: email.trim(), password });
-      await login(data.user);
-      showToast('Welcome back! Logging you in…', 'success');
-      const adminRoles = ['osca admin', 'med admin', 'super admin'];
-      const dest = adminRoles.includes(data.user.role ?? '') ? '/admin-dashboard' : '/(tabs)';
-      setTimeout(() => router.replace(dest as any), 1500);
+      showToast('Credentials verified! Please verify your face…', 'success');
+
+      // Direct to facial verification before granting full session and dashboard access
+      setTimeout(() => {
+        router.replace({
+          pathname: '/face-verification',
+          params: {
+            userId: data.user.id.toString(),
+            userName: data.user.firstName,
+            avatarUrl: data.user.avatarUrl || data.user.profilePhoto || '',
+            role: data.user.role ?? 'user',
+          },
+        } as any);
+      }, 900);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Invalid email or password.';
       showToast(message, 'error');

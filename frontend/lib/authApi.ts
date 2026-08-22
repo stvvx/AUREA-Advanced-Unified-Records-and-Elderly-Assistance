@@ -7,6 +7,7 @@ type RegisterPayload = {
   lastName: string;
   dob: string;
   gender?: string;
+  civilStatus?: string;
   contact: string;
   address: string;
   email: string;
@@ -80,7 +81,7 @@ export async function registerUser(payload: RegisterPayload): Promise<{ message:
   return request('/api/auth/register', payload);
 }
 
-export async function loginUser(payload: LoginPayload): Promise<{ message: string; user: { id: number; firstName: string; middleName?: string; lastName: string; dob?: string; gender?: string; contact?: string; address?: string; email: string; avatarUrl?: string | null; profilePhoto?: string | null; role?: string } }> {
+export async function loginUser(payload: LoginPayload): Promise<{ message: string; user: { id: number; firstName: string; middleName?: string; lastName: string; dob?: string; gender?: string; civilStatus?: string; contact?: string; address?: string; email: string; avatarUrl?: string | null; profilePhoto?: string | null; role?: string } }> {
   return request('/api/auth/login', payload);
 }
 
@@ -91,6 +92,7 @@ export type UserProfile = {
   lastName: string;
   dob: string;
   gender?: string;
+  civilStatus?: string;
   contact: string;
   address: string;
   email: string;
@@ -163,4 +165,36 @@ export async function uploadAvatar(
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data?.message || 'Failed to upload avatar.');
   return data as { avatarUrl: string };
+}
+
+export type VerifyFaceResponse = {
+  verified: boolean;
+  confidence?: number;
+  score?: number;
+  message: string;
+  requiresEnrollment?: boolean;
+  user?: UserProfile & { role?: string };
+};
+
+export async function verifyFace(payload: {
+  userId: number;
+  image: string;
+  mimeType?: string;
+}): Promise<VerifyFaceResponse> {
+  return request('/api/auth/verify-face', payload);
+}
+
+export type EnrollFaceResponse = {
+  success: boolean;
+  avatarUrl?: string;
+  message: string;
+  user?: UserProfile & { role?: string };
+};
+
+export async function enrollFace(payload: {
+  userId: number;
+  image: string;
+  mimeType?: string;
+}): Promise<EnrollFaceResponse> {
+  return request('/api/auth/enroll-face', payload);
 }
