@@ -167,10 +167,23 @@ export async function uploadAvatar(
   return data as { avatarUrl: string };
 }
 
+export type MultiAngleImages = {
+  center: string;
+  left: string;
+  right: string;
+};
+
 export type VerifyFaceResponse = {
   verified: boolean;
+  livenessPassed?: boolean;
   confidence?: number;
   score?: number;
+  angles?: {
+    center?: { yaw?: number; symmetry?: number; pose?: string };
+    left?: { yaw?: number; symmetry?: number; pose?: string };
+    right?: { yaw?: number; symmetry?: number; pose?: string };
+    disparity?: number;
+  };
   message: string;
   requiresEnrollment?: boolean;
   user?: UserProfile & { role?: string };
@@ -178,7 +191,11 @@ export type VerifyFaceResponse = {
 
 export async function verifyFace(payload: {
   userId: number;
-  image: string;
+  image?: string;
+  images?: MultiAngleImages;
+  centerImage?: string;
+  leftImage?: string;
+  rightImage?: string;
   mimeType?: string;
 }): Promise<VerifyFaceResponse> {
   return request('/api/auth/verify-face', payload);

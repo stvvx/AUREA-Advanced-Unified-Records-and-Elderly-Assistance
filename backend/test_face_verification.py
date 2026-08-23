@@ -92,6 +92,79 @@ class FaceVerificationUnitTests(unittest.TestCase):
         self.assertEqual(res.status_code, 400)
         self.assertIn("No face detected", res.json.get("message", ""))
 
+    def test_head_pose_estimation(self):
+        # Synthetic mock face landmark arrays
+        dummy_img = np.zeros((320, 320, 3), dtype=np.uint8)
+
+        # Center face
+        face_center = [80, 80, 160, 160, 120, 140, 200, 140, 160, 180, 130, 220, 190, 220, 0.99]
+        center_pose = face_verifier.estimate_head_pose(dummy_img, np.array(face_center))
+        self.assertEqual(center_pose["pose"], "CENTER")
+        self.assertAlmostEqual(center_pose["symmetry"], 0.0, places=2)
+
+        # Left angled face (nose shifted leftwards / negative symmetry)
+        face_left = [80, 80, 160, 160, 120, 140, 200, 140, 135, 180, 130, 220, 190, 220, 0.99]
+        left_pose = face_verifier.estimate_head_pose(dummy_img, np.array(face_left))
+        self.assertEqual(left_pose["pose"], "LEFT")
+        self.assertTrue(left_pose["symmetry"] <= -0.18)
+
+        # Right angled face (nose shifted rightwards / positive symmetry)
+        face_right = [80, 80, 160, 160, 120, 140, 200, 140, 185, 180, 130, 220, 190, 220, 0.99]
+        right_pose = face_verifier.estimate_head_pose(dummy_img, np.array(face_right))
+        self.assertEqual(right_pose["pose"], "RIGHT")
+        self.assertTrue(right_pose["symmetry"] >= 0.18)
+
+    def test_liveness_detection_anti_spoofing_identical_photos(self):
+        from unittest.mock import patch
+
+        mock_photo = create_mock_face_image()
+        captures = {
+            "center": mock_photo,
+            "left": mock_photo,
+            "right": mock_photo,
+        }
+        # Simulated identical face detection (same flat photo shown 3 times)
+        identical_face = np.array([80, 80, 160, 160, 120, 140, 200, 140, 160, 180, 130, 220, 190, 220, 0.99])
+        with patch.object(face_verifier, "detect_face", return_value=(True, identical_face, "Face detected")):
+            with patch.object(face_verifier, "extract_features", return_value=np.ones((1, 128), dtype=np.float32)):
+                liveness_res = face_verifier.verify_liveness(captures)
+                # Should fail liveness because disparity is 0 (no genuine left/right head turning)
+                self.assertFalse(liveness_res["passed"])
+                self.assertIn("Head turning not detected", liveness_res["message"])
+
+    def test_liveness_detection_valid_multi_angle_pass(self):
+        from unittest.mock import patch
+
+        mock_photo = create_mock_face_image()
+        captures = {
+            "center": mock_photo,
+            "left": mock_photo,
+            "right": mock_photo,
+        }
+        c_face = np.array([80, 80, 160, 160, 120, 140, 200, 140, 160, 180, 130, 220, 190, 220, 0.99])
+        l_face = np.array([80, 80, 160, 160, 120, 140, 200, 140, 135, 180, 130, 220, 190, 220, 0.99])
+        r_face = np.array([80, 80, 160, 160, 120, 140, 200, 140, 185, 180, 130, 220, 190, 220, 0.99])
+
+        def mock_detect(img):
+            # Return corresponding pose based on call count / image
+            if not hasattr(mock_detect, "calls"):
+                mock_detect.calls = 0
+            mock_detect.calls += 1
+            if mock_detect.calls == 1:
+                return True, c_face, "Center ok"
+            elif mock_detect.calls == 2:
+                return True, l_face, "Left ok"
+            else:
+                return True, r_face, "Right ok"
+
+        with patch.object(face_verifier, "detect_face", side_effect=mock_detect):
+            with patch.object(face_verifier, "extract_features", return_value=np.ones((1, 128), dtype=np.float32)):
+                liveness_res = face_verifier.verify_liveness(captures)
+                self.assertTrue(liveness_res["passed"])
+                self.assertIn("3D Liveness confirmed", liveness_res["message"])
+
 
 if __name__ == "__main__":
     unittest.main()
+
+

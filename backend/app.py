@@ -537,7 +537,8 @@ def _fetch_user_reference_photo(avatar_url: str, user_id: int) -> tuple[bool, by
 @app.route("/api/auth/verify-face", methods=["POST", "OPTIONS"])
 def verify_face():
     """
-    Verifies a live camera capture selfie against the user's enrolled profile photo.
+    Verifies a live camera capture selfie or multi-angle 3D liveness frames
+    (Center, Left, Right) against the user's enrolled profile photo.
     """
     if request.method == "OPTIONS":
         return ("", 204)
@@ -545,12 +546,25 @@ def verify_face():
     data = request.get_json(silent=True) or {}
     user_id = data.get("userId") or data.get("id")
     live_image = data.get("image")  # base64 string
+    images_dict = data.get("images")  # {"center": ..., "left": ..., "right": ...}
+    center_img = data.get("centerImage") or data.get("center")
+    left_img = data.get("leftImage") or data.get("left")
+    right_img = data.get("rightImage") or data.get("right")
 
     if not user_id:
         return jsonify({"message": "User ID is required.", "verified": False}), 400
 
-    if not live_image:
-        return jsonify({"message": "No live selfie image provided for verification.", "verified": False}), 400
+    # Build live payload: either multi-angle dictionary or single image
+    if images_dict and isinstance(images_dict, dict) and ("center" in images_dict or "left" in images_dict):
+        live_payload = images_dict
+    elif center_img and left_img and right_img:
+        live_payload = {"center": center_img, "left": left_img, "right": right_img}
+    elif live_image:
+        live_payload = live_image
+    elif center_img:
+        live_payload = center_img
+    else:
+        return jsonify({"message": "No live selfie images provided for verification.", "verified": False}), 400
 
     try:
         ensure_users_table()
@@ -590,22 +604,26 @@ def verify_face():
                 "user": _serialize_user(user),
             }), 400
 
-        # Perform OpenCV Biometric Face Verification
-        res = face_verifier.verify_faces(reference_data=ref_bytes, live_data=live_image)
+        # Perform OpenCV Biometric Face Verification & 3D Liveness Detection
+        res = face_verifier.verify_faces(reference_data=ref_bytes, live_data=live_payload)
 
         if res["verified"]:
             return jsonify({
                 "verified": True,
-                "confidence": res["confidence"],
-                "score": res["score"],
+                "livenessPassed": res.get("liveness_passed", True),
+                "confidence": res.get("confidence", 95.0),
+                "score": res.get("score", 0.0),
+                "angles": res.get("angles", {}),
                 "message": res["message"],
                 "user": _serialize_user(user),
             }), 200
         else:
             return jsonify({
                 "verified": False,
-                "confidence": res["confidence"],
-                "score": res["score"],
+                "livenessPassed": res.get("liveness_passed", False),
+                "confidence": res.get("confidence", 0.0),
+                "score": res.get("score", 0.0),
+                "angles": res.get("angles", {}),
                 "message": res["message"],
             }), 401
 

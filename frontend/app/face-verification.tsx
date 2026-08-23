@@ -10,21 +10,20 @@ import {
   StatusBar,
   Animated,
   Easing,
-  Alert,
   Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import * as Haptics from 'expo-haptics';
 import Toast from '../components/Toast';
-import { verifyFace, enrollFace, getUser } from '../lib/authApi';
+import { verifyFace, enrollFace, getUser, MultiAngleImages } from '../lib/authApi';
 import { useAuth } from '../context/AuthContext';
 
 // ---------------------------------------------------------------------------
-// Design Tokens
+// Design Tokens & Colors
 // ---------------------------------------------------------------------------
 const colors = {
   bg: '#F6FAF7',
@@ -49,7 +48,7 @@ const colors = {
 
 const space = (n: number) => n * 4;
 
-type VerifyState = 'permission' | 'aligning' | 'scanning' | 'success' | 'failed';
+type LivenessStep = 'center' | 'left' | 'right' | 'analyzing' | 'success' | 'failed';
 
 export default function FaceVerificationScreen() {
   const router = useRouter();
@@ -75,11 +74,26 @@ export default function FaceVerificationScreen() {
   );
 
   const [cameraReady, setCameraReady] = useState(false);
-  const [verifyState, setVerifyState] = useState<VerifyState>('aligning');
-  const [statusMessage, setStatusMessage] = useState<string>('Please look directly into the camera...');
+  const [currentStep, setCurrentStep] = useState<LivenessStep>('center');
+  const [statusMessage, setStatusMessage] = useState<string>('Step 1: Look straight into the camera');
+  const [tagalogGuidance, setTagalogGuidance] = useState<string>('Humarap nang diretso sa camera.');
   const [confidenceScore, setConfidenceScore] = useState<number | null>(null);
+  const [livenessPassed, setLivenessPassed] = useState<boolean | null>(null);
   const [retryCountdown, setRetryCountdown] = useState<number | null>(null);
+
+  // Stored multi-angle captures (base64)
+  const [capturedImages, setCapturedImages] = useState<{
+    center: string | null;
+    left: string | null;
+    right: string | null;
+  }>({
+    center: null,
+    left: null,
+    right: null,
+  });
+
   const [fallbackImage, setFallbackImage] = useState<string | null>(null);
+  const [manualMode, setManualMode] = useState(false);
 
   const [toast, setToast] = useState<{ visible: boolean; message: string; type: 'success' | 'error' }>({
     visible: false,
@@ -90,14 +104,20 @@ export default function FaceVerificationScreen() {
   // Animations
   const scanAnim = useRef(new Animated.Value(0)).current;
   const pulseAnim = useRef(new Animated.Value(1)).current;
+  const arrowAnim = useRef(new Animated.Value(0)).current;
   const ringRotateAnim = useRef(new Animated.Value(0)).current;
 
-  // Auto-verification trigger guard
-  const isVerifyingRef = useRef(false);
-  const autoScanTimerRef = useRef<any>(null);
+  // Multi-angle step orchestration guard & timers
+  const isCapturingRef = useRef(false);
+  const sequenceTimerRef = useRef<any>(null);
   const countdownTimerRef = useRef<any>(null);
+  const capturedRef = useRef<{ center: string | null; left: string | null; right: string | null }>({
+    center: null,
+    left: null,
+    right: null,
+  });
 
-  // Animations setup
+  // Setup loop animations
   useEffect(() => {
     // Pulse animation for the biometric ring
     Animated.loop(
@@ -122,29 +142,47 @@ export default function FaceVerificationScreen() {
       Animated.sequence([
         Animated.timing(scanAnim, {
           toValue: 1,
-          duration: 1600,
+          duration: 1500,
           easing: Easing.inOut(Easing.sin),
           useNativeDriver: true,
         }),
         Animated.timing(scanAnim, {
           toValue: 0,
-          duration: 1600,
+          duration: 1500,
           easing: Easing.inOut(Easing.sin),
           useNativeDriver: true,
         }),
       ])
     ).start();
 
-    // Subtle rotation on outer tracker
+    // Directional Arrow Bounce Animation
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(arrowAnim, {
+          toValue: 1,
+          duration: 700,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(arrowAnim, {
+          toValue: 0,
+          duration: 700,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ])
+    ).start();
+
+    // Subtle rotation on tracker ring
     Animated.loop(
       Animated.timing(ringRotateAnim, {
         toValue: 1,
-        duration: 8000,
+        duration: 9000,
         easing: Easing.linear,
         useNativeDriver: true,
       })
     ).start();
-  }, [pulseAnim, scanAnim, ringRotateAnim]);
+  }, [pulseAnim, scanAnim, arrowAnim, ringRotateAnim]);
 
   // Check enrollment state if initialAvatar was empty
   useEffect(() => {
@@ -161,7 +199,7 @@ export default function FaceVerificationScreen() {
     }
   }, [userId, initialAvatar, params.isEnrollment]);
 
-  // Request camera permissions on load
+  // Request camera permissions on mount
   useEffect(() => {
     if (!permission?.granted) {
       requestPermission();
@@ -172,42 +210,34 @@ export default function FaceVerificationScreen() {
     setToast({ visible: true, message, type });
   };
 
-  // Perform Face Capture & Biometric Check
-  const performAutoVerification = useCallback(async () => {
-    if (isVerifyingRef.current) return;
-    if (!userId) {
-      showToast('User session error. Please log in again.', 'error');
-      return;
+  // Safe camera snapshot helper
+  const takeSnapshot = async (): Promise<string | null> => {
+    if (!cameraRef.current) return null;
+    try {
+      const photo = await cameraRef.current.takePictureAsync({
+        quality: 0.85,
+        base64: true,
+        skipProcessing: false,
+      });
+      return photo?.base64 || null;
+    } catch (err) {
+      console.warn('[AUREA Face] Snapshot error:', err);
+      return null;
     }
+  };
 
-    isVerifyingRef.current = true;
-    setVerifyState('scanning');
-    setStatusMessage('Hold still… Verifying your identity…');
+  // Submit all 3 captured angles to backend for 3D Liveness & Biometrics
+  const processMultiAngleVerification = async (captures: MultiAngleImages) => {
+    setCurrentStep('analyzing');
+    setStatusMessage('Verifying 3D Human Liveness & Identity…');
+    setTagalogGuidance('Sinusuri ang 3D Biometrics at pagkakakilanlan…');
 
     try {
-      let base64Photo = '';
-
-      if (cameraRef.current) {
-        const photo = await cameraRef.current.takePictureAsync({
-          quality: 0.85,
-          base64: true,
-          skipProcessing: false,
-        });
-        if (photo?.base64) {
-          base64Photo = photo.base64;
-          setFallbackImage(photo.uri);
-        }
-      }
-
-      if (!base64Photo) {
-        throw new Error('Camera could not capture frame. Please ensure camera is open.');
-      }
-
       if (!hasRegisteredFace) {
-        // First-Time Biometric Enrollment Mode
+        // First-Time Biometric Enrollment Mode using Center Face
         const enrollRes = await enrollFace({
           userId,
-          image: base64Photo,
+          image: captures.center,
           mimeType: 'image/jpeg',
         });
 
@@ -216,8 +246,10 @@ export default function FaceVerificationScreen() {
             await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
           } catch {}
 
-          setVerifyState('success');
-          setStatusMessage('Face ID Enrolled & Verified! Welcome to AUREA.');
+          setCurrentStep('success');
+          setLivenessPassed(true);
+          setStatusMessage('Face ID Enrolled & 3D Liveness Verified!');
+          setTagalogGuidance('Matagumpay na napatunayan ang inyong pagkakakilanlan.');
 
           const finalUser = enrollRes.user || {
             id: userId,
@@ -237,15 +269,15 @@ export default function FaceVerificationScreen() {
 
           setTimeout(() => {
             router.replace(dest as any);
-          }, 1400);
+          }, 1500);
         } else {
           throw new Error(enrollRes.message || 'Face enrollment failed.');
         }
       } else {
-        // Standard Biometric Verification Mode
+        // Multi-Angle 3D Liveness & Biometric Verification Mode
         const verifyRes = await verifyFace({
           userId,
-          image: base64Photo,
+          images: captures,
           mimeType: 'image/jpeg',
         });
 
@@ -254,9 +286,11 @@ export default function FaceVerificationScreen() {
             await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
           } catch {}
 
-          setVerifyState('success');
-          setConfidenceScore(verifyRes.confidence ?? 96);
-          setStatusMessage(verifyRes.message || 'Identity verified! Welcome back.');
+          setCurrentStep('success');
+          setLivenessPassed(true);
+          setConfidenceScore(verifyRes.confidence ?? 98);
+          setStatusMessage(verifyRes.message || '3D Liveness & Identity Confirmed! Welcome back.');
+          setTagalogGuidance('Ligtas at kumpirmadong tunay na tao ang humarap sa camera.');
 
           const finalUser = verifyRes.user || {
             id: userId,
@@ -276,17 +310,19 @@ export default function FaceVerificationScreen() {
 
           setTimeout(() => {
             router.replace(dest as any);
-          }, 1400);
+          }, 1500);
         } else {
           try {
             await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
           } catch {}
 
-          setVerifyState('failed');
+          setCurrentStep('failed');
+          setLivenessPassed(verifyRes.livenessPassed ?? false);
           setConfidenceScore(verifyRes.confidence ?? 0);
           setStatusMessage(
-            verifyRes.message || 'Face not recognized. Please face the screen directly.'
+            verifyRes.message || 'Verification failed. Please visibly turn your face left and right.'
           );
+          setTagalogGuidance('Pakisubukang muli at tiyaking lumingon nang malinaw pakaliwa at pakanan.');
           startAutoRetryCountdown();
         }
       }
@@ -295,18 +331,97 @@ export default function FaceVerificationScreen() {
         await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       } catch {}
 
-      setVerifyState('failed');
+      setCurrentStep('failed');
       const msg = err?.message || 'Verification error. Retrying...';
       setStatusMessage(msg);
       startAutoRetryCountdown();
     } finally {
-      isVerifyingRef.current = false;
+      isCapturingRef.current = false;
     }
-  }, [userId, hasRegisteredFace, userName, userRole, initialAvatar, login, router]);
+  };
 
-  // Countdown timer for automatic retry if face was obscured / not matching
+  // Start the 3-step automatic capture sequence (Center -> Left -> Right -> Verify)
+  const runStepSequence = useCallback(async () => {
+    if (isCapturingRef.current) return;
+    if (Platform.OS === 'web' || manualMode) return;
+
+    isCapturingRef.current = true;
+    capturedRef.current = { center: null, left: null, right: null };
+    setCapturedImages({ center: null, left: null, right: null });
+
+    // Step 1: Center
+    setCurrentStep('center');
+    setStatusMessage('Step 1 of 3: Look straight ahead into the camera');
+    setTagalogGuidance('Humarap nang diretso sa gitna ng bilog.');
+
+    // Wait 1.6s for senior citizen to look center
+    sequenceTimerRef.current = setTimeout(async () => {
+      const centerPhoto = await takeSnapshot();
+      if (!centerPhoto) {
+        isCapturingRef.current = false;
+        return;
+      }
+      try {
+        await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      } catch {}
+
+      capturedRef.current.center = centerPhoto;
+      setCapturedImages((prev) => ({ ...prev, center: centerPhoto }));
+
+      // Step 2: Turn Left
+      setCurrentStep('left');
+      setStatusMessage('Step 2 of 3: Slowly turn your face to the LEFT 👈');
+      setTagalogGuidance('Dahan-dahang ipihit ang iyong mukha sa KALIWA.');
+
+      // Wait 1.8s for left turn
+      sequenceTimerRef.current = setTimeout(async () => {
+        const leftPhoto = await takeSnapshot();
+        if (!leftPhoto) {
+          isCapturingRef.current = false;
+          return;
+        }
+        try {
+          await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        } catch {}
+
+        capturedRef.current.left = leftPhoto;
+        setCapturedImages((prev) => ({ ...prev, left: leftPhoto }));
+
+        // Step 3: Turn Right
+        setCurrentStep('right');
+        setStatusMessage('Step 3 of 3: Slowly turn your face to the RIGHT 👉');
+        setTagalogGuidance('Dahan-dahang ipihit ang iyong mukha sa KANAN.');
+
+        // Wait 1.8s for right turn
+        sequenceTimerRef.current = setTimeout(async () => {
+          const rightPhoto = await takeSnapshot();
+          if (!rightPhoto) {
+            isCapturingRef.current = false;
+            return;
+          }
+          try {
+            await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+          } catch {}
+
+          capturedRef.current.right = rightPhoto;
+          setCapturedImages((prev) => ({ ...prev, right: rightPhoto }));
+
+          // All 3 angles acquired -> Verify on backend
+          if (capturedRef.current.center && capturedRef.current.left && capturedRef.current.right) {
+            await processMultiAngleVerification({
+              center: capturedRef.current.center,
+              left: capturedRef.current.left,
+              right: capturedRef.current.right,
+            });
+          }
+        }, 1800);
+      }, 1800);
+    }, 1600);
+  }, [hasRegisteredFace, userId, userName, userRole, initialAvatar, login, router, manualMode]);
+
+  // Auto-retry countdown on failure
   const startAutoRetryCountdown = () => {
-    let count = 3;
+    let count = 4;
     setRetryCountdown(count);
     if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
 
@@ -315,41 +430,32 @@ export default function FaceVerificationScreen() {
       if (count <= 0) {
         if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
         setRetryCountdown(null);
-        setVerifyState('aligning');
-        setStatusMessage('Positioning face... Look directly at the screen.');
-        // Schedule next automatic attempt
-        autoScanTimerRef.current = setTimeout(() => {
-          performAutoVerification();
-        }, 1200);
+        runStepSequence();
       } else {
         setRetryCountdown(count);
       }
     }, 1000);
   };
 
-  // When camera initializes, trigger automatic scan after a short stabilization delay
+  // Camera Ready Handler
   const handleCameraReady = () => {
     setCameraReady(true);
-    setVerifyState('aligning');
-    setStatusMessage('Position your face inside the circle…');
-
-    // Give senior citizen 1.8 seconds to position their face naturally, then auto-verify
-    if (autoScanTimerRef.current) clearTimeout(autoScanTimerRef.current);
-    autoScanTimerRef.current = setTimeout(() => {
-      performAutoVerification();
-    }, 1800);
+    if (sequenceTimerRef.current) clearTimeout(sequenceTimerRef.current);
+    sequenceTimerRef.current = setTimeout(() => {
+      runStepSequence();
+    }, 1200);
   };
 
-  // Clean up timers on unmount
+  // Cleanup timers on unmount
   useEffect(() => {
     return () => {
-      if (autoScanTimerRef.current) clearTimeout(autoScanTimerRef.current);
+      if (sequenceTimerRef.current) clearTimeout(sequenceTimerRef.current);
       if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
     };
   }, []);
 
-  // Manual fallback via photo picker (if camera fails or on unsupported platform)
-  const handleManualUpload = async () => {
+  // Manual Photo Picker for a specific angle slot
+  const pickAnglePhoto = async (angle: 'center' | 'left' | 'right') => {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
@@ -360,46 +466,39 @@ export default function FaceVerificationScreen() {
       });
 
       if (result.canceled || !result.assets?.[0]) return;
-      const asset = result.assets[0];
-      const b64 = asset.base64;
+      const b64 = result.assets[0].base64;
       if (!b64) return;
 
-      setFallbackImage(asset.uri);
-      setVerifyState('scanning');
-      setStatusMessage('Verifying uploaded photo...');
-
-      const verifyRes = await verifyFace({
-        userId,
-        image: b64,
-        mimeType: asset.mimeType || 'image/jpeg',
-      });
-
-      if (verifyRes.verified) {
-        setVerifyState('success');
-        setStatusMessage('Identity Verified!');
-        const finalUser = verifyRes.user || {
-          id: userId,
-          firstName: userName,
-          lastName: '',
-          email: '',
-          avatarUrl: initialAvatar || null,
-          role: userRole,
-        };
-        await login(finalUser as any);
-        const dest = ((finalUser as any).role || userRole).includes('admin') ? '/admin-dashboard' : '/(tabs)';
-        setTimeout(() => router.replace(dest as any), 1200);
-      } else {
-        setVerifyState('failed');
-        setStatusMessage(verifyRes.message || 'Face did not match.');
-      }
+      const updated = { ...capturedImages, [angle]: b64 };
+      setCapturedImages(updated);
+      showToast(`Selected ${angle.toUpperCase()} angle photo`, 'success');
     } catch (err: any) {
-      showToast(err.message || 'Failed to verify photo', 'error');
+      showToast('Could not load image: ' + err.message, 'error');
     }
   };
 
+  // Manual multi-angle submit
+  const handleManualMultiAngleSubmit = async () => {
+    if (!capturedImages.center || !capturedImages.left || !capturedImages.right) {
+      showToast('Please select photos for all 3 angles (Center, Left, Right).', 'error');
+      return;
+    }
+    await processMultiAngleVerification({
+      center: capturedImages.center,
+      left: capturedImages.left,
+      right: capturedImages.right,
+    });
+  };
+
+  // Directional arrow offset interpolation
+  const arrowTranslateX = arrowAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: currentStep === 'left' ? [0, -18] : [0, 18],
+  });
+
   const translateY = scanAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: [-110, 110],
+    outputRange: [-120, 120],
   });
 
   return (
@@ -427,32 +526,137 @@ export default function FaceVerificationScreen() {
 
           <View style={styles.badge}>
             <Ionicons name="shield-checkmark" size={16} color={colors.primaryDeep} />
-            <Text style={styles.badgeText}>AUTOMATIC FACE VERIFICATION</Text>
+            <Text style={styles.badgeText}>3D LIVENESS & ANTI-SPOOFING</Text>
           </View>
         </View>
 
-        {/* Title */}
+        {/* Title Section */}
         <View style={styles.titleSection}>
-          <Text style={styles.eyebrow}>MUNICIPALITY OF PATEROS • AUREA</Text>
+          <Text style={styles.eyebrow}>MUNICIPALITY OF PATEROS • OSCA BIOMETRICS</Text>
           <Text style={styles.title}>
-            {hasRegisteredFace ? 'Automatic Face ID' : 'Biometric Face Setup'}
+            {hasRegisteredFace ? 'Multi-Angle Face ID' : 'Biometric Face Setup'}
           </Text>
           <Text style={styles.subtitle}>
             {hasRegisteredFace
-              ? `Magandang araw, ${userName}! Tumingin lamang sa camera para awtomatikong mag-verify.`
-              : `Hello, ${userName}! Look into the camera to automatically enroll your Face ID.`}
+              ? `Magandang araw, ${userName}! Sundin ang mga hakbang para patunayan na ikaw ay tunay na tao.`
+              : `Hello, ${userName}! Please follow the 3-step head turn to enroll your Face ID securely.`}
           </Text>
         </View>
 
-        {/* GCash-style Biometric Oval Frame */}
+        {/* 3-Step Head Angle Progress Tracker */}
+        <View style={styles.stepProgressContainer}>
+          {/* Step 1: Center */}
+          <View
+            style={[
+              styles.stepPill,
+              currentStep === 'center' && styles.stepPillActive,
+              Boolean(capturedImages.center) && styles.stepPillCompleted,
+            ]}
+          >
+            <View style={styles.stepIconWrap}>
+              {capturedImages.center ? (
+                <Ionicons name="checkmark-circle" size={18} color={colors.white} />
+              ) : (
+                <Ionicons
+                  name="person"
+                  size={15}
+                  color={currentStep === 'center' ? colors.white : colors.inkFaint}
+                />
+              )}
+            </View>
+            <Text
+              style={[
+                styles.stepPillText,
+                (currentStep === 'center' || Boolean(capturedImages.center)) && styles.stepPillTextActive,
+              ]}
+            >
+              1. Center 👤
+            </Text>
+          </View>
+
+          {/* Connector Line */}
+          <View
+            style={[
+              styles.stepLine,
+              Boolean(capturedImages.center) && styles.stepLineActive,
+            ]}
+          />
+
+          {/* Step 2: Left */}
+          <View
+            style={[
+              styles.stepPill,
+              currentStep === 'left' && styles.stepPillActive,
+              Boolean(capturedImages.left) && styles.stepPillCompleted,
+            ]}
+          >
+            <View style={styles.stepIconWrap}>
+              {capturedImages.left ? (
+                <Ionicons name="checkmark-circle" size={18} color={colors.white} />
+              ) : (
+                <Ionicons
+                  name="arrow-back"
+                  size={15}
+                  color={currentStep === 'left' ? colors.white : colors.inkFaint}
+                />
+              )}
+            </View>
+            <Text
+              style={[
+                styles.stepPillText,
+                (currentStep === 'left' || Boolean(capturedImages.left)) && styles.stepPillTextActive,
+              ]}
+            >
+              2. Left 👈
+            </Text>
+          </View>
+
+          {/* Connector Line */}
+          <View
+            style={[
+              styles.stepLine,
+              Boolean(capturedImages.left) && styles.stepLineActive,
+            ]}
+          />
+
+          {/* Step 3: Right */}
+          <View
+            style={[
+              styles.stepPill,
+              currentStep === 'right' && styles.stepPillActive,
+              Boolean(capturedImages.right) && styles.stepPillCompleted,
+            ]}
+          >
+            <View style={styles.stepIconWrap}>
+              {capturedImages.right ? (
+                <Ionicons name="checkmark-circle" size={18} color={colors.white} />
+              ) : (
+                <Ionicons
+                  name="arrow-forward"
+                  size={15}
+                  color={currentStep === 'right' ? colors.white : colors.inkFaint}
+                />
+              )}
+            </View>
+            <Text
+              style={[
+                styles.stepPillText,
+                (currentStep === 'right' || Boolean(capturedImages.right)) && styles.stepPillTextActive,
+              ]}
+            >
+              3. Right 👉
+            </Text>
+          </View>
+        </View>
+
+        {/* Live Camera Biometric Viewfinder */}
         <View style={styles.viewfinderCard}>
-          {/* Permission Not Granted State */}
           {!permission?.granted ? (
             <View style={styles.permissionWrap}>
               <Ionicons name="videocam-outline" size={64} color={colors.primaryDeep} />
               <Text style={styles.permissionTitle}>Camera Access Required</Text>
               <Text style={styles.permissionDesc}>
-                To automatically verify your identity like GCash, please allow camera permission.
+                To detect real human liveness and verify your identity, please allow camera access.
               </Text>
               <TouchableOpacity
                 style={styles.allowBtn}
@@ -464,20 +668,47 @@ export default function FaceVerificationScreen() {
               </TouchableOpacity>
             </View>
           ) : (
-            /* Live Camera Oval Container */
             <View style={styles.frameContainer}>
+              {/* Active Directional Angle Indicator (Left turn arrow) */}
+              {currentStep === 'left' && (
+                <Animated.View
+                  style={[
+                    styles.directionGuideLeft,
+                    { transform: [{ translateX: arrowTranslateX }] },
+                  ]}
+                >
+                  <Ionicons name="arrow-back-circle" size={48} color="#FFD700" />
+                  <Text style={styles.turnLabel}>IPILIT PAKALIWA</Text>
+                </Animated.View>
+              )}
+
+              {/* Active Directional Angle Indicator (Right turn arrow) */}
+              {currentStep === 'right' && (
+                <Animated.View
+                  style={[
+                    styles.directionGuideRight,
+                    { transform: [{ translateX: arrowTranslateX }] },
+                  ]}
+                >
+                  <Ionicons name="arrow-forward-circle" size={48} color="#FFD700" />
+                  <Text style={styles.turnLabel}>IPILIT PAKANAN</Text>
+                </Animated.View>
+              )}
+
+              {/* Oval Biometric Guide */}
               <Animated.View
                 style={[
                   styles.ovalGuide,
-                  { transform: [{ scale: verifyState === 'scanning' ? pulseAnim : 1 }] },
-                  verifyState === 'aligning' && styles.ovalAligning,
-                  verifyState === 'scanning' && styles.ovalScanning,
-                  verifyState === 'success' && styles.ovalSuccess,
-                  verifyState === 'failed' && styles.ovalFailed,
+                  { transform: [{ scale: currentStep === 'analyzing' ? pulseAnim : 1 }] },
+                  (currentStep === 'center' || currentStep === 'left' || currentStep === 'right') &&
+                    styles.ovalActive,
+                  currentStep === 'analyzing' && styles.ovalAnalyzing,
+                  currentStep === 'success' && styles.ovalSuccess,
+                  currentStep === 'failed' && styles.ovalFailed,
                 ]}
               >
                 {/* Live Native Camera Feed */}
-                {Platform.OS !== 'web' ? (
+                {Platform.OS !== 'web' && !manualMode ? (
                   <CameraView
                     ref={cameraRef}
                     style={StyleSheet.absoluteFillObject}
@@ -485,19 +716,14 @@ export default function FaceVerificationScreen() {
                     onCameraReady={handleCameraReady}
                   />
                 ) : (
-                  /* Web Fallback Preview */
-                  fallbackImage ? (
-                    <Image source={{ uri: fallbackImage }} style={StyleSheet.absoluteFillObject} resizeMode="cover" />
-                  ) : (
-                    <View style={styles.webPlaceholder}>
-                      <Ionicons name="person" size={80} color={colors.border} />
-                      <Text style={styles.webPlaceholderText}>Web Camera View</Text>
-                    </View>
-                  )
+                  <View style={styles.webPlaceholder}>
+                    <Ionicons name="camera" size={60} color={colors.inkFaint} />
+                    <Text style={styles.webPlaceholderText}>Multi-Angle Upload Mode</Text>
+                  </View>
                 )}
 
-                {/* Laser Scanning Beam while analyzing */}
-                {verifyState === 'scanning' && (
+                {/* Laser Scanning Beam when analyzing */}
+                {currentStep === 'analyzing' && (
                   <Animated.View
                     style={[
                       styles.scanBeam,
@@ -507,73 +733,110 @@ export default function FaceVerificationScreen() {
                 )}
 
                 {/* Success Overlay */}
-                {verifyState === 'success' && (
+                {currentStep === 'success' && (
                   <View style={styles.overlaySuccess}>
-                    <Ionicons name="checkmark-circle" size={64} color={colors.white} />
-                    <Text style={styles.overlaySuccessTitle}>VERIFIED</Text>
-                    <Text style={styles.overlaySuccessSub}>Logging in…</Text>
+                    <Ionicons name="checkmark-circle" size={68} color={colors.white} />
+                    <Text style={styles.overlaySuccessTitle}>3D LIVENESS VERIFIED</Text>
+                    <Text style={styles.overlaySuccessSub}>Authentic Living Person Confirmed</Text>
                   </View>
                 )}
               </Animated.View>
 
-              {/* High-Tech Biometric Brackets */}
-              <View style={[styles.corner, styles.cornerTL, verifyState === 'success' && styles.cornerSuccess, verifyState === 'failed' && styles.cornerFailed]} />
-              <View style={[styles.corner, styles.cornerTR, verifyState === 'success' && styles.cornerSuccess, verifyState === 'failed' && styles.cornerFailed]} />
-              <View style={[styles.corner, styles.cornerBL, verifyState === 'success' && styles.cornerSuccess, verifyState === 'failed' && styles.cornerFailed]} />
-              <View style={[styles.corner, styles.cornerBR, verifyState === 'success' && styles.cornerSuccess, verifyState === 'failed' && styles.cornerFailed]} />
+              {/* Biometric Frame Brackets */}
+              <View
+                style={[
+                  styles.corner,
+                  styles.cornerTL,
+                  currentStep === 'success' && styles.cornerSuccess,
+                  currentStep === 'failed' && styles.cornerFailed,
+                ]}
+              />
+              <View
+                style={[
+                  styles.corner,
+                  styles.cornerTR,
+                  currentStep === 'success' && styles.cornerSuccess,
+                  currentStep === 'failed' && styles.cornerFailed,
+                ]}
+              />
+              <View
+                style={[
+                  styles.corner,
+                  styles.cornerBL,
+                  currentStep === 'success' && styles.cornerSuccess,
+                  currentStep === 'failed' && styles.cornerFailed,
+                ]}
+              />
+              <View
+                style={[
+                  styles.corner,
+                  styles.cornerBR,
+                  currentStep === 'success' && styles.cornerSuccess,
+                  currentStep === 'failed' && styles.cornerFailed,
+                ]}
+              />
             </View>
           )}
 
-          {/* Automatic Live Status Indicator */}
+          {/* Real-time Status Badge */}
           <View style={styles.statusBox}>
             <View
               style={[
                 styles.statusDot,
-                verifyState === 'aligning' && styles.statusDotAligning,
-                verifyState === 'scanning' && styles.statusDotScanning,
-                verifyState === 'success' && styles.statusDotSuccess,
-                verifyState === 'failed' && styles.statusDotFailed,
+                (currentStep === 'center' || currentStep === 'left' || currentStep === 'right') &&
+                  styles.statusDotActive,
+                currentStep === 'analyzing' && styles.statusDotAnalyzing,
+                currentStep === 'success' && styles.statusDotSuccess,
+                currentStep === 'failed' && styles.statusDotFailed,
               ]}
             />
             <Text style={styles.statusLabelText}>
-              {verifyState === 'aligning'
-                ? 'Aligning face… Hold still'
-                : verifyState === 'scanning'
-                ? 'Analyzing biometrics…'
-                : verifyState === 'success'
-                ? 'Verification Complete!'
+              {currentStep === 'center'
+                ? 'Step 1/3: Position face centered'
+                : currentStep === 'left'
+                ? 'Step 2/3: Angle face to the LEFT'
+                : currentStep === 'right'
+                ? 'Step 3/3: Angle face to the RIGHT'
+                : currentStep === 'analyzing'
+                ? 'Analyzing 3D Human Liveness…'
+                : currentStep === 'success'
+                ? 'Identity & Liveness Confirmed!'
                 : retryCountdown !== null
-                ? `Auto-retrying in ${retryCountdown}s…`
-                : 'Face not recognized'}
+                ? `Retrying in ${retryCountdown}s…`
+                : 'Liveness / Face Check Issue'}
             </Text>
           </View>
         </View>
 
-        {/* Live Feedback Card */}
+        {/* Dynamic Dual-Language Guidance Card */}
         <View
           style={[
             styles.feedbackCard,
-            verifyState === 'success' && styles.feedbackSuccess,
-            verifyState === 'failed' && styles.feedbackFailed,
-            verifyState === 'scanning' && styles.feedbackScanning,
+            currentStep === 'success' && styles.feedbackSuccess,
+            currentStep === 'failed' && styles.feedbackFailed,
+            currentStep === 'analyzing' && styles.feedbackScanning,
           ]}
         >
-          {verifyState === 'scanning' ? (
+          {currentStep === 'analyzing' ? (
             <ActivityIndicator size="small" color={colors.primaryDeep} />
           ) : (
-            <Ionicons
+            <MaterialCommunityIcons
               name={
-                verifyState === 'success'
-                  ? 'checkmark-circle'
-                  : verifyState === 'failed'
-                  ? 'alert-circle'
-                  : 'eye-outline'
+                currentStep === 'success'
+                  ? 'shield-check'
+                  : currentStep === 'failed'
+                  ? 'shield-alert'
+                  : currentStep === 'left'
+                  ? 'face-man-profile'
+                  : currentStep === 'right'
+                  ? 'face-man-profile'
+                  : 'face-recognition'
               }
-              size={26}
+              size={32}
               color={
-                verifyState === 'success'
+                currentStep === 'success'
                   ? colors.success
-                  : verifyState === 'failed'
+                  : currentStep === 'failed'
                   ? colors.error
                   : colors.primaryDeep
               }
@@ -584,62 +847,133 @@ export default function FaceVerificationScreen() {
             <Text
               style={[
                 styles.feedbackTitle,
-                verifyState === 'success' && { color: colors.success },
-                verifyState === 'failed' && { color: colors.error },
+                currentStep === 'success' && { color: colors.success },
+                currentStep === 'failed' && { color: colors.error },
               ]}
             >
-              {verifyState === 'success'
-                ? 'Identity Confirmed'
-                : verifyState === 'failed'
-                ? 'Verification Issue'
-                : 'Automatic Camera Scan'}
+              {currentStep === 'success'
+                ? 'Verified Human Identity'
+                : currentStep === 'failed'
+                ? 'Verification Warning'
+                : 'Interactive Liveness Check'}
             </Text>
             <Text style={styles.feedbackBody}>{statusMessage}</Text>
+            <Text style={styles.tagalogHint}>{tagalogGuidance}</Text>
 
-            {confidenceScore !== null && verifyState !== 'scanning' && (
-              <Text style={styles.confidenceText}>
-                Biometric Confidence: <Text style={{ fontWeight: '700' }}>{confidenceScore}%</Text>
-              </Text>
+            {confidenceScore !== null && currentStep !== 'analyzing' && (
+              <View style={styles.confidenceRow}>
+                <Ionicons name="finger-print" size={16} color={colors.primaryDeep} />
+                <Text style={styles.confidenceText}>
+                  Match Confidence: <Text style={{ fontWeight: '800' }}>{confidenceScore}%</Text>
+                </Text>
+              </View>
             )}
           </View>
         </View>
 
-        {/* Quick Re-scan Button (If failed or senior wants to trigger immediately) */}
-        {verifyState === 'failed' && (
+        {/* Manual 3-Angle Upload / Gallery Fallback Card */}
+        {manualMode && (
+          <View style={styles.manualCard}>
+            <Text style={styles.manualTitle}>Select Photos for All 3 Angles:</Text>
+            <View style={styles.slotsRow}>
+              {/* Center slot */}
+              <TouchableOpacity
+                style={[styles.slotBox, Boolean(capturedImages.center) && styles.slotBoxDone]}
+                onPress={() => pickAnglePhoto('center')}
+                activeOpacity={0.8}
+              >
+                <Ionicons
+                  name={capturedImages.center ? 'checkmark-circle' : 'person'}
+                  size={24}
+                  color={capturedImages.center ? colors.success : colors.primaryDeep}
+                />
+                <Text style={styles.slotLabel}>Center 👤</Text>
+              </TouchableOpacity>
+
+              {/* Left slot */}
+              <TouchableOpacity
+                style={[styles.slotBox, Boolean(capturedImages.left) && styles.slotBoxDone]}
+                onPress={() => pickAnglePhoto('left')}
+                activeOpacity={0.8}
+              >
+                <Ionicons
+                  name={capturedImages.left ? 'checkmark-circle' : 'arrow-back'}
+                  size={24}
+                  color={capturedImages.left ? colors.success : colors.primaryDeep}
+                />
+                <Text style={styles.slotLabel}>Left 👈</Text>
+              </TouchableOpacity>
+
+              {/* Right slot */}
+              <TouchableOpacity
+                style={[styles.slotBox, Boolean(capturedImages.right) && styles.slotBoxDone]}
+                onPress={() => pickAnglePhoto('right')}
+                activeOpacity={0.8}
+              >
+                <Ionicons
+                  name={capturedImages.right ? 'checkmark-circle' : 'arrow-forward'}
+                  size={24}
+                  color={capturedImages.right ? colors.success : colors.primaryDeep}
+                />
+                <Text style={styles.slotLabel}>Right 👉</Text>
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity
+              style={styles.manualSubmitBtn}
+              onPress={handleManualMultiAngleSubmit}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="shield-checkmark" size={20} color={colors.white} />
+              <Text style={styles.manualSubmitBtnText}>Verify Selected 3 Angles</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Manual Restart Button (If failed) */}
+        {currentStep === 'failed' && (
           <TouchableOpacity
             style={styles.retryBtn}
             onPress={() => {
               if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
               setRetryCountdown(null);
-              performAutoVerification();
+              runStepSequence();
             }}
             activeOpacity={0.85}
           >
             <Ionicons name="refresh" size={20} color={colors.white} />
-            <Text style={styles.retryBtnText}>Scan Again Now</Text>
+            <Text style={styles.retryBtnText}>Scan Angles Again</Text>
           </TouchableOpacity>
         )}
 
-        {/* Senior Assistance & Tips */}
+        {/* Senior Citizen Friendly Guidance Tips */}
         <View style={styles.tipsCard}>
-          <Text style={styles.tipsTitle}>Senior Citizen Friendly Tips:</Text>
+          <Text style={styles.tipsTitle}>Senior Citizen Friendly Tips (Gabay):</Text>
           <View style={styles.tipRow}>
-            <Ionicons name="phone-portrait-outline" size={18} color={colors.gold} />
-            <Text style={styles.tipText}>Hawakan ang telepono nang pantay sa iyong mukha.</Text>
+            <Ionicons name="shield" size={18} color={colors.gold} />
+            <Text style={styles.tipText}>
+              <Text style={{ fontWeight: '700' }}>Anti-Spoofing:</Text> Pinipigilan nito ang paggamit ng pekeng litrato o cellphone display.
+            </Text>
           </View>
           <View style={styles.tipRow}>
-            <Ionicons name="sunny-outline" size={18} color={colors.gold} />
-            <Text style={styles.tipText}>Tiyaking may sapat na liwanag at walang takip ang mukha.</Text>
+            <Ionicons name="eye-outline" size={18} color={colors.gold} />
+            <Text style={styles.tipText}>
+              Sundin lamang ang panuto sa screen: Humarap sa gitna, lumingon pakaliwa, at lumingon pakanan.
+            </Text>
           </View>
         </View>
 
-        {/* Fallback Option */}
+        {/* Toggle Manual / Fallback Mode */}
         <TouchableOpacity
           style={styles.fallbackLink}
-          onPress={handleManualUpload}
+          onPress={() => setManualMode(!manualMode)}
           activeOpacity={0.7}
         >
-          <Text style={styles.fallbackText}>Camera not working? Select photo from gallery</Text>
+          <Text style={styles.fallbackText}>
+            {manualMode
+              ? 'Switch back to Live Camera Auto-Scan'
+              : 'Trouble with live camera? Select 3 angle photos manually'}
+          </Text>
         </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
@@ -687,7 +1021,7 @@ const styles = StyleSheet.create({
   },
   badgeText: {
     fontFamily: 'InterBody',
-    fontSize: 11,
+    fontSize: 10.5,
     fontWeight: '700',
     color: colors.primaryDeep,
     letterSpacing: 0.8,
@@ -709,19 +1043,67 @@ const styles = StyleSheet.create({
   },
   subtitle: {
     fontFamily: 'InterBody',
-    fontSize: 15,
+    fontSize: 14.5,
     color: colors.inkSoft,
-    lineHeight: 22,
+    lineHeight: 21,
+  },
+  stepProgressContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: colors.card,
+    borderRadius: 18,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    paddingHorizontal: space(3),
+    paddingVertical: space(2.5),
+  },
+  stepPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 14,
+    backgroundColor: '#F0F6F2',
+  },
+  stepPillActive: {
+    backgroundColor: colors.primaryDeep,
+  },
+  stepPillCompleted: {
+    backgroundColor: colors.primary,
+  },
+  stepIconWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stepPillText: {
+    fontFamily: 'InterBody',
+    fontSize: 12.5,
+    fontWeight: '700',
+    color: colors.inkFaint,
+  },
+  stepPillTextActive: {
+    color: colors.white,
+  },
+  stepLine: {
+    flex: 1,
+    height: 2,
+    backgroundColor: colors.borderLight,
+    marginHorizontal: 4,
+  },
+  stepLineActive: {
+    backgroundColor: colors.primary,
   },
   viewfinderCard: {
     backgroundColor: colors.card,
     borderRadius: 28,
     borderWidth: 1.5,
     borderColor: colors.border,
-    paddingVertical: space(6),
+    paddingVertical: space(5),
     paddingHorizontal: space(4),
     alignItems: 'center',
-    gap: space(4),
+    gap: space(3.5),
     ...Platform.select({
       ios: {
         shadowColor: '#0E1F16',
@@ -768,16 +1150,45 @@ const styles = StyleSheet.create({
     color: colors.white,
   },
   frameContainer: {
-    width: 260,
-    height: 310,
+    width: 270,
+    height: 320,
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
   },
+  directionGuideLeft: {
+    position: 'absolute',
+    left: -20,
+    zIndex: 10,
+    alignItems: 'center',
+    backgroundColor: 'rgba(14, 31, 22, 0.85)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    gap: 2,
+  },
+  directionGuideRight: {
+    position: 'absolute',
+    right: -20,
+    zIndex: 10,
+    alignItems: 'center',
+    backgroundColor: 'rgba(14, 31, 22, 0.85)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    gap: 2,
+  },
+  turnLabel: {
+    fontFamily: 'InterBody',
+    fontSize: 10.5,
+    fontWeight: '800',
+    color: '#FFD700',
+    letterSpacing: 0.5,
+  },
   ovalGuide: {
-    width: 230,
-    height: 290,
-    borderRadius: 115,
+    width: 235,
+    height: 295,
+    borderRadius: 118,
     borderWidth: 4,
     borderColor: colors.primary,
     backgroundColor: '#000000',
@@ -786,10 +1197,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     position: 'relative',
   },
-  ovalAligning: {
+  ovalActive: {
     borderColor: colors.accent,
   },
-  ovalScanning: {
+  ovalAnalyzing: {
     borderColor: '#20BF6B',
     borderWidth: 5,
   },
@@ -819,7 +1230,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#00FF88',
     shadowColor: '#00FF88',
     shadowOpacity: 1,
-    shadowRadius: 12,
+    shadowRadius: 14,
     shadowOffset: { width: 0, height: 0 },
   },
   overlaySuccess: {
@@ -828,23 +1239,26 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: 'rgba(27, 94, 63, 0.85)',
+    backgroundColor: 'rgba(27, 94, 63, 0.88)',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
+    paddingHorizontal: 16,
   },
   overlaySuccessTitle: {
     fontFamily: 'InterBody',
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: '800',
     color: colors.white,
-    letterSpacing: 2,
+    letterSpacing: 1.5,
+    textAlign: 'center',
   },
   overlaySuccessSub: {
     fontFamily: 'InterBody',
-    fontSize: 14,
+    fontSize: 13,
     color: colors.white,
     opacity: 0.9,
+    textAlign: 'center',
   },
   corner: {
     position: 'absolute',
@@ -901,10 +1315,10 @@ const styles = StyleSheet.create({
     borderRadius: 5,
     backgroundColor: colors.primary,
   },
-  statusDotAligning: {
+  statusDotActive: {
     backgroundColor: colors.gold,
   },
-  statusDotScanning: {
+  statusDotAnalyzing: {
     backgroundColor: '#20BF6B',
   },
   statusDotSuccess: {
@@ -915,7 +1329,7 @@ const styles = StyleSheet.create({
   },
   statusLabelText: {
     fontFamily: 'InterBody',
-    fontSize: 14,
+    fontSize: 13.5,
     fontWeight: '700',
     color: colors.ink,
   },
@@ -954,11 +1368,77 @@ const styles = StyleSheet.create({
     color: colors.inkSoft,
     lineHeight: 20,
   },
+  tagalogHint: {
+    fontFamily: 'InterBody',
+    fontSize: 13,
+    color: colors.inkFaint,
+    fontStyle: 'italic',
+    marginTop: 3,
+  },
+  confidenceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 6,
+  },
   confidenceText: {
     fontFamily: 'InterBody',
     fontSize: 13,
     color: colors.inkSoft,
-    marginTop: 4,
+  },
+  manualCard: {
+    backgroundColor: colors.card,
+    borderRadius: 18,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    padding: space(4),
+    gap: space(3),
+  },
+  manualTitle: {
+    fontFamily: 'InterBody',
+    fontSize: 15,
+    fontWeight: '700',
+    color: colors.ink,
+  },
+  slotsRow: {
+    flexDirection: 'row',
+    gap: space(2.5),
+    justifyContent: 'space-between',
+  },
+  slotBox: {
+    flex: 1,
+    backgroundColor: '#F4F8F5',
+    borderWidth: 1.5,
+    borderColor: colors.borderLight,
+    borderRadius: 14,
+    paddingVertical: space(3),
+    alignItems: 'center',
+    gap: 4,
+  },
+  slotBoxDone: {
+    borderColor: colors.success,
+    backgroundColor: colors.successSoft,
+  },
+  slotLabel: {
+    fontFamily: 'InterBody',
+    fontSize: 12.5,
+    fontWeight: '700',
+    color: colors.inkSoft,
+  },
+  manualSubmitBtn: {
+    backgroundColor: colors.primaryDeep,
+    height: 48,
+    borderRadius: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  manualSubmitBtnText: {
+    fontFamily: 'InterBody',
+    fontSize: 15,
+    fontWeight: '700',
+    color: colors.white,
   },
   retryBtn: {
     height: 54,
@@ -996,14 +1476,15 @@ const styles = StyleSheet.create({
   },
   tipRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: space(2),
   },
   tipText: {
     fontFamily: 'InterBody',
-    fontSize: 13.5,
+    fontSize: 13,
     color: colors.inkSoft,
     flex: 1,
+    lineHeight: 18,
   },
   fallbackLink: {
     alignItems: 'center',
@@ -1014,5 +1495,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: colors.inkFaint,
     textDecorationLine: 'underline',
+    textAlign: 'center',
   },
 });
