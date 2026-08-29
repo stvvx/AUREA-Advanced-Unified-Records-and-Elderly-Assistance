@@ -164,3 +164,69 @@ export async function deleteLoloMemory(
     method: 'DELETE',
   });
 }
+
+/**
+ * POST /api/lolo/speech/tts
+ *
+ * Requests server-side TTS processing, normalization, and lip-sync visemes track.
+ */
+export async function requestLoloTTS(payload: {
+  text: string;
+  language?: string;
+  speechRate?: number;
+  speechPitch?: number;
+}): Promise<{
+  success: boolean;
+  text: string;
+  language: string;
+  speechRate: number;
+  speechPitch: number;
+  durationMs: number;
+  visemes: Array<{ timeMs: number; visemeId: number; amplitude: number; phoneme: string }>;
+  voiceName: string;
+}> {
+  return apiRequest('/api/lolo/speech/tts', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+/**
+ * GET /api/lolo/speech/info
+ *
+ * Gets backend speech configuration, default pitch/rate, and supported languages.
+ */
+export async function getLoloSpeechInfo(): Promise<{
+  success: boolean;
+  defaultLanguage: string;
+  supportedLanguages: string[];
+  defaultRate: number;
+  defaultPitch: number;
+  features: Record<string, boolean>;
+}> {
+  return apiRequest('/api/lolo/speech/info');
+}
+
+/**
+ * POST /api/lolo/speech/stt
+ *
+ * Sends base64-encoded audio to backend for Filipino/Tagalog and English speech recognition.
+ */
+export async function sendLoloAudioSTT(payload: {
+  audio: string;
+  mimeType?: string;
+  language?: string;
+}): Promise<{
+  success: boolean;
+  text: string;
+  confidence: number;
+  language: string;
+  source?: string;
+}> {
+  return apiRequest('/api/lolo/speech/stt', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+

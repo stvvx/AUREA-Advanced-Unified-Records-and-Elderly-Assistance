@@ -27,9 +27,11 @@ def register_lolo_routes(app: Flask) -> None:
     print("[LOLO] Registered blueprint: /api/lolo/memory")
 
     # ── Phase 7–8: Speech (TTS / STT) ────────────────────────────────────────
-    # from routes.speech import lolo_speech_bp
-    # app.register_blueprint(lolo_speech_bp)
+    from routes.speech import lolo_speech_bp
+    app.register_blueprint(lolo_speech_bp)
+    print("[LOLO] Registered blueprint: /api/lolo/speech")
 
     # ── Phase 11: Avatar Emotion ──────────────────────────────────────────────
-    # from routes.avatar import lolo_avatar_bp
-    # app.register_blueprint(lolo_avatar_bp)
+    from routes.avatar import lolo_avatar_bp
+    app.register_blueprint(lolo_avatar_bp)
+    print("[LOLO] Registered blueprint: /api/lolo/avatar")
