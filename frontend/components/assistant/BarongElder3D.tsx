@@ -1,822 +1,550 @@
 /**
  * frontend/components/assistant/BarongElder3D.tsx
  * ─────────────────────────────────────────────────────────────────────────────
- * 3D Animated Avatar Component for LOLO PAT.
- * Supports:
- *   - Three.js WebGL 3D character with Barong Tagalog, silver hair, and gold eyeglasses
- *   - GLB / GLTF model loader support with procedural fallback
- *   - Real-time viseme lip-sync subscription from speechEngine
- *   - Interactive OrbitControls / drag-to-rotate & tilt interaction
- *   - Native mobile (Android & iOS) visual animation with waving avatar and audio wave
+ * Lolo Pat — Pixar-Quality 3D-Shaded Clay Grandfather Avatar
+ *
+ * Uses advanced SVG sphere shading (multi-layer radial gradients + specular
+ * highlights) to create genuine 3D depth — no CDN, no packages, works offline.
+ *
+ * Animation engine:
+ *   - setInterval at 30fps drives mouth & blink state (reliable on Android)
+ *   - Animated API drives eyelid opacity/scale (hardware-accelerated)
+ *   - speechEngine.registerVisemeListener drives real-time lip-sync
+ *   - setTimeout-based blink scheduler (2.5s–5s intervals, double-blink)
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
-import React, { useEffect, useRef } from 'react';
-import { View, StyleSheet, Platform, Text, Image, TouchableOpacity, Animated } from 'react-native';
-import * as THREE from 'three';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
+import {
+  View,
+  StyleSheet,
+  Animated,
+  Easing,
+  TouchableOpacity,
+  Platform,
+} from 'react-native';
+import Svg, {
+  Defs,
+  LinearGradient,
+  RadialGradient,
+  Stop,
+  Path,
+  Circle,
+  Ellipse,
+  G,
+} from 'react-native-svg';
 import { speechEngine } from '../../lib/speechEngine';
-
 import { Emotion } from '../../types/lolo';
 
 interface BarongElder3DProps {
   isSpeaking?: boolean;
+  isListening?: boolean;
   emotion?: Emotion;
-  modelUrl?: string;
   onTapAvatar?: () => void;
   style?: any;
   height?: number;
+  modelUrl?: string;
+  videoUrl?: string;
+  idleVideoUrl?: string;
 }
 
 export default function BarongElder3D({
   isSpeaking = false,
+  isListening = false,
   emotion = 'neutral',
-  modelUrl,
   onTapAvatar,
   style,
-  height = 340,
+  height = 320,
 }: BarongElder3DProps) {
-  const mountRef = useRef<HTMLDivElement | null>(null);
-  const animFrameIdRef = useRef<number | null>(null);
 
-  // Native Mobile Animations
-  const floatAnim = useRef(new Animated.Value(0)).current;
-  const waveScaleAnim = useRef(new Animated.Value(1)).current;
+  // ── Animation state (plain numbers, updated by setInterval) ─────────────────
+  const [mouthOpen, setMouthOpen]   = useState(0);   // 0 (closed) → 1 (wide)
+  const [blinkAmt,  setBlinkAmt]    = useState(0);   // 0 (open)   → 1 (shut)
 
-  // References to animated 3D parts
-  const headRef = useRef<THREE.Group | null>(null);
-  const jawRef = useRef<THREE.Mesh | null>(null);
-  const leftEyeRef = useRef<THREE.Mesh | null>(null);
-  const rightEyeRef = useRef<THREE.Mesh | null>(null);
-  const leftEyelidRef = useRef<THREE.Mesh | null>(null);
-  const rightEyelidRef = useRef<THREE.Mesh | null>(null);
-  const leftBrowRef = useRef<THREE.Mesh | null>(null);
-  const rightBrowRef = useRef<THREE.Mesh | null>(null);
-  const leftCheekRef = useRef<THREE.Mesh | null>(null);
-  const rightCheekRef = useRef<THREE.Mesh | null>(null);
-  const upperLipRef = useRef<THREE.Mesh | null>(null);
-  const lowerLipRef = useRef<THREE.Mesh | null>(null);
-  const mouthBackRef = useRef<THREE.Mesh | null>(null);
-  const rightArmRef = useRef<THREE.Group | null>(null);
-  const chestRef = useRef<THREE.Group | null>(null);
+  // Smooth targets — mutated in listeners, read in interval
+  const mouthTargetRef  = useRef(0);
+  const mouthCurrentRef = useRef(0);
+  const blinkTargetRef  = useRef(0);
+  const blinkCurrentRef = useRef(0);
+  const isSpeakingRef   = useRef(isSpeaking);
+  const clockRef        = useRef(0);
 
-  // Emotion ref for smooth animation lerp
-  const emotionRef = useRef<Emotion>(emotion);
+  // Animated values for tap + aura (hardware-accelerated, no re-render needed)
+  const auraPulse  = useRef(new Animated.Value(1)).current;
+  const tapBounce  = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => { isSpeakingRef.current = isSpeaking; }, [isSpeaking]);
+
+  // ── 1. AURA GLOW WHILE SPEAKING ─────────────────────────────────────────────
   useEffect(() => {
-    emotionRef.current = emotion;
+    if (isSpeaking) {
+      const loop = Animated.loop(
+        Animated.sequence([
+          Animated.timing(auraPulse, { toValue: 1.06, duration: 380, useNativeDriver: true }),
+          Animated.timing(auraPulse, { toValue: 0.97, duration: 380, useNativeDriver: true }),
+        ])
+      );
+      loop.start();
+      return () => { loop.stop(); auraPulse.setValue(1); };
+    }
+    auraPulse.setValue(1);
+  }, [isSpeaking, auraPulse]);
+
+  // ── 2. BLINK SCHEDULER — setTimeout based, reliable on all platforms ─────────
+  useEffect(() => {
+    let active = true;
+    let tid: ReturnType<typeof setTimeout>;
+
+    const blink = (onDone: () => void) => {
+      blinkTargetRef.current = 1;
+      tid = setTimeout(() => {
+        blinkTargetRef.current = 0;
+        onDone();
+      }, 110);
+    };
+
+    const schedule = () => {
+      if (!active) return;
+      const delay = emotion === 'sleepy'
+        ? 1600 + Math.random() * 1200
+        : 2600 + Math.random() * 2600;
+
+      tid = setTimeout(() => {
+        if (!active) return;
+        blink(() => {
+          // 22% chance of double-blink
+          if (Math.random() < 0.22) {
+            tid = setTimeout(() => {
+              blink(() => schedule());
+            }, 110);
+          } else {
+            schedule();
+          }
+        });
+      }, delay);
+    };
+
+    schedule();
+    return () => { active = false; clearTimeout(tid); };
   }, [emotion]);
 
-  // Viseme Lip-Sync Animation values (Phase 12)
-  const currentMouthOpenRef = useRef<number>(0);
-  const targetMouthOpenRef = useRef<number>(0);
-  const currentMouthWidthRef = useRef<number>(1.0);
-  const targetMouthWidthRef = useRef<number>(1.0);
-  const currentMouthPuckerRef = useRef<number>(1.0);
-  const targetMouthPuckerRef = useRef<number>(1.0);
-  const blinkTimerRef = useRef<number>(0);
-  const isBlinkingRef = useRef<boolean>(false);
-  const waveTimerRef = useRef<number>(120);
-
-  // ── Viseme Subscription (Phoneme Shape Mapping) ───────────────────────────
+  // ── 3. SPEECH VISEME → MOUTH TARGET ─────────────────────────────────────────
   useEffect(() => {
-    const unsubscribe = speechEngine.registerVisemeListener((amplitude, phoneme) => {
+    const unsub = speechEngine.registerVisemeListener((amplitude, phoneme) => {
       const p = (phoneme || 'A').toUpperCase();
-      switch (p) {
-        case 'A':
-          targetMouthOpenRef.current = amplitude * 1.0;
-          targetMouthWidthRef.current = 1.0;
-          targetMouthPuckerRef.current = 1.0;
-          break;
-        case 'E':
-        case 'I':
-          targetMouthOpenRef.current = amplitude * 0.55;
-          targetMouthWidthRef.current = 1.35;
-          targetMouthPuckerRef.current = 0.8;
-          break;
-        case 'O':
-          targetMouthOpenRef.current = amplitude * 0.8;
-          targetMouthWidthRef.current = 0.85;
-          targetMouthPuckerRef.current = 1.3;
-          break;
-        case 'U':
-          targetMouthOpenRef.current = amplitude * 0.45;
-          targetMouthWidthRef.current = 0.65;
-          targetMouthPuckerRef.current = 1.45;
-          break;
-        case 'M':
-        case 'B':
-        case 'P':
-          targetMouthOpenRef.current = 0.04;
-          targetMouthWidthRef.current = 0.95;
-          targetMouthPuckerRef.current = 1.0;
-          break;
-        case 'SILENCE':
-        case 'NEUTRAL':
-        default:
-          targetMouthOpenRef.current = 0.0;
-          targetMouthWidthRef.current = 1.0;
-          targetMouthPuckerRef.current = 1.0;
-          break;
+      if (p === 'M' || p === 'B' || p === 'P') {
+        mouthTargetRef.current = 0.04;
+      } else {
+        mouthTargetRef.current = Math.max(0.15, Math.min(1.0, amplitude * 1.4));
       }
     });
-    return () => unsubscribe();
+    return () => unsub();
   }, []);
 
-  // ── Three.js WebGL Character Setup (Web & Desktop) ────────────────────────
+  // Reset mouth when speaking stops
   useEffect(() => {
-    if (Platform.OS !== 'web' || !mountRef.current) return;
+    if (!isSpeaking) mouthTargetRef.current = 0;
+  }, [isSpeaking]);
 
-    const container = mountRef.current;
-    let width = container.clientWidth || container.offsetWidth || 340;
-    if (width === 0 && typeof window !== 'undefined') {
-      width = Math.min(window.innerWidth - 32, 600);
-    }
-    const canvasHeight = height;
+  // ── 4. MAIN ANIMATION LOOP — setInterval at 30 FPS ──────────────────────────
+  useEffect(() => {
+    const INTERVAL_MS = 33; // ~30 fps
+    const id = setInterval(() => {
+      clockRef.current += INTERVAL_MS / 1000;
 
-    // 1. Scene Setup
-    const scene = new THREE.Scene();
-    scene.background = null;
+      // Desired mouth: add syllable wave when speaking
+      let desiredMouth = mouthTargetRef.current;
+      if (isSpeakingRef.current) {
+        const wave = (Math.sin(clockRef.current * 9.5) + 1) / 2;
+        desiredMouth = Math.max(0.15, desiredMouth * 0.68 + wave * 0.48);
+      }
 
-    // 2. Camera Setup
-    const camera = new THREE.PerspectiveCamera(36, width / canvasHeight, 0.1, 100);
-    camera.position.set(0, 1.45, 3.2);
-    camera.lookAt(0, 1.32, 0);
+      // Smooth lerp (30fps equivalent of 60fps 0.32 factor)
+      mouthCurrentRef.current += (desiredMouth - mouthCurrentRef.current) * 0.28;
+      blinkCurrentRef.current += (blinkTargetRef.current - blinkCurrentRef.current) * 0.38;
 
-    // 3. WebGL Renderer
-    const renderer = new THREE.WebGLRenderer({
-      antialias: true,
-      alpha: true,
-      powerPreference: 'high-performance',
-    });
-    renderer.setSize(width, canvasHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.2;
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-
-    renderer.domElement.style.width = '100%';
-    renderer.domElement.style.height = '100%';
-    renderer.domElement.style.display = 'block';
-    renderer.domElement.style.outline = 'none';
-
-    while (container.firstChild) {
-      container.removeChild(container.firstChild);
-    }
-    container.appendChild(renderer.domElement);
-
-    // 4. Lighting
-    const ambientLight = new THREE.AmbientLight(0xfff5ea, 1.4);
-    scene.add(ambientLight);
-
-    const keyLight = new THREE.DirectionalLight(0xfffaed, 1.8);
-    keyLight.position.set(2.5, 4.0, 3.0);
-    keyLight.castShadow = true;
-    scene.add(keyLight);
-
-    const fillLight = new THREE.DirectionalLight(0xd5ede0, 1.0);
-    fillLight.position.set(-3.0, 2.0, 2.0);
-    scene.add(fillLight);
-
-    const goldRimLight = new THREE.DirectionalLight(0xffcb6b, 1.6);
-    goldRimLight.position.set(0, 3.0, -2.5);
-    scene.add(goldRimLight);
-
-    // 5. Load GLB Model or Build Procedural Character
-    const characterRoot = new THREE.Group();
-    scene.add(characterRoot);
-
-    if (modelUrl) {
-      const loader = new GLTFLoader();
-      loader.load(
-        modelUrl,
-        (gltf) => {
-          const model = gltf.scene;
-          model.position.set(0, 0, 0);
-          model.scale.set(1, 1, 1);
-          characterRoot.add(model);
-        },
-        undefined,
-        (error) => {
-          console.warn('[BarongElder3D] Failed to load GLB model, using procedural mesh:', error);
-          buildProceduralBarongElder(characterRoot);
-        }
-      );
-    } else {
-      buildProceduralBarongElder(characterRoot);
-    }
-
-    function buildProceduralBarongElder(root: THREE.Group) {
-      const barongMaterial = new THREE.MeshStandardMaterial({
-        color: 0xfdfaf2,
-        roughness: 0.5,
-        metalness: 0.08,
+      // Only call setState when value changes meaningfully (avoid jank)
+      setMouthOpen(prev => {
+        const next = Math.round(mouthCurrentRef.current * 1000) / 1000;
+        return Math.abs(next - prev) > 0.005 ? next : prev;
       });
-
-      const embroideryMaterial = new THREE.MeshStandardMaterial({
-        color: 0xdfc499,
-        roughness: 0.35,
-        metalness: 0.35,
+      setBlinkAmt(prev => {
+        const next = Math.round(blinkCurrentRef.current * 1000) / 1000;
+        return Math.abs(next - prev) > 0.005 ? next : prev;
       });
-
-      const camisaMaterial = new THREE.MeshStandardMaterial({
-        color: 0xffffff,
-        roughness: 0.7,
-      });
-
-      const pantsMaterial = new THREE.MeshStandardMaterial({
-        color: 0x14231b,
-        roughness: 0.8,
-      });
-
-      const skinMaterial = new THREE.MeshStandardMaterial({
-        color: 0xc89d76,
-        roughness: 0.65,
-        metalness: 0.02,
-      });
-
-      const hairMaterial = new THREE.MeshStandardMaterial({
-        color: 0xf2f2f2,
-        roughness: 0.55,
-        metalness: 0.12,
-      });
-
-      const browMaterial = new THREE.MeshStandardMaterial({
-        color: 0xc0c0c0,
-        roughness: 0.7,
-      });
-
-      const glassesMaterial = new THREE.MeshStandardMaterial({
-        color: 0xdaa520,
-        metalness: 0.85,
-        roughness: 0.2,
-      });
-
-      const lensMaterial = new THREE.MeshPhysicalMaterial({
-        color: 0xffffff,
-        transmission: 0.9,
-        opacity: 0.95,
-        transparent: true,
-        roughness: 0.05,
-        ior: 1.5,
-      });
-
-      const lipMaterial = new THREE.MeshStandardMaterial({ color: 0xb5786b, roughness: 0.5 });
-      const innerMouthMaterial = new THREE.MeshBasicMaterial({ color: 0x3b1212 });
-      const teethMaterial = new THREE.MeshStandardMaterial({ color: 0xfbfbfb, roughness: 0.2 });
-
-      // Torso / Barong
-      const chestGroup = new THREE.Group();
-      chestGroup.position.set(0, 0.95, 0);
-      root.add(chestGroup);
-      chestRef.current = chestGroup;
-
-      const torsoGeo = new THREE.CylinderGeometry(0.36, 0.32, 0.75, 24);
-      const torsoMesh = new THREE.Mesh(torsoGeo, barongMaterial);
-      chestGroup.add(torsoMesh);
-
-      const camisaGeo = new THREE.CylinderGeometry(0.24, 0.28, 0.3, 16);
-      const camisaMesh = new THREE.Mesh(camisaGeo, camisaMaterial);
-      camisaMesh.position.set(0, 0.3, 0.05);
-      chestGroup.add(camisaMesh);
-
-      const collarGeo = new THREE.TorusGeometry(0.18, 0.025, 12, 24, Math.PI * 1.6);
-      const collarMesh = new THREE.Mesh(collarGeo, barongMaterial);
-      collarMesh.rotation.x = Math.PI / 2;
-      collarMesh.position.set(0, 0.4, 0.02);
-      chestGroup.add(collarMesh);
-
-      const pecheraGeo = new THREE.PlaneGeometry(0.22, 0.44);
-      const pecheraMesh = new THREE.Mesh(pecheraGeo, embroideryMaterial);
-      pecheraMesh.position.set(0, 0.12, 0.365);
-      chestGroup.add(pecheraMesh);
-
-      const stripeGeo = new THREE.BoxGeometry(0.018, 0.44, 0.005);
-      const leftStripe = new THREE.Mesh(stripeGeo, embroideryMaterial);
-      leftStripe.position.set(-0.085, 0.12, 0.37);
-      const rightStripe = new THREE.Mesh(stripeGeo, embroideryMaterial);
-      rightStripe.position.set(0.085, 0.12, 0.37);
-      chestGroup.add(leftStripe, rightStripe);
-
-      for (let i = 0; i < 4; i++) {
-        const btnGeo = new THREE.SphereGeometry(0.013, 10, 10);
-        const btnMesh = new THREE.Mesh(btnGeo, embroideryMaterial);
-        btnMesh.position.set(0, 0.27 - i * 0.09, 0.376);
-        chestGroup.add(btnMesh);
-      }
-
-      const slacksGeo = new THREE.CylinderGeometry(0.33, 0.36, 0.6, 20);
-      const slacksMesh = new THREE.Mesh(slacksGeo, pantsMaterial);
-      slacksMesh.position.set(0, -0.65, 0);
-      chestGroup.add(slacksMesh);
-
-      // Left Arm
-      const leftArmGroup = new THREE.Group();
-      leftArmGroup.position.set(-0.4, 0.3, 0);
-      const leftSleeveGeo = new THREE.CylinderGeometry(0.1, 0.09, 0.55, 16);
-      const leftSleeveMesh = new THREE.Mesh(leftSleeveGeo, barongMaterial);
-      leftSleeveMesh.position.set(0, -0.25, 0);
-      leftArmGroup.add(leftSleeveMesh);
-
-      const leftHandGeo = new THREE.SphereGeometry(0.065, 12, 12);
-      const leftHandMesh = new THREE.Mesh(leftHandGeo, skinMaterial);
-      leftHandMesh.position.set(0, -0.55, 0);
-      leftArmGroup.add(leftHandMesh);
-      chestGroup.add(leftArmGroup);
-
-      // Right Arm (Waving gesture)
-      const rightArmGroup = new THREE.Group();
-      rightArmGroup.position.set(0.4, 0.3, 0);
-      rightArmRef.current = rightArmGroup;
-
-      const rightSleeveGeo = new THREE.CylinderGeometry(0.1, 0.09, 0.55, 16);
-      const rightSleeveMesh = new THREE.Mesh(rightSleeveGeo, barongMaterial);
-      rightSleeveMesh.position.set(0, -0.25, 0);
-      rightArmGroup.add(rightSleeveMesh);
-
-      const rightHandGeo = new THREE.SphereGeometry(0.065, 12, 12);
-      const rightHandMesh = new THREE.Mesh(rightHandGeo, skinMaterial);
-      rightHandMesh.position.set(0, -0.55, 0);
-      rightArmGroup.add(rightHandMesh);
-      chestGroup.add(rightArmGroup);
-
-      // Head & Neck
-      const headGroup = new THREE.Group();
-      headGroup.position.set(0, 1.42, 0);
-      root.add(headGroup);
-      headRef.current = headGroup;
-
-      const neckGeo = new THREE.CylinderGeometry(0.13, 0.15, 0.22, 16);
-      const neckMesh = new THREE.Mesh(neckGeo, skinMaterial);
-      neckMesh.position.set(0, -0.12, 0);
-      headGroup.add(neckMesh);
-
-      const craniumGeo = new THREE.SphereGeometry(0.24, 32, 28);
-      const craniumMesh = new THREE.Mesh(craniumGeo, skinMaterial);
-      headGroup.add(craniumMesh);
-
-      // Jaw / Chin (Mouth animation target)
-      const jawGroup = new THREE.Mesh();
-      jawGroup.position.set(0, -0.06, 0.06);
-      headGroup.add(jawGroup);
-      jawRef.current = jawGroup;
-
-      const chinGeo = new THREE.SphereGeometry(0.14, 20, 16);
-      const chinMesh = new THREE.Mesh(chinGeo, skinMaterial);
-      chinMesh.position.set(0, -0.08, 0.08);
-      chinMesh.scale.set(0.9, 0.7, 0.9);
-      jawGroup.add(chinMesh);
-
-      const lowerLipGeo = new THREE.TorusGeometry(0.045, 0.012, 8, 16, Math.PI);
-      const lowerLipMesh = new THREE.Mesh(lowerLipGeo, lipMaterial);
-      lowerLipMesh.position.set(0, -0.05, 0.19);
-      jawGroup.add(lowerLipMesh);
-      lowerLipRef.current = lowerLipMesh;
-
-      const upperLipGeo = new THREE.TorusGeometry(0.048, 0.012, 8, 16, Math.PI);
-      const upperLipMesh = new THREE.Mesh(upperLipGeo, lipMaterial);
-      upperLipMesh.rotation.x = Math.PI;
-      upperLipMesh.position.set(0, -0.085, 0.215);
-      headGroup.add(upperLipMesh);
-      upperLipRef.current = upperLipMesh;
-
-      const mouthBackGeo = new THREE.PlaneGeometry(0.08, 0.04);
-      const mouthBackMesh = new THREE.Mesh(mouthBackGeo, innerMouthMaterial);
-      mouthBackMesh.position.set(0, -0.09, 0.18);
-      headGroup.add(mouthBackMesh);
-      mouthBackRef.current = mouthBackMesh;
-
-      const upperTeethGeo = new THREE.BoxGeometry(0.06, 0.015, 0.01);
-      const upperTeethMesh = new THREE.Mesh(upperTeethGeo, teethMaterial);
-      upperTeethMesh.position.set(0, -0.08, 0.19);
-      headGroup.add(upperTeethMesh);
-
-      // Nose
-      const noseGeo = new THREE.ConeGeometry(0.045, 0.11, 12);
-      const noseMesh = new THREE.Mesh(noseGeo, skinMaterial);
-      noseMesh.position.set(0, -0.02, 0.255);
-      noseMesh.rotation.x = -Math.PI / 10;
-      headGroup.add(noseMesh);
-
-      // Cheeks
-      const leftCheek = new THREE.Mesh(new THREE.SphereGeometry(0.08, 16, 16), skinMaterial);
-      leftCheek.position.set(-0.14, -0.04, 0.15);
-      leftCheek.scale.set(1, 0.8, 0.8);
-      const rightCheek = new THREE.Mesh(new THREE.SphereGeometry(0.08, 16, 16), skinMaterial);
-      rightCheek.position.set(0.14, -0.04, 0.15);
-      rightCheek.scale.set(1, 0.8, 0.8);
-      headGroup.add(leftCheek, rightCheek);
-      leftCheekRef.current = leftCheek;
-      rightCheekRef.current = rightCheek;
-
-      // Eyes
-      const scleraMaterial = new THREE.MeshBasicMaterial({ color: 0xf5f5f5 });
-      const irisMaterial = new THREE.MeshBasicMaterial({ color: 0x3d2714 });
-      const pupilMaterial = new THREE.MeshBasicMaterial({ color: 0x050505 });
-
-      const eyeGeo = new THREE.SphereGeometry(0.038, 16, 16);
-      const irisGeo = new THREE.SphereGeometry(0.022, 12, 12);
-      const pupilGeo = new THREE.SphereGeometry(0.012, 10, 10);
-
-      const leftEyeGroup = new THREE.Group();
-      leftEyeGroup.position.set(-0.08, 0.045, 0.2);
-      const leftSclera = new THREE.Mesh(eyeGeo, scleraMaterial);
-      const leftIris = new THREE.Mesh(irisGeo, irisMaterial);
-      leftIris.position.set(0, 0, 0.025);
-      const leftPupil = new THREE.Mesh(pupilGeo, pupilMaterial);
-      leftPupil.position.set(0, 0, 0.034);
-      leftEyeGroup.add(leftSclera, leftIris, leftPupil);
-      headGroup.add(leftEyeGroup);
-      leftEyeRef.current = leftSclera;
-
-      const rightEyeGroup = new THREE.Group();
-      rightEyeGroup.position.set(0.08, 0.045, 0.2);
-      const rightSclera = new THREE.Mesh(eyeGeo, scleraMaterial);
-      const rightIris = new THREE.Mesh(irisGeo, irisMaterial);
-      rightIris.position.set(0, 0, 0.025);
-      const rightPupil = new THREE.Mesh(pupilGeo, pupilMaterial);
-      rightPupil.position.set(0, 0, 0.034);
-      rightEyeGroup.add(rightSclera, rightIris, rightPupil);
-      headGroup.add(rightEyeGroup);
-      rightEyeRef.current = rightSclera;
-
-      // Eyelids
-      const eyelidGeo = new THREE.SphereGeometry(0.042, 16, 16, 0, Math.PI * 2, 0, Math.PI / 2);
-      const leftEyelid = new THREE.Mesh(eyelidGeo, skinMaterial);
-      leftEyelid.position.set(-0.08, 0.048, 0.2);
-      leftEyelid.rotation.x = -Math.PI / 2;
-      headGroup.add(leftEyelid);
-      leftEyelidRef.current = leftEyelid;
-
-      const rightEyelid = new THREE.Mesh(eyelidGeo, skinMaterial);
-      rightEyelid.position.set(0.08, 0.048, 0.2);
-      rightEyelid.rotation.x = -Math.PI / 2;
-      headGroup.add(rightEyelid);
-      rightEyelidRef.current = rightEyelid;
-
-      // Eyebrows
-      const browGeo = new THREE.BoxGeometry(0.09, 0.016, 0.025);
-      const leftBrow = new THREE.Mesh(browGeo, browMaterial);
-      leftBrow.position.set(-0.085, 0.1, 0.215);
-      leftBrow.rotation.z = -0.08;
-      const rightBrow = new THREE.Mesh(browGeo, browMaterial);
-      rightBrow.position.set(0.085, 0.1, 0.215);
-      rightBrow.rotation.z = 0.08;
-      headGroup.add(leftBrow, rightBrow);
-      leftBrowRef.current = leftBrow;
-      rightBrowRef.current = rightBrow;
-
-      // Eyeglasses
-      const glassesGroup = new THREE.Group();
-      glassesGroup.position.set(0, 0.045, 0.235);
-      headGroup.add(glassesGroup);
-
-      const frameGeo = new THREE.TorusGeometry(0.052, 0.006, 10, 24);
-      const leftFrame = new THREE.Mesh(frameGeo, glassesMaterial);
-      leftFrame.position.set(-0.08, 0, 0);
-      const rightFrame = new THREE.Mesh(frameGeo, glassesMaterial);
-      rightFrame.position.set(0.08, 0, 0);
-
-      const lensGeo = new THREE.CircleGeometry(0.048, 20);
-      const leftLens = new THREE.Mesh(lensGeo, lensMaterial);
-      leftLens.position.set(-0.08, 0, 0.002);
-      const rightLens = new THREE.Mesh(lensGeo, lensMaterial);
-      rightLens.position.set(0.08, 0, 0.002);
-
-      const bridgeGeo = new THREE.CylinderGeometry(0.005, 0.005, 0.06, 8);
-      const bridge = new THREE.Mesh(bridgeGeo, glassesMaterial);
-      bridge.rotation.z = Math.PI / 2;
-      bridge.position.set(0, 0.01, 0);
-
-      glassesGroup.add(leftFrame, rightFrame, leftLens, rightLens, bridge);
-
-      // Silver Hair
-      const hairCapGeo = new THREE.SphereGeometry(0.248, 24, 20, 0, Math.PI * 2, 0, Math.PI / 1.6);
-      const hairCapMesh = new THREE.Mesh(hairCapGeo, hairMaterial);
-      hairCapMesh.position.set(0, 0.02, -0.01);
-      headGroup.add(hairCapMesh);
-
-      for (let j = 0; j < 14; j++) {
-        const strandGeo = new THREE.SphereGeometry(0.045, 8, 8);
-        const strandMesh = new THREE.Mesh(strandGeo, hairMaterial);
-        const angle = (j / 14) * Math.PI - Math.PI / 2;
-        strandMesh.position.set(Math.sin(angle) * 0.21, 0.18, Math.cos(angle) * 0.16);
-        strandMesh.scale.set(1.4, 0.5, 0.8);
-        headGroup.add(strandMesh);
-      }
-    }
-
-    // 6. Interactive Drag / Orbit
-    let isPointerDown = false;
-    let prevPointerX = 0;
-    let targetRotationY = 0;
-
-    const onPointerDown = (e: any) => {
-      isPointerDown = true;
-      prevPointerX = e.clientX || (e.touches && e.touches[0]?.clientX) || 0;
-    };
-
-    const onPointerMove = (e: any) => {
-      if (!isPointerDown) return;
-      const currentX = e.clientX || (e.touches && e.touches[0]?.clientX) || 0;
-      const deltaX = currentX - prevPointerX;
-      prevPointerX = currentX;
-      targetRotationY += deltaX * 0.008;
-    };
-
-    const onPointerUp = () => {
-      isPointerDown = false;
-    };
-
-    const domElement = renderer.domElement;
-    domElement.addEventListener('mousedown', onPointerDown);
-    window.addEventListener('mousemove', onPointerMove);
-    window.addEventListener('mouseup', onPointerUp);
-    domElement.addEventListener('touchstart', onPointerDown, { passive: true });
-    window.addEventListener('touchmove', onPointerMove, { passive: true });
-    window.addEventListener('touchend', onPointerUp);
-
-    // 7. Animation Loop (Phase 10: Idle & Talking Animation Blend)
-    let clock = 0;
-    let talkingWeight = 0; // 0 = fully idle, 1 = fully talking (smoothly lerped)
-
-    const animate = () => {
-      animFrameIdRef.current = requestAnimationFrame(animate);
-      clock += 0.025;
-
-      // Smoothly transition between Idle and Talking animation states
-      const targetTalkingWeight = isSpeaking ? 1.0 : 0.0;
-      talkingWeight += (targetTalkingWeight - talkingWeight) * 0.12;
-
-      // Character Base Orientation & Drag-to-rotate
-      characterRoot.rotation.y += (targetRotationY - characterRoot.rotation.y) * 0.08;
-
-      // ── 1. BREATHING & TORSO IDLE / TALKING POSTURE ──────────────────────
-      const idleBreathe = Math.sin(clock * 1.3) * 0.016;
-      const talkingBreathe = Math.sin(clock * 3.0) * 0.012;
-      const breathe = THREE.MathUtils.lerp(idleBreathe, talkingBreathe, talkingWeight);
-
-      if (chestRef.current) {
-        chestRef.current.position.y = 0.95 + breathe;
-        // Lean slightly forward while talking for attentive engagement
-        const targetTorsoTilt = THREE.MathUtils.lerp(breathe * 0.4, 0.035 + breathe * 0.3, talkingWeight);
-        chestRef.current.rotation.x = targetTorsoTilt;
-        // Subtle side sway
-        chestRef.current.rotation.z = Math.sin(clock * 0.7) * 0.012;
-      }
-
-      // ── 2. EMOTION FACIAL & POSTURAL MORPH TARGETS (Phase 11) ───────────
-      const currentEmotion = emotionRef.current || 'neutral';
-      let targetBrowY = 0.1;
-      let targetBrowRotZ = 0.08;
-      let targetCheekScale = 1.0;
-      let targetEmotionHeadTilt = 0;
-      let targetEmotionHeadPitch = 0;
-      let targetArmPoseZ = -0.1;
-      let targetArmPoseX = 0;
-
-      switch (currentEmotion) {
-        case 'happy':
-          targetBrowY = 0.112;
-          targetBrowRotZ = 0.04;
-          targetCheekScale = 1.25;
-          targetEmotionHeadTilt = 0.04;
-          targetEmotionHeadPitch = 0.02;
-          break;
-        case 'excited':
-          targetBrowY = 0.13;
-          targetBrowRotZ = 0.02;
-          targetCheekScale = 1.35;
-          targetEmotionHeadTilt = 0.08;
-          targetEmotionHeadPitch = 0.04;
-          targetArmPoseZ = -0.4;
-          targetArmPoseX = -0.3;
-          break;
-        case 'sad':
-          targetBrowY = 0.088;
-          targetBrowRotZ = -0.06;
-          targetCheekScale = 0.88;
-          targetEmotionHeadTilt = -0.04;
-          targetEmotionHeadPitch = -0.07;
-          break;
-        case 'thinking':
-          targetBrowY = 0.118;
-          targetBrowRotZ = 0.13;
-          targetCheekScale = 1.0;
-          targetEmotionHeadTilt = 0.15;
-          targetEmotionHeadPitch = 0.05;
-          // Hand to chin thoughtful pose
-          targetArmPoseZ = -0.85;
-          targetArmPoseX = -0.55;
-          break;
-        case 'surprised':
-          targetBrowY = 0.142;
-          targetBrowRotZ = 0.0;
-          targetCheekScale = 1.1;
-          targetEmotionHeadTilt = -0.02;
-          targetEmotionHeadPitch = 0.06;
-          break;
-        case 'sleepy':
-          targetBrowY = 0.08;
-          targetBrowRotZ = 0.02;
-          targetCheekScale = 0.95;
-          targetEmotionHeadTilt = 0.05;
-          targetEmotionHeadPitch = -0.09;
-          break;
-        case 'neutral':
-        default:
-          targetBrowY = 0.1;
-          targetBrowRotZ = 0.08;
-          targetCheekScale = 1.0;
-          targetEmotionHeadTilt = 0.0;
-          targetEmotionHeadPitch = 0.0;
-          break;
-      }
-
-      // Smoothly apply Eyebrow emotional modulation
-      if (leftBrowRef.current && rightBrowRef.current) {
-        leftBrowRef.current.position.y += (targetBrowY - leftBrowRef.current.position.y) * 0.1;
-        rightBrowRef.current.position.y += (targetBrowY - rightBrowRef.current.position.y) * 0.1;
-        leftBrowRef.current.rotation.z += (-targetBrowRotZ - leftBrowRef.current.rotation.z) * 0.1;
-        rightBrowRef.current.rotation.z += (targetBrowRotZ - rightBrowRef.current.rotation.z) * 0.1;
-      }
-
-      // Smoothly apply Cheek smile lift modulation
-      if (leftCheekRef.current && rightCheekRef.current) {
-        const currentScale = leftCheekRef.current.scale.x;
-        const newScale = currentScale + (targetCheekScale - currentScale) * 0.1;
-        leftCheekRef.current.scale.set(newScale, newScale * 0.8, newScale * 0.8);
-        rightCheekRef.current.scale.set(newScale, newScale * 0.8, newScale * 0.8);
-      }
-
-      // ── 3. HEAD IDLE MICRO-SWAY & TALKING NODDING ────────────────────────
-      if (headRef.current) {
-        headRef.current.position.y = 1.42 + breathe * 1.4;
-
-        // Idle head sway vs Talking conversational head cadence + Emotion offsets
-        const idleHeadRotY = Math.sin(clock * 0.6) * 0.035;
-        const talkingHeadRotY = Math.sin(clock * 2.2) * 0.06;
-        headRef.current.rotation.y = THREE.MathUtils.lerp(idleHeadRotY, talkingHeadRotY, talkingWeight);
-
-        // Conversational head nod while talking + Emotion pitch
-        const idleHeadRotX = Math.sin(clock * 1.0) * 0.015;
-        const talkingHeadNod = Math.sin(clock * 4.8) * 0.045 + 0.02;
-        const baseRotX = THREE.MathUtils.lerp(idleHeadRotX, talkingHeadNod, talkingWeight);
-        headRef.current.rotation.x = baseRotX + targetEmotionHeadPitch;
-
-        // Head tilt with emotional lean
-        const headTilt = Math.sin(clock * 1.4) * 0.02 + targetEmotionHeadTilt;
-        headRef.current.rotation.z = headTilt;
-      }
-
-      // ── 4. MOUTH & JAW REAL-TIME VISEME LIP-SYNC (Phase 12) ───────────────
-      currentMouthOpenRef.current += (targetMouthOpenRef.current - currentMouthOpenRef.current) * 0.42;
-      currentMouthWidthRef.current += (targetMouthWidthRef.current - currentMouthWidthRef.current) * 0.35;
-      currentMouthPuckerRef.current += (targetMouthPuckerRef.current - currentMouthPuckerRef.current) * 0.35;
-
-      if (jawRef.current) {
-        jawRef.current.position.y = -0.06 - currentMouthOpenRef.current * 0.052;
-        jawRef.current.rotation.x = currentMouthOpenRef.current * 0.28;
-        jawRef.current.scale.set(currentMouthWidthRef.current, 1, currentMouthPuckerRef.current);
-      }
-      if (lowerLipRef.current) {
-        lowerLipRef.current.scale.set(
-          currentMouthWidthRef.current,
-          1 + currentMouthOpenRef.current * 0.3,
-          currentMouthPuckerRef.current
-        );
-      }
-      if (upperLipRef.current) {
-        upperLipRef.current.scale.set(
-          currentMouthWidthRef.current,
-          1,
-          currentMouthPuckerRef.current
-        );
-      }
-      if (mouthBackRef.current) {
-        mouthBackRef.current.scale.set(
-          currentMouthWidthRef.current,
-          1 + currentMouthOpenRef.current * 1.5,
-          1
-        );
-      }
-
-      // ── 5. EYE BLINKING & GAZE TRACKING ──────────────────────────────────
-      blinkTimerRef.current++;
-      // Sleepy blinks more frequently, surprised blinks less
-      const blinkThreshold = currentEmotion === 'sleepy' ? 90 : currentEmotion === 'surprised' ? 300 : 160;
-      if (blinkTimerRef.current > blinkThreshold && !isBlinkingRef.current) {
-        isBlinkingRef.current = true;
-        blinkTimerRef.current = 0;
-      }
-      if (isBlinkingRef.current) {
-        if (leftEyelidRef.current && rightEyelidRef.current) {
-          leftEyelidRef.current.rotation.x = 0;
-          rightEyelidRef.current.rotation.x = 0;
-        }
-        if (blinkTimerRef.current > 7) {
-          isBlinkingRef.current = false;
-          if (leftEyelidRef.current && rightEyelidRef.current) {
-            // If sleepy, eyelids remain half-closed at resting state
-            const restingEyelid = currentEmotion === 'sleepy' ? -Math.PI / 3.2 : -Math.PI / 2;
-            leftEyelidRef.current.rotation.x = restingEyelid;
-            rightEyelidRef.current.rotation.x = restingEyelid;
-          }
-        }
-      }
-
-      // Gaze shift micro-movements
-      const gazeX = Math.sin(clock * 0.4) * 0.005;
-      const gazeY = Math.cos(clock * 0.5) * 0.004 + (currentEmotion === 'thinking' ? 0.012 : 0);
-      if (leftEyeRef.current && rightEyeRef.current) {
-        leftEyeRef.current.position.x = -0.08 + gazeX;
-        leftEyeRef.current.position.y = 0.045 + gazeY;
-        rightEyeRef.current.position.x = 0.08 + gazeX;
-        rightEyeRef.current.position.y = 0.045 + gazeY;
-      }
-
-      // ── 6. ARM GESTURING (WAVING, THINKING & TALKING ACCENTS) ────────────
-      if (waveTimerRef.current > 0 && rightArmRef.current) {
-        waveTimerRef.current--;
-        const waveAngle = Math.sin(clock * 8.0) * 0.25;
-        rightArmRef.current.rotation.z = -1.2 + waveAngle;
-        rightArmRef.current.rotation.x = -0.4;
-      } else if (rightArmRef.current) {
-        // Conversational subtle hand gesture when talking + emotion posture
-        const talkingHandGesture = Math.sin(clock * 3.5) * 0.08;
-        const targetArmZ = THREE.MathUtils.lerp(targetArmPoseZ, -0.22 + talkingHandGesture, talkingWeight);
-        const targetArmX = THREE.MathUtils.lerp(targetArmPoseX, -0.15 + talkingHandGesture * 0.5, talkingWeight);
-        rightArmRef.current.rotation.z += (targetArmZ - rightArmRef.current.rotation.z) * 0.1;
-        rightArmRef.current.rotation.x += (targetArmX - rightArmRef.current.rotation.x) * 0.1;
-      }
-
-      renderer.render(scene, camera);
-    };
-
-    animate();
-
-    return () => {
-      if (animFrameIdRef.current) cancelAnimationFrame(animFrameIdRef.current);
-      domElement.removeEventListener('mousedown', onPointerDown);
-      window.removeEventListener('mousemove', onPointerMove);
-      window.removeEventListener('mouseup', onPointerUp);
-      domElement.removeEventListener('touchstart', onPointerDown);
-      window.removeEventListener('touchmove', onPointerMove);
-      window.removeEventListener('touchend', onPointerUp);
-      renderer.dispose();
-      if (container.contains(renderer.domElement)) {
-        container.removeChild(renderer.domElement);
-      }
-    };
-  }, [height, modelUrl]);
+    }, INTERVAL_MS);
+
+    return () => clearInterval(id);
+  }, []);
+
+  // ── TAP HANDLER ──────────────────────────────────────────────────────────────
+  const handleTap = useCallback(() => {
+    Animated.sequence([
+      Animated.timing(tapBounce, { toValue: 1.06, duration: 80, useNativeDriver: true }),
+      Animated.spring(tapBounce, { toValue: 1.0, friction: 4, tension: 50, useNativeDriver: true }),
+    ]).start();
+    // Quick wink
+    blinkTargetRef.current = 1;
+    setTimeout(() => { blinkTargetRef.current = 0; }, 100);
+    onTapAvatar?.();
+  }, [tapBounce, onTapAvatar]);
+
+  // ── GEOMETRY CALCULATIONS ────────────────────────────────────────────────────
+  const cx       = 160;
+  const mouthCY  = 217;
+  const mouthW   = 8 + mouthOpen * 40;
+  const mouthH   = mouthOpen * 17;
+
+  // Eyelid: top slides down (eyelid closes eye from above)
+  // Eye centers are at cy=150. Eyelid top is ~130, closes to 165.
+  const lidTopY  = 130 + blinkAmt * 35;   // slides down over the eye
+  const lidAlpha = Math.min(1, blinkAmt * 1.6);
+
+  // Emotion eyebrow offsets
+  let lBrowDY = 0, rBrowDY = 0, lBrowRot = 0, rBrowRot = 0;
+  switch (emotion) {
+    case 'happy':    case 'excited':   lBrowDY = -7; rBrowDY = -7; break;
+    case 'thinking': lBrowDY = -10; rBrowDY = 2; lBrowRot = -6; break;
+    case 'sad':      lBrowDY = 5;  rBrowDY = 5; lBrowRot = 7; rBrowRot = -7; break;
+    case 'surprised':lBrowDY = -14; rBrowDY = -14; break;
+    case 'sleepy':   lBrowDY = 6;  rBrowDY = 6; break;
+  }
 
   return (
     <View style={[styles.container, { height }, style]}>
-      {Platform.OS === 'web' ? (
-        <div
-          ref={mountRef}
-          style={{
-            width: '100%',
-            height: '100%',
-            position: 'relative',
-            cursor: 'grab',
-            minHeight: height,
-          }}
-          onClick={onTapAvatar}
-        />
-      ) : (
-        <TouchableOpacity
-          style={styles.nativeAvatarTouch}
-          activeOpacity={0.9}
-          onPress={onTapAvatar}
-          accessibilityLabel="Lolo Pat 3D Avatar"
-        >
-          {/* Animated Glow Aura */}
-          <Animated.View
-            style={[
-              styles.nativeGlowRing,
-              { transform: [{ scale: waveScaleAnim }] },
-            ]}
-          />
+      {/* Aura glow ring */}
+      <Animated.View style={[
+        styles.glowAura,
+        {
+          transform: [{ scale: auraPulse }],
+          borderColor: isSpeaking ? '#C4892E' : '#1F5C3E',
+          backgroundColor: isSpeaking ? 'rgba(196,137,46,0.10)' : 'rgba(31,92,62,0.05)',
+        },
+      ]} />
 
-          {/* Floating Avatar Mascot */}
-          <Animated.View
-            style={[
-              styles.nativeMascotWrap,
-              { transform: [{ translateY: floatAnim }] },
-            ]}
-          >
-            <Image
-              source={require('../../assets/images/lolo_aurea_mascot.jpg')}
-              style={styles.nativeMascotImg}
-              resizeMode="contain"
-            />
-          </Animated.View>
-        </TouchableOpacity>
-      )}
+      <TouchableOpacity activeOpacity={0.94} onPress={handleTap} style={styles.touch} accessibilityLabel="Lolo Pat Avatar">
+        <Animated.View style={[styles.avatarRig, { transform: [{ scale: tapBounce }] }]}>
+          <Svg width={320} height={320} viewBox="0 0 320 320">
+            <Defs>
+              {/* 3D Skin — off-centre radial for sphere depth illusion */}
+              <RadialGradient id="sk" cx="40%" cy="30%" r="60%">
+                <Stop offset="0%"   stopColor="#FFE5D0" />
+                <Stop offset="40%"  stopColor="#F5C0A0" />
+                <Stop offset="75%"  stopColor="#E89878" />
+                <Stop offset="100%" stopColor="#C87050" />
+              </RadialGradient>
+              <RadialGradient id="skSpec" cx="34%" cy="24%" r="22%">
+                <Stop offset="0%"   stopColor="rgba(255,255,245,0.68)" />
+                <Stop offset="100%" stopColor="rgba(255,255,245,0)" />
+              </RadialGradient>
+              <RadialGradient id="skRim" cx="88%" cy="82%" r="38%">
+                <Stop offset="0%"   stopColor="rgba(185,100,65,0.42)" />
+                <Stop offset="100%" stopColor="rgba(185,100,65,0)" />
+              </RadialGradient>
+
+              {/* Ear */}
+              <RadialGradient id="ear" cx="38%" cy="35%" r="55%">
+                <Stop offset="0%"   stopColor="#FFCFB4" />
+                <Stop offset="65%"  stopColor="#E8A882" />
+                <Stop offset="100%" stopColor="#C87850" />
+              </RadialGradient>
+
+              {/* Hair — grey silver */}
+              <RadialGradient id="hair" cx="38%" cy="26%" r="54%">
+                <Stop offset="0%"   stopColor="#FFFFFF" />
+                <Stop offset="55%"  stopColor="#ECECEC" />
+                <Stop offset="100%" stopColor="#C8C8C8" />
+              </RadialGradient>
+              <RadialGradient id="hairSpec" cx="33%" cy="22%" r="20%">
+                <Stop offset="0%"   stopColor="rgba(255,255,255,0.95)" />
+                <Stop offset="100%" stopColor="rgba(255,255,255,0)" />
+              </RadialGradient>
+
+              {/* Nose */}
+              <RadialGradient id="nose" cx="38%" cy="30%" r="52%">
+                <Stop offset="0%"   stopColor="#FFC8A4" />
+                <Stop offset="60%"  stopColor="#E89874" />
+                <Stop offset="100%" stopColor="#C87050" />
+              </RadialGradient>
+              <RadialGradient id="noseSpec" cx="32%" cy="26%" r="22%">
+                <Stop offset="0%"   stopColor="rgba(255,255,255,0.60)" />
+                <Stop offset="100%" stopColor="rgba(255,255,255,0)" />
+              </RadialGradient>
+
+              {/* Sweater — teal/green */}
+              <LinearGradient id="sw" x1="30%" y1="0%" x2="70%" y2="100%">
+                <Stop offset="0%"   stopColor="#5E9E90" />
+                <Stop offset="45%"  stopColor="#4A8878" />
+                <Stop offset="100%" stopColor="#326658" />
+              </LinearGradient>
+              <RadialGradient id="swSpec" cx="42%" cy="18%" r="35%">
+                <Stop offset="0%"   stopColor="rgba(180,240,220,0.30)" />
+                <Stop offset="100%" stopColor="rgba(180,240,220,0)" />
+              </RadialGradient>
+
+              {/* Collar — khaki */}
+              <LinearGradient id="col" x1="0%" y1="0%" x2="0%" y2="100%">
+                <Stop offset="0%"   stopColor="#AFA060" />
+                <Stop offset="100%" stopColor="#887840" />
+              </LinearGradient>
+
+              {/* Eye sclera */}
+              <RadialGradient id="scl" cx="38%" cy="32%" r="52%">
+                <Stop offset="0%"   stopColor="#FFFFFF" />
+                <Stop offset="80%"  stopColor="#EEE8E0" />
+                <Stop offset="100%" stopColor="#D8D0C4" />
+              </RadialGradient>
+
+              {/* Iris — warm blue/grey */}
+              <RadialGradient id="iris" cx="40%" cy="35%" r="55%">
+                <Stop offset="0%"   stopColor="#6890B8" />
+                <Stop offset="55%"  stopColor="#305888" />
+                <Stop offset="100%" stopColor="#182848" />
+              </RadialGradient>
+
+              {/* Cheek blush */}
+              <RadialGradient id="blush" cx="50%" cy="50%" r="50%">
+                <Stop offset="0%"   stopColor="rgba(235,110,90,0.36)" />
+                <Stop offset="100%" stopColor="rgba(235,110,90,0)" />
+              </RadialGradient>
+
+              {/* Oral cavity */}
+              <RadialGradient id="oral" cx="50%" cy="8%" r="72%">
+                <Stop offset="0%"   stopColor="#380A12" />
+                <Stop offset="58%"  stopColor="#240508" />
+                <Stop offset="100%" stopColor="#180204" />
+              </RadialGradient>
+
+              {/* Tongue */}
+              <RadialGradient id="tong" cx="40%" cy="30%" r="55%">
+                <Stop offset="0%"   stopColor="#F08898" />
+                <Stop offset="100%" stopColor="#CC5065" />
+              </RadialGradient>
+
+              {/* Lens glass tint */}
+              <RadialGradient id="lens" cx="35%" cy="30%" r="52%">
+                <Stop offset="0%"   stopColor="rgba(160,200,255,0.18)" />
+                <Stop offset="100%" stopColor="rgba(160,200,255,0.03)" />
+              </RadialGradient>
+            </Defs>
+
+            {/* ═══════════════════════════════════════════════
+                BODY — Teal shirt with khaki collar
+            ═══════════════════════════════════════════════ */}
+            <G id="body">
+              {/* Ground shadow */}
+              <Ellipse cx="160" cy="312" rx="92" ry="10" fill="rgba(0,0,0,0.12)" />
+              {/* Shirt */}
+              <Path d="M 50 320 C 50 248, 88 226, 160 226 C 232 226, 270 248, 270 320 Z" fill="url(#sw)" />
+              <Path d="M 50 320 C 50 248, 88 226, 160 226 C 232 226, 270 248, 270 320 Z" fill="url(#swSpec)" />
+              {/* Collar left */}
+              <Path d="M 122 226 C 110 222, 124 198, 148 204 L 156 226 Z" fill="url(#col)" stroke="#706030" strokeWidth="1.5" />
+              {/* Collar right */}
+              <Path d="M 198 226 C 210 222, 196 198, 172 204 L 164 226 Z" fill="url(#col)" stroke="#706030" strokeWidth="1.5" />
+              {/* Neck */}
+              <Path d="M 138 222 C 138 200, 182 200, 182 222 L 184 230 L 136 230 Z" fill="url(#sk)" />
+              <Path d="M 138 222 C 138 200, 182 200, 182 222 L 184 230 L 136 230 Z" fill="url(#skSpec)" />
+            </G>
+
+            {/* ═══════════════════════════════════════════════
+                HEAD
+            ═══════════════════════════════════════════════ */}
+            <G id="head">
+              {/* Head drop shadow */}
+              <Ellipse cx="162" cy="226" rx="84" ry="11" fill="rgba(0,0,0,0.13)" />
+
+              {/* ── Ears ── */}
+              <Ellipse cx="70"  cy="160" rx="19" ry="26" fill="url(#ear)" />
+              <Path d="M 63 152 Q 59 161 65 170" stroke="#D07858" strokeWidth="2.5" fill="none" strokeLinecap="round" />
+              <Ellipse cx="250" cy="160" rx="19" ry="26" fill="url(#ear)" />
+              <Path d="M 257 152 Q 261 161 255 170" stroke="#D07858" strokeWidth="2.5" fill="none" strokeLinecap="round" />
+
+              {/* ── Face ── */}
+              <Ellipse cx="160" cy="142" rx="92" ry="98" fill="url(#sk)" />
+              <Ellipse cx="160" cy="142" rx="92" ry="98" fill="url(#skSpec)" />
+              <Ellipse cx="160" cy="142" rx="92" ry="98" fill="url(#skRim)" />
+
+              {/* Forehead wrinkles */}
+              <Path d="M 126 88 Q 160 82 194 88" stroke="#D88060" strokeWidth="2.2" fill="none" strokeLinecap="round" />
+              <Path d="M 130 98 Q 160 93 190 98" stroke="#D88060" strokeWidth="1.8" fill="none" strokeLinecap="round" />
+
+              {/* Cheek blush */}
+              <Ellipse cx="96"  cy="176" rx="30" ry="22" fill="url(#blush)" />
+              <Ellipse cx="224" cy="176" rx="30" ry="22" fill="url(#blush)" />
+
+              {/* ── Grey Hair (3D sphere clusters) ── */}
+              {[
+                [130, 60, 38], [160, 52, 42], [190, 60, 36],
+                [106, 76, 30], [214, 76, 30],
+              ].map(([hx, hy, hr], i) => (
+                <G key={i}>
+                  <Circle cx={hx} cy={hy} r={hr} fill="url(#hair)" />
+                  <Circle cx={hx} cy={hy} r={hr} fill="url(#hairSpec)" />
+                </G>
+              ))}
+              {[
+                [80, 110, 24], [76, 136, 20],
+                [240, 110, 24], [244, 136, 20],
+              ].map(([hx, hy, hr], i) => (
+                <G key={`s${i}`}>
+                  <Circle cx={hx} cy={hy} r={hr} fill="url(#hair)" />
+                  <Circle cx={hx} cy={hy} r={hr} fill="url(#hairSpec)" />
+                </G>
+              ))}
+              <G><Circle cx={160} cy={56} r={28} fill="url(#hair)" /><Circle cx={160} cy={56} r={28} fill="url(#hairSpec)" /></G>
+
+              {/* ── Eyes (sclera + iris + pupil + catchlights) ── */}
+              {/* LEFT */}
+              <Circle cx="116" cy="150" r="24" fill="url(#scl)" />
+              <Circle cx="116" cy="150" r="14" fill="url(#iris)" />
+              <Circle cx="116" cy="150" r="8"  fill="#0C0806" />
+              <Circle cx="121" cy="144" r="4"  fill="#FFFFFF" />
+              <Circle cx="111" cy="156" r="1.8" fill="rgba(255,255,255,0.55)" />
+
+              {/* RIGHT */}
+              <Circle cx="204" cy="150" r="24" fill="url(#scl)" />
+              <Circle cx="204" cy="150" r="14" fill="url(#iris)" />
+              <Circle cx="204" cy="150" r="8"  fill="#0C0806" />
+              <Circle cx="209" cy="144" r="4"  fill="#FFFFFF" />
+              <Circle cx="199" cy="156" r="1.8" fill="rgba(255,255,255,0.55)" />
+
+              {/* ── EYELIDS (animated — slide down to close eyes) ── */}
+              {blinkAmt > 0.02 && (
+                <G opacity={lidAlpha}>
+                  {/* Left eyelid arc */}
+                  <Path
+                    d={`M 92 136 Q 116 ${lidTopY} 140 136 Q 116 ${lidTopY + 8} 92 136 Z`}
+                    fill="url(#sk)"
+                    stroke="#C07850"
+                    strokeWidth="1.8"
+                  />
+                  {/* Right eyelid arc */}
+                  <Path
+                    d={`M 180 136 Q 204 ${lidTopY} 228 136 Q 204 ${lidTopY + 8} 180 136 Z`}
+                    fill="url(#sk)"
+                    stroke="#C07850"
+                    strokeWidth="1.8"
+                  />
+                </G>
+              )}
+
+              {/* ── Round Glasses ── */}
+              {/* Glass tint fills */}
+              <Circle cx="116" cy="150" r="30" fill="url(#lens)" />
+              <Circle cx="204" cy="150" r="30" fill="url(#lens)" />
+              {/* Dark frames */}
+              <Circle cx="116" cy="150" r="30" fill="none" stroke="#1A1A1A" strokeWidth="5.5" />
+              <Circle cx="204" cy="150" r="30" fill="none" stroke="#1A1A1A" strokeWidth="5.5" />
+              {/* Metallic rim highlight */}
+              <Path d="M 91 131 Q 103 123 118 127" stroke="#686868" strokeWidth="2" fill="none" strokeLinecap="round" />
+              <Path d="M 179 131 Q 191 123 206 127" stroke="#686868" strokeWidth="2" fill="none" strokeLinecap="round" />
+              {/* Bridge */}
+              <Path d="M 146 148 Q 160 143 174 148" fill="none" stroke="#1A1A1A" strokeWidth="4.5" />
+              {/* Temples */}
+              <Path d="M 86 150 L 70 154"  stroke="#1A1A1A" strokeWidth="4" strokeLinecap="round" />
+              <Path d="M 234 150 L 250 154" stroke="#1A1A1A" strokeWidth="4" strokeLinecap="round" />
+
+              {/* ── Eyebrows (grey, emotion-morphed) ── */}
+              <G transform={`translate(116, ${118 + lBrowDY}) rotate(${lBrowRot}, 0, 0)`}>
+                <Path d="M -30 0 Q 0 -11 30 0 Q 0 -5 -30 0 Z" fill="url(#hair)" stroke="#B8B8B4" strokeWidth="1.5" />
+              </G>
+              <G transform={`translate(204, ${118 + rBrowDY}) rotate(${rBrowRot}, 0, 0)`}>
+                <Path d="M -30 0 Q 0 -11 30 0 Q 0 -5 -30 0 Z" fill="url(#hair)" stroke="#B8B8B4" strokeWidth="1.5" />
+              </G>
+
+              {/* ── Nose (3D bulb + nostrils) ── */}
+              <Circle cx="160" cy="184" r="17" fill="url(#nose)" />
+              <Circle cx="160" cy="184" r="17" fill="url(#noseSpec)" />
+              <Ellipse cx="149" cy="194" rx="7.5" ry="5.5" fill="#A86040" />
+              <Ellipse cx="171" cy="194" rx="7.5" ry="5.5" fill="#A86040" />
+              <Ellipse cx="149" cy="194" rx="4"   ry="3"   fill="#804028" />
+              <Ellipse cx="171" cy="194" rx="4"   ry="3"   fill="#804028" />
+
+              {/* ── Mustache (white puff clusters) ── */}
+              <G id="mustache">
+                <Ellipse cx="138" cy="210" rx="21" ry="13" fill="url(#hair)" />
+                <Ellipse cx="138" cy="210" rx="21" ry="13" fill="url(#hairSpec)" />
+                <Ellipse cx="182" cy="210" rx="21" ry="13" fill="url(#hair)" />
+                <Ellipse cx="182" cy="210" rx="21" ry="13" fill="url(#hairSpec)" />
+                <Ellipse cx="160" cy="208" rx="10" ry="8"  fill="url(#hair)" />
+              </G>
+
+              {/* ── MOUTH — resting smile when silent ── */}
+              {mouthOpen <= 0.06 && (
+                <G id="smile">
+                  <Path d="M 132 220 Q 160 232 188 220" fill="none" stroke="#8C4030" strokeWidth="4" strokeLinecap="round" />
+                  <Path d="M 143 226 Q 160 230 177 226" fill="none" stroke="#FFFFFF" strokeWidth="2" strokeLinecap="round" opacity={0.65} />
+                </G>
+              )}
+
+              {/* ── MOUTH — synchronized to speech ── */}
+              {mouthOpen > 0.06 && (
+                <G id="talkMouth" opacity={Math.min(1.0, mouthOpen * 1.6)}>
+                  {/* Oral cavity depth */}
+                  <Path
+                    d={`
+                      M ${cx - mouthW} ${mouthCY}
+                      Q ${cx} ${mouthCY - 4}
+                      ${cx + mouthW} ${mouthCY}
+                      Q ${cx} ${mouthCY + mouthH + 5}
+                      ${cx - mouthW} ${mouthCY} Z
+                    `}
+                    fill="url(#oral)"
+                  />
+
+                  {/* Upper teeth */}
+                  <Path
+                    d={`M ${cx - mouthW + 5} ${mouthCY} Q ${cx} ${mouthCY - 4} ${cx + mouthW - 5} ${mouthCY} L ${cx + mouthW - 9} ${mouthCY + 5} Q ${cx} ${mouthCY + 1} ${cx - mouthW + 9} ${mouthCY + 5} Z`}
+                    fill="#F4F0E8"
+                    stroke="#E0DCD4"
+                    strokeWidth="0.5"
+                  />
+
+                  {/* Lower teeth (when mouth opens more) */}
+                  {mouthOpen > 0.35 && (
+                    <Path
+                      d={`M ${cx - mouthW + 9} ${mouthCY + mouthH - 2} Q ${cx} ${mouthCY + mouthH + 3} ${cx + mouthW - 9} ${mouthCY + mouthH - 2} L ${cx + mouthW - 13} ${mouthCY + mouthH - 6} Q ${cx} ${mouthCY + mouthH} ${cx - mouthW + 13} ${mouthCY + mouthH - 6} Z`}
+                      fill="#EEECE4"
+                      stroke="#DEDAD2"
+                      strokeWidth="0.5"
+                    />
+                  )}
+
+                  {/* Tongue */}
+                  {mouthOpen > 0.28 && (
+                    <Ellipse
+                      cx={cx}
+                      cy={mouthCY + mouthH * 0.35}
+                      rx={mouthW * 0.52}
+                      ry={mouthH * 0.44}
+                      fill="url(#tong)"
+                    />
+                  )}
+
+                  {/* Lip outlines */}
+                  <Path
+                    d={`M ${cx - mouthW - 4} ${mouthCY} Q ${cx} ${mouthCY - 6} ${cx + mouthW + 4} ${mouthCY}`}
+                    fill="none" stroke="#8C4030" strokeWidth="3.5" strokeLinecap="round"
+                  />
+                  <Path
+                    d={`M ${cx - mouthW} ${mouthCY} Q ${cx} ${mouthCY + mouthH + 9} ${cx + mouthW} ${mouthCY}`}
+                    fill="none" stroke="#8C4030" strokeWidth="3.5" strokeLinecap="round"
+                  />
+
+                  {/* Corner dimples */}
+                  <Circle cx={cx - mouthW} cy={mouthCY} r="4" fill="#B05038" />
+                  <Circle cx={cx + mouthW} cy={mouthCY} r="4" fill="#B05038" />
+                </G>
+              )}
+            </G>
+          </Svg>
+        </Animated.View>
+      </TouchableOpacity>
     </View>
   );
 }
+
+const AVATAR_SIZE = 310;
 
 const styles = StyleSheet.create({
   container: {
@@ -824,31 +552,31 @@ const styles = StyleSheet.create({
     position: 'relative',
     alignItems: 'center',
     justifyContent: 'center',
-    overflow: 'hidden',
+    overflow: 'visible',
   },
-  nativeAvatarTouch: {
-    width: '100%',
-    height: '100%',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  nativeGlowRing: {
+  glowAura: {
     position: 'absolute',
-    width: 220,
-    height: 220,
-    borderRadius: 110,
-    backgroundColor: 'rgba(30, 96, 255, 0.08)',
+    width: 300,
+    height: 300,
+    borderRadius: 150,
     borderWidth: 2,
-    borderColor: 'rgba(30, 96, 255, 0.15)',
   },
-  nativeMascotWrap: {
-    width: 190,
-    height: 230,
+  touch: {
+    width: AVATAR_SIZE,
+    height: AVATAR_SIZE,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  nativeMascotImg: {
-    width: '100%',
-    height: '100%',
+  avatarRig: {
+    width: AVATAR_SIZE,
+    height: AVATAR_SIZE,
+    borderRadius: 36,
+    overflow: 'hidden',
+    backgroundColor: '#F8F4EE',
+    ...Platform.select({
+      ios:     { shadowColor: '#1F5C3E', shadowOpacity: 0.12, shadowRadius: 12 },
+      android: { elevation: 5 },
+      web:     { boxShadow: '0 8px 28px rgba(31,92,62,0.12)' },
+    }),
   },
 });

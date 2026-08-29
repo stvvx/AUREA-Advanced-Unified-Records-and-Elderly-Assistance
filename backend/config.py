@@ -91,8 +91,8 @@ class Config:
     # Default TTS speech rate (1.0 = normal).
     LOLO_TTS_RATE: float = float(os.environ.get("LOLO_TTS_RATE", "0.93"))
 
-    # Default TTS pitch (1.0 = normal).
-    LOLO_TTS_PITCH: float = float(os.environ.get("LOLO_TTS_PITCH", "0.95"))
+    # Default TTS pitch (0.75 = warm, deep male grandfather register).
+    LOLO_TTS_PITCH: float = float(os.environ.get("LOLO_TTS_PITCH", "0.75"))
 
     # ── CORS ─────────────────────────────────────────────────────────────────
 

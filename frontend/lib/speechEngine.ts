@@ -78,13 +78,28 @@ class SpeechEngine {
       // Native Android / iOS init
       try {
         const nativeVoices = await Speech.getAvailableVoicesAsync();
-        const filipinoVoice = nativeVoices.find(
+        // Prioritize Filipino Male voices (e.g. fil-ph-x-fim, Google Filipino Male, David, George)
+        const maleFilipinoVoice = nativeVoices.find(
           (v) =>
-            v.language?.toLowerCase().startsWith('fil') ||
-            v.language?.toLowerCase().startsWith('tl') ||
-            v.name?.toLowerCase().includes('filipino') ||
-            v.name?.toLowerCase().includes('tagalog')
+            (v.language?.toLowerCase().startsWith('fil') ||
+             v.language?.toLowerCase().startsWith('tl')) &&
+            (v.name?.toLowerCase().includes('male') ||
+             v.identifier?.toLowerCase().includes('fim') ||
+             v.identifier?.toLowerCase().includes('male'))
         );
+        const filipinoVoice =
+          maleFilipinoVoice ||
+          nativeVoices.find(
+            (v) =>
+              v.name?.toLowerCase().includes('male') ||
+              v.name?.toLowerCase().includes('david') ||
+              v.name?.toLowerCase().includes('george')
+          ) ||
+          nativeVoices.find(
+            (v) =>
+              v.language?.toLowerCase().startsWith('fil') ||
+              v.language?.toLowerCase().startsWith('tl')
+          );
 
         if (filipinoVoice) {
           this.selectedNativeVoice = filipinoVoice.identifier;
@@ -97,28 +112,26 @@ class SpeechEngine {
     if (!this.synth) return;
     this.webVoices = this.synth.getVoices() || [];
 
-    // Prioritize Filipino / Tagalog voice, then en-PH, then natural male voices
+    // Prioritize Male Filipino / Tagalog voice, then Male en-PH, then natural deep male voices
     this.selectedWebVoice =
+      this.webVoices.find(
+        (v) =>
+          (v.lang?.startsWith('fil') || v.lang?.startsWith('tl')) &&
+          (v.name?.toLowerCase().includes('male') || v.name?.toLowerCase().includes('fim'))
+      ) ||
+      this.webVoices.find(
+        (v) =>
+          v.name?.toLowerCase().includes('david') ||
+          v.name?.toLowerCase().includes('george') ||
+          v.name?.toLowerCase().includes('male') ||
+          v.name?.toLowerCase().includes('guy') ||
+          v.name?.toLowerCase().includes('grandpa')
+      ) ||
       this.webVoices.find(
         (v) =>
           v.lang?.startsWith('fil') ||
           v.lang?.startsWith('tl') ||
-          v.name?.toLowerCase().includes('filipino') ||
-          v.name?.toLowerCase().includes('tagalog')
-      ) ||
-      this.webVoices.find(
-        (v) =>
-          v.lang === 'en-PH' ||
-          v.name?.toLowerCase().includes('philippine') ||
           v.name?.toLowerCase().includes('filipino')
-      ) ||
-      this.webVoices.find(
-        (v) =>
-          v.name?.toLowerCase().includes('natural') ||
-          v.name?.toLowerCase().includes('grandpa') ||
-          v.name?.toLowerCase().includes('male') ||
-          v.name?.toLowerCase().includes('george') ||
-          v.name?.toLowerCase().includes('david')
       ) ||
       this.webVoices[0] ||
       null;
@@ -146,14 +159,14 @@ class SpeechEngine {
     let frame = 0;
     this.visemeTimer = setInterval(() => {
       frame++;
-      // Natural cadence waveform simulating Filipino syllables (ma-gan-dang a-raw)
-      const baseAmp = (Math.sin(frame * 0.45) + 1) / 2;
-      const noise = Math.sin(frame * 0.9) * 0.25;
-      const amp = Math.max(0.1, Math.min(1.0, baseAmp * 0.75 + noise + 0.15));
-      const phonemes = ['A', 'O', 'E', 'M', 'U'];
-      const phoneme = phonemes[frame % phonemes.length];
+      // Fluid, continuous sinusoidal breathing waveform for natural talking mouth modulation
+      const wave = (Math.sin(frame * 0.28) + 1) / 2;
+      const microMod = Math.sin(frame * 0.56) * 0.2;
+      const amp = Math.max(0.08, Math.min(0.92, wave * 0.7 + microMod + 0.15));
+      const phonemes = ['A', 'E', 'O', 'A', 'U', 'M'];
+      const phoneme = phonemes[Math.floor(frame / 2) % phonemes.length];
       this.emitViseme(amp, phoneme);
-    }, 60);
+    }, 50);
   }
 
   private stopVisemeAnimation() {
@@ -185,8 +198,8 @@ class SpeechEngine {
     this.stop();
     this.isSpeakingActive = true;
 
-    const rate = options?.rate ?? 0.92; // Warm, senior-friendly articulate pace
-    const pitch = options?.pitch ?? 0.95; // Warm grandfather pitch
+    const rate = options?.rate ?? 0.90; // Warm, dignified elderly pace
+    const pitch = options?.pitch ?? 0.75; // Deep, warm male grandfather voice
     const lang = options?.language ?? 'fil-PH';
 
     // ── Native Mobile TTS (Android & iOS) ──────────────────────────────────

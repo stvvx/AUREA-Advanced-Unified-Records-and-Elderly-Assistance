@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: transparent; }
+  canvas { display: block; width: 100% !important; height: 100% !important; }
+</style>
+</head>
+<body>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.165.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// ── Scene Setup ───────────────────────────────────────────────────────────────
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.2;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = null;
+
+const camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.01, 100);
+camera.position.set(0, 0.08, 1.6);
+
+// ── Lighting ──────────────────────────────────────────────────────────────────
+const ambient = new THREE.AmbientLight(0xFFF8F0, 0.65);
+scene.add(ambient);
+
+const keyLight = new THREE.DirectionalLight(0xFFFFFF, 1.4);
+keyLight.position.set(-2, 3, 3);
+keyLight.castShadow = true;
+scene.add(keyLight);
+
+const fillLight = new THREE.DirectionalLight(0xE8F0FF, 0.55);
+fillLight.position.set(2.5, 1, 2);
+scene.add(fillLight);
+
+const rimLight = new THREE.SpotLight(0xF0E8FF, 0.6);
+rimLight.position.set(0, 2, -2.5);
+scene.add(rimLight);
+
+const speakLight = new THREE.PointLight(0xC4892E, 0.0, 4);
+speakLight.position.set(0, 0.3, 1.5);
+scene.add(speakLight);
+
+// ── Avatar State ─────────────────────────────────────────────────────────────
+let mixer = null;
+let model = null;
+let morphTargets = {};    // { shapeName: meshRef }
+let jawBone = null;
+
+let isSpeaking = false;
+let mouthTarget = 0;
+let mouthCurrent = 0;
+let blinkTarget = 0;
+let blinkCurrent = 0;
+let clock = new THREE.Clock();
+let animClock = 0;
+
+// ── Load GLB from React Native ────────────────────────────────────────────────
+// The React Native side posts the asset URI via postMessage
+function loadModel(uri) {
+  const loader = new GLTFLoader();
+  loader.load(
+    uri,
+    (gltf) => {
+      model = gltf.scene;
+
+      // Center and scale model to fill frame nicely
+      const box = new THREE.Box3().setFromObject(model);
+      const size = box.getSize(new THREE.Vector3());
+      const center = box.getCenter(new THREE.Vector3());
+      const maxDim = Math.max(size.x, size.y, size.z);
+      const scale = 1.2 / maxDim;
+      model.scale.setScalar(scale);
+      model.position.sub(center.multiplyScalar(scale));
+      model.position.y -= 0.05;
+
+      scene.add(model);
+
+      // Collect all morph targets (shape keys)
+      model.traverse((node) => {
+        if (node.isMesh && node.morphTargetInfluences) {
+          const dict = node.morphTargetDictionary || {};
+          Object.entries(dict).forEach(([name, idx]) => {
+            morphTargets[name.toUpperCase()] = { mesh: node, idx };
+          });
+        }
+        // Find jaw bone
+        if (node.isBone && node.name.toLowerCase().includes('jaw')) {
+          jawBone = node;
+        }
+      });
+
+      // Animations
+      if (gltf.animations.length > 0) {
+        mixer = new THREE.AnimationMixer(model);
+        const idle = gltf.animations.find(a => a.name.toLowerCase().includes('idle'));
+        if (idle) mixer.clipAction(idle).play();
+      }
+
+      // Tell React Native we're ready
+      postMessageToRN({ type: 'MODEL_LOADED' });
+    },
+    (progress) => {
+      const pct = Math.round((progress.loaded / (progress.total || 1)) * 100);
+      postMessageToRN({ type: 'LOADING', progress: pct });
+    },
+    (error) => {
+      console.error('GLB load error:', error);
+      postMessageToRN({ type: 'ERROR', message: error.message });
+    }
+  );
+}
+
+// ── Set morph target value smoothly ──────────────────────────────────────────
+function setMorph(name, value) {
+  const target = morphTargets[name];
+  if (target) {
+    target.mesh.morphTargetInfluences[target.idx] = value;
+  }
+}
+
+// ── Blink scheduler ───────────────────────────────────────────────────────────
+function scheduleBlink() {
+  const delay = Math.random() * 2600 + 2600;
+  setTimeout(() => {
+    blinkTarget = 1.0;
+    setTimeout(() => {
+      blinkTarget = 0.0;
+      if (Math.random() < 0.22) {
+        setTimeout(() => {
+          blinkTarget = 1.0;
+          setTimeout(() => { blinkTarget = 0.0; scheduleBlink(); }, 70);
+        }, 100);
+      } else {
+        scheduleBlink();
+      }
+    }, 90);
+  }, delay);
+}
+scheduleBlink();
+
+// ── Message from React Native ─────────────────────────────────────────────────
+window.addEventListener('message', (e) => {
+  try {
+    const msg = JSON.parse(e.data);
+    switch (msg.type) {
+      case 'LOAD_MODEL':
+        loadModel(msg.uri);
+        break;
+      case 'SET_SPEAKING':
+        isSpeaking = msg.value;
+        speakLight.intensity = msg.value ? 0.55 : 0.0;
+        break;
+      case 'VISEME':
+        // amplitude 0–1, phoneme string
+        const amp = msg.amplitude || 0;
+        const p = (msg.phoneme || 'A').toUpperCase();
+        if (p === 'M' || p === 'B' || p === 'P') {
+          mouthTarget = 0.04;
+        } else {
+          mouthTarget = Math.max(0.12, Math.min(1.0, amp * 1.35));
+        }
+        break;
+      case 'EMOTION':
+        applyEmotion(msg.emotion);
+        break;
+      case 'STOP_SPEAKING':
+        isSpeaking = false;
+        mouthTarget = 0;
+        speakLight.intensity = 0.0;
+        break;
+    }
+  } catch(err) {}
+});
+
+// ── Emotion morph handler ─────────────────────────────────────────────────────
+function applyEmotion(emotion) {
+  // Reset all brow shapes first
+  ['BROW_HAPPY','BROW_SAD','BROW_SURPRISE','BROW_THINK'].forEach(k => setMorph(k, 0));
+  switch ((emotion || '').toLowerCase()) {
+    case 'happy':    case 'excited':   setMorph('BROW_HAPPY',    1); break;
+    case 'sad':                        setMorph('BROW_SAD',       1); break;
+    case 'surprised':                  setMorph('BROW_SURPRISE',  1); break;
+    case 'thinking':                   setMorph('BROW_THINK',     1); break;
+  }
+}
+
+// ── Post to React Native ──────────────────────────────────────────────────────
+function postMessageToRN(obj) {
+  try {
+    if (window.ReactNativeWebView) {
+      window.ReactNativeWebView.postMessage(JSON.stringify(obj));
+    }
+  } catch(e) {}
+}
+
+// ── Render Loop ───────────────────────────────────────────────────────────────
+function animate() {
+  requestAnimationFrame(animate);
+  const delta = clock.getDelta();
+  animClock += delta;
+
+  if (model) {
+    // Smooth blink
+    blinkCurrent += (blinkTarget - blinkCurrent) * 0.42;
+    setMorph('BLINK_L', blinkCurrent);
+    setMorph('BLINK_R', blinkCurrent);
+
+    // Smooth mouth
+    let desiredMouth = mouthTarget;
+    if (isSpeaking) {
+      const wave = (Math.sin(animClock * 9.5) + 1) / 2;
+      desiredMouth = Math.max(0.12, desiredMouth * 0.70 + wave * 0.45);
+    }
+    mouthCurrent += (desiredMouth - mouthCurrent) * 0.30;
+
+    // Drive MOUTH_OPEN shape key
+    setMorph('MOUTH_OPEN', mouthCurrent);
+    setMorph('MOUTH_A',    mouthCurrent * 0.8);
+
+    // Drive jaw bone if present (as fallback)
+    if (jawBone) {
+      jawBone.rotation.x = -mouthCurrent * 0.22;
+    }
+
+    // Subtle idle breathing on whole model
+    model.position.y = Math.sin(animClock * 0.85) * 0.004 - 0.05;
+  }
+
+  if (mixer) mixer.update(delta);
+  renderer.render(scene, camera);
+}
+
+animate();
+
+// ── Resize handler ────────────────────────────────────────────────────────────
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+</script>
+</body>
+</html>
