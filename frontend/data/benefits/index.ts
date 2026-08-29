@@ -6,8 +6,16 @@ import { movieCenterBenefit } from './movie-center';
 import { checkUpBenefit } from './check-up';
 import { emergencyBenefit } from './emergency';
 
-export const BENEFITS: BenefitDefinition[] = [
+export const ALL_BENEFITS: BenefitDefinition[] = [
   medicineBenefit,
+  financialAidBenefit,
+  physicalIdBenefit,
+  movieCenterBenefit,
+  checkUpBenefit,
+  emergencyBenefit,
+];
+
+export const BENEFITS: BenefitDefinition[] = [
   financialAidBenefit,
   physicalIdBenefit,
   movieCenterBenefit,
@@ -22,7 +30,7 @@ export function getBenefitById(benefitId?: string): BenefitDefinition | undefine
     return undefined;
   }
 
-  return BENEFITS.find((benefit) => benefit.id === benefitId);
+  return ALL_BENEFITS.find((benefit) => benefit.id === benefitId);
 }
 
 export type { BenefitDefinition } from './types';

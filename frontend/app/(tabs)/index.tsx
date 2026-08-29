@@ -14,7 +14,7 @@ import {
   Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../../context/AuthContext';
@@ -137,7 +137,7 @@ const HOW_TO_USE_STEPS = [
   {
     icon: 'search',
     title: '2. Hanapin ang Kailangan',
-    text: 'Gamitin ang search bar o piliin sa "Available Benefits" ang serbisyong gusto mo, tulad ng gamot o Physical ID.',
+    text: 'Gamitin ang search bar o piliin sa "Available Benefits" ang serbisyong gusto mo, tulad ng Financial Aid o Physical ID.',
   },
   {
     icon: 'create',
@@ -468,6 +468,27 @@ export default function DashboardScreen() {
                   <Text style={s.sectionTitle}>Available Benefits</Text>
                 </View>
                 <View style={s.serviceGrid}>
+                  {/* Featured AI Companion Tile */}
+                  <View style={{ width: tileWidthPct }}>
+                    <TouchableOpacity
+                      style={[s.serviceItem, webPointer]}
+                      onPress={() => router.push('/assistant')}
+                      activeOpacity={0.8}
+                      accessibilityRole="button"
+                      accessibilityLabel="Lolo Pat AI Assistant"
+                    >
+                      <View
+                        style={[
+                          s.serviceCircle,
+                          { width: tileSize, height: tileSize, borderRadius: tileSize / 2, backgroundColor: '#EEF5FF' },
+                        ]}
+                      >
+                        <MaterialCommunityIcons name="creation" size={tileIcon} color="#1E60FF" />
+                      </View>
+                      <Text style={[s.serviceLabel, { color: '#1E60FF', fontWeight: '700' }]} numberOfLines={1}>Lolo Pat AI</Text>
+                    </TouchableOpacity>
+                  </View>
+
                   {BENEFIT_ITEMS.map((item) => (
                     <View key={item.label} style={{ width: tileWidthPct }}>
                       <TouchableOpacity
@@ -948,4 +969,142 @@ const s = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
 
+  /* ── eGov AI Spotlight Banner on User Dashboard ── */
+  aiSpotlightCard: {
+    marginBottom: sp(5),
+    borderRadius: 22,
+    overflow: 'hidden',
+    borderWidth: 1.2,
+    borderColor: '#D0E2FF',
+    ...shadow('#1E60FF', 0.12, 12, 4),
+  },
+  aiSpotlightGrad: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: sp(4.5),
+    paddingVertical: sp(4),
+    justifyContent: 'space-between',
+  },
+  aiSpotlightLeft: {
+    flex: 1,
+    paddingRight: sp(2),
+  },
+  aiSpotlightBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 6,
+  },
+  aiSpotlightLogo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
+  aiSpotlightLogoText: {
+    fontFamily: 'FraunTitle',
+    fontSize: 18,
+    fontWeight: '900',
+    color: '#0A2540',
+  },
+  aiPill: {
+    backgroundColor: '#1E60FF',
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: 6,
+  },
+  aiPillText: {
+    fontFamily: 'InterBody',
+    fontSize: 11,
+    fontWeight: '900',
+    color: '#FFFFFF',
+  },
+  aiTagPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#E8F1FF',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 8,
+  },
+  aiTagPillText: {
+    fontFamily: 'InterBody',
+    fontSize: 9.5,
+    fontWeight: '800',
+    color: '#1E60FF',
+    letterSpacing: 0.4,
+  },
+  aiSpotlightTitle: {
+    fontFamily: 'InterBody',
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#0A2540',
+    marginBottom: 4,
+  },
+  aiSpotlightDesc: {
+    fontFamily: 'InterBody',
+    fontSize: 12.5,
+    color: '#556987',
+    lineHeight: 18,
+    marginBottom: 10,
+  },
+  aiPillsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 10,
+  },
+  miniPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#D8E7FF',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  miniPillText: {
+    fontFamily: 'InterBody',
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#1E60FF',
+  },
+  aiActionLinkRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  aiActionLinkText: {
+    fontFamily: 'InterBody',
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#1E60FF',
+  },
+  aiSpotlightRight: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 95,
+  },
+  miniSpeechBubble: {
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#D8E7FF',
+    marginBottom: 2,
+    ...shadow('#000', 0.05, 4, 1),
+  },
+  miniSpeechBubbleText: {
+    fontFamily: 'InterBody',
+    fontSize: 9.5,
+    fontWeight: '800',
+    color: '#1E60FF',
+  },
+  aiMascotThumb: {
+    width: 90,
+    height: 105,
+  },
 });

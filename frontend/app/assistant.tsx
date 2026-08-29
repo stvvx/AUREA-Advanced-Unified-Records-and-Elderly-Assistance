@@ -92,7 +92,7 @@ export default function AssistantScreen() {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [currentSpeech, setCurrentSpeech] = useState(
-    'Magandang araw po! Ako si Lolo Aurea. Pindutin lamang po ang alinmang paksa sa ibaba upang aking ipaliwanag nang pasalita.'
+    'Magandang araw po! Ako si Lolo Pat. Pindutin lamang po ang alinmang paksa sa ibaba upang aking ipaliwanag nang pasalita.'
   );
   const [activeTopicIndex, setActiveTopicIndex] = useState<number | null>(null);
 
@@ -164,7 +164,7 @@ export default function AssistantScreen() {
 
     const greetingText = `Magandang araw po${
       fullName ? `, ${fullName}` : ''
-    }! Ako po si Lolo Aurea, ang inyong 3D AI companion sa AUREA. Nandito po ako upang ipaliwanag nang pasalita ang inyong mga serbisyo sa Pateros. Pindutin lamang po ang alinmang paksa sa ibaba.`;
+    }! Ako po si Lolo Pat, ang inyong 3D AI companion sa AUREA. Nandito po ako upang ipaliwanag nang pasalita ang inyong mga serbisyo sa Pateros. Pindutin lamang po ang alinmang paksa sa ibaba.`;
 
     setCurrentSpeech(greetingText);
 
@@ -219,7 +219,7 @@ export default function AssistantScreen() {
     setIsSpeaking(false);
     setActiveTopicIndex(index);
     setIsLoading(true);
-    setCurrentSpeech('Nag-iisip si Lolo Aurea...');
+    setCurrentSpeech('Nag-iisip si Lolo Pat...');
 
     try {
       const res = await fetch(`${API_BASE_URL}/api/assistant/chat`, {
@@ -309,7 +309,7 @@ export default function AssistantScreen() {
 
         <View style={styles.headerTitles}>
           <View style={styles.headerTitleRow}>
-            <Text style={styles.headerTitle}>Lolo Aurea</Text>
+            <Text style={styles.headerTitle}>Lolo Pat</Text>
             <View style={styles.barongTag}>
               <Text style={styles.barongTagText}>🇵🇭 3D BARONG COMPANION</Text>
             </View>
@@ -349,7 +349,7 @@ export default function AssistantScreen() {
               {isSpeaking ? (
                 <>
                   <View style={[styles.statusDot, { backgroundColor: '#C4892E' }]} />
-                  <Text style={styles.statusText}>Nagsasalita si Lolo Aurea...</Text>
+                  <Text style={styles.statusText}>Nagsasalita si Lolo Pat...</Text>
                 </>
               ) : (
                 <>
@@ -380,7 +380,7 @@ export default function AssistantScreen() {
             <View style={styles.speechHeader}>
               <View style={styles.speechHeaderLeft}>
                 <Ionicons name="volume-high" size={18} color="#C4892E" />
-                <Text style={styles.speechHeaderTitle}>Sinasabi ni Lolo Aurea:</Text>
+                <Text style={styles.speechHeaderTitle}>Sinasabi ni Lolo Pat:</Text>
               </View>
 
               <View style={styles.speechActionBtns}>

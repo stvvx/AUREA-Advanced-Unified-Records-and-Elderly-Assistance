@@ -6,6 +6,7 @@ import {
   StyleSheet,
   Platform,
   Animated,
+  Image,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, usePathname } from 'expo-router';
@@ -31,7 +32,6 @@ export default function AssistantFloatingWidget() {
     router.push('/assistant' as any);
   };
 
-
   return (
     <View style={styles.anchor} pointerEvents="box-none">
       <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
@@ -39,22 +39,30 @@ export default function AssistantFloatingWidget() {
           style={styles.floatingButton}
           onPress={handleOpen}
           activeOpacity={0.85}
-          accessibilityLabel="Kausapin si Lolo Aurea (AI Assistant)"
+          accessibilityLabel="Kausapin si Lolo Pat (AUREA Senior AI Assistant)"
         >
-          {/* Avatar Icon with Barong / Senior indicator */}
+          {/* Avatar Icon with Lolo Pat / eGov AI indicator */}
           <View style={styles.iconContainer}>
-            <Text style={styles.avatarEmoji}>👴🏼</Text>
+            <Image
+              source={require('../../assets/images/lolo_aurea_mascot.jpg')}
+              style={styles.avatarImg}
+              resizeMode="cover"
+            />
             <View style={styles.onlineDot} />
           </View>
 
           <View style={styles.textContainer}>
-            <Text style={styles.badgeTitle}>Lolo Aurea</Text>
-            <Text style={styles.badgeSubtitle}>3D Voice Assistant</Text>
+            <View style={styles.titleRow}>
+              <Text style={styles.badgeTitle}>Lolo Pat</Text>
+              <View style={styles.aiPill}>
+                <Text style={styles.aiPillText}>AI</Text>
+              </View>
+            </View>
+            <Text style={styles.badgeSubtitle}>Senior AI Assistant</Text>
           </View>
 
-
           <View style={styles.micCircle}>
-            <Ionicons name="mic" size={16} color="#FFFFFF" />
+            <Ionicons name="sparkles" size={15} color="#FFFFFF" />
           </View>
         </TouchableOpacity>
       </Animated.View>
@@ -72,15 +80,15 @@ const styles = StyleSheet.create({
   floatingButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#1F5C3E', // AUREA signature dark green
+    backgroundColor: '#0A2540',
     paddingVertical: 8,
     paddingHorizontal: 14,
     borderRadius: 32,
     borderWidth: 1.5,
-    borderColor: '#C4892E', // Gold accent
+    borderColor: '#1E60FF',
     ...Platform.select({
       ios: {
-        shadowColor: '#0F3323',
+        shadowColor: '#0A2540',
         shadowOpacity: 0.35,
         shadowRadius: 10,
         shadowOffset: { width: 0, height: 4 },
@@ -89,7 +97,7 @@ const styles = StyleSheet.create({
         elevation: 8,
       },
       web: {
-        boxShadow: '0 8px 24px rgba(31, 92, 62, 0.35)',
+        boxShadow: '0 8px 24px rgba(10, 37, 64, 0.35)',
         cursor: 'pointer',
       },
     }),
@@ -98,16 +106,18 @@ const styles = StyleSheet.create({
     width: 38,
     height: 38,
     borderRadius: 19,
-    backgroundColor: '#FDF7EB',
+    backgroundColor: '#E8F1FF',
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 10,
-    borderWidth: 1,
-    borderColor: '#E8D5B5',
+    borderWidth: 1.5,
+    borderColor: '#1E60FF',
     position: 'relative',
+    overflow: 'hidden',
   },
-  avatarEmoji: {
-    fontSize: 22,
+  avatarImg: {
+    width: '100%',
+    height: '100%',
   },
   onlineDot: {
     position: 'absolute',
@@ -118,10 +128,15 @@ const styles = StyleSheet.create({
     borderRadius: 5,
     backgroundColor: '#22C55E',
     borderWidth: 1.5,
-    borderColor: '#1F5C3E',
+    borderColor: '#0A2540',
   },
   textContainer: {
     marginRight: 12,
+  },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
   },
   badgeTitle: {
     fontSize: 13,
@@ -129,16 +144,27 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     letterSpacing: 0.3,
   },
+  aiPill: {
+    backgroundColor: '#1E60FF',
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 6,
+  },
+  aiPillText: {
+    fontSize: 9,
+    fontWeight: '900',
+    color: '#FFFFFF',
+  },
   badgeSubtitle: {
     fontSize: 10,
     fontWeight: '600',
-    color: '#FBF0DA',
+    color: '#A0C4FF',
   },
   micCircle: {
     width: 28,
     height: 28,
     borderRadius: 14,
-    backgroundColor: '#C4892E',
+    backgroundColor: '#1E60FF',
     alignItems: 'center',
     justifyContent: 'center',
   },

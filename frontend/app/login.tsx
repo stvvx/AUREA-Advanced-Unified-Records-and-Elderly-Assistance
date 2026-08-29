@@ -115,7 +115,7 @@ export default function LoginScreen() {
           {/* Logo */}
           <View style={styles.logoWrap}>
             <Image
-              source={require('../assets/images/pateros-logo.png')}
+              source={require('../assets/images/image copy 2.png')}
               style={styles.logo}
               resizeMode="contain"
               accessibilityLabel="Gobyernong Pateros logo"

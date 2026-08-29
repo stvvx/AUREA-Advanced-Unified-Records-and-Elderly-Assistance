@@ -574,7 +574,7 @@ export default function BarongElder3D({
         />
       ) : (
         <View style={styles.nativeFallback}>
-          <Text style={styles.nativeBadge}>🇵🇭 Lolo Aurea (3D Barong Assistant)</Text>
+          <Text style={styles.nativeBadge}>🇵🇭 Lolo Pat (3D Barong Assistant)</Text>
         </View>
       )}
     </View>

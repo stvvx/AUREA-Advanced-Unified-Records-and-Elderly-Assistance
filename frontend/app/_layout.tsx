@@ -12,6 +12,7 @@ import {
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { AuthProvider } from '../context/AuthContext';
+import AssistantFloatingWidget from '../components/assistant/AssistantFloatingWidget';
 
 export const unstable_settings = {
   anchor: '(tabs)',
@@ -37,6 +38,7 @@ export default function RootLayout() {
       <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
         <Stack>
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+          <Stack.Screen name="assistant" options={{ headerShown: false }} />
           <Stack.Screen name="login" options={{ headerShown: false }} />
           <Stack.Screen name="face-verification" options={{ headerShown: false }} />
           <Stack.Screen name="register" options={{ headerShown: false }} />

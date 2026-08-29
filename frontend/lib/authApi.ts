@@ -98,6 +98,8 @@ export type UserProfile = {
   email: string;
   avatarUrl?: string | null;
   profilePhoto?: string | null;
+  signature?: string | null;
+  digitalSignature?: string | null;
   createdAt?: string;
 };
 
@@ -165,6 +167,45 @@ export async function uploadAvatar(
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data?.message || 'Failed to upload avatar.');
   return data as { avatarUrl: string };
+}
+
+export async function saveSignature(
+  userId: number,
+  signatureData: string
+): Promise<{ success: boolean; signature: string; message: string; user?: UserProfile }> {
+  let response: Response;
+
+  try {
+    response = await fetch(`${API_BASE_URL}/api/user/${userId}/signature`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ signature: signatureData, digitalSignature: signatureData }),
+    });
+  } catch {
+    // Fallback directly to PUT /api/user/:id
+    return updateUser(userId, { signature: signatureData, digitalSignature: signatureData }).then(
+      (res) => ({
+        success: true,
+        signature: signatureData,
+        message: res.message || 'Signature saved successfully',
+        user: res.user,
+      })
+    );
+  }
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    // Attempt fallback update
+    return updateUser(userId, { signature: signatureData, digitalSignature: signatureData }).then(
+      (res) => ({
+        success: true,
+        signature: signatureData,
+        message: res.message || 'Signature saved successfully',
+        user: res.user,
+      })
+    );
+  }
+  return data as { success: boolean; signature: string; message: string; user?: UserProfile };
 }
 
 export type MultiAngleImages = {

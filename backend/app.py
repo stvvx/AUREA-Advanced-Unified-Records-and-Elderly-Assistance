@@ -10,6 +10,8 @@ from flask import Flask, jsonify, request
 from werkzeug.security import check_password_hash, generate_password_hash
 
 import face_verifier
+import assistant_service
+from routes import register_lolo_routes
 
 
 # ---------------------------------------------------------------------------
@@ -212,11 +214,12 @@ def ensure_users_table() -> None:
 def add_cors(response):
     response.headers["Access-Control-Allow-Origin"] = "*"
     response.headers["Access-Control-Allow-Headers"] = (
-        "Content-Type, Authorization"
+        "Content-Type, Authorization, X-Requested-With"
     )
     response.headers["Access-Control-Allow-Methods"] = (
-        "GET, POST, PUT, PATCH, OPTIONS"
+        "GET, POST, PUT, PATCH, DELETE, OPTIONS"
     )
+    response.headers["Access-Control-Max-Age"] = "86400"
 
     return response
 
@@ -231,10 +234,20 @@ def health():
     try:
         ensure_users_table()
 
+        gemini_configured = bool(
+            os.environ.get("GEMINI_API_KEY", "").strip()
+            and os.environ.get("GEMINI_API_KEY", "").strip() != "your_gemini_api_key_here"
+        )
+
         return jsonify({
             "status": "ok",
             "supabaseConfigured": True,
             "tableReady": True,
+            "lolo": {
+                "status": "ok",
+                "geminiConfigured": gemini_configured,
+                "mode": "gemini" if gemini_configured else "knowledge_engine",
+            },
         })
 
     except RuntimeError as exc:
@@ -729,6 +742,13 @@ SELECT_FIELDS = "id,first_name,middle_name,last_name,dob,gender,civil_status,con
 
 
 def _serialize_user(u: dict) -> dict:
+    sig = (
+        u.get("digital_signature")
+        or u.get("signature")
+        or u.get("signature_url")
+        or u.get("digital_signature_url")
+        or ""
+    )
     return {
         "id": u.get("id"),
         "firstName": u.get("first_name") or "",
@@ -741,6 +761,8 @@ def _serialize_user(u: dict) -> dict:
         "address": u.get("address") or "",
         "email": u.get("email") or "",
         "avatarUrl": u.get("avatar_url") or "",
+        "signature": sig,
+        "digitalSignature": sig,
         "role": u.get("role") or "user",
         "createdAt": u.get("created_at") or "",
     }
@@ -760,7 +782,7 @@ def user_profile(user_id):
     if request.method == "GET":
         result = supabase_rest(
             "GET", SUPABASE_USERS_TABLE,
-            params={"select": SELECT_FIELDS, "id": f"eq.{user_id}", "limit": "1"},
+            params={"select": "*", "id": f"eq.{user_id}", "limit": "1"},
         )
         if not result:
             return jsonify({"message": "User not found."}), 404
@@ -786,6 +808,11 @@ def user_profile(user_id):
         if key in data:
             payload[col] = str(data[key]).strip() or None
 
+    # Handle digital signature fields
+    sig_val = data.get("digitalSignature") or data.get("signature")
+    if sig_val is not None:
+        payload["digital_signature"] = str(sig_val).strip()
+
     if "email" in payload and payload["email"]:
         payload["email"] = payload["email"].lower()
 
@@ -799,6 +826,21 @@ def user_profile(user_id):
         url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_USERS_TABLE}"
         headers = _rest_headers(prefer_return=True)
         resp = requests.patch(url, headers=headers, params={"id": f"eq.{user_id}"}, json=payload, timeout=15)
+        
+        # If patching digital_signature failed due to column name mismatch, try 'signature' column
+        if not resp.ok and "digital_signature" in payload:
+            alt_payload = dict(payload)
+            sig_content = alt_payload.pop("digital_signature")
+            alt_payload["signature"] = sig_content
+            resp = requests.patch(url, headers=headers, params={"id": f"eq.{user_id}"}, json=alt_payload, timeout=15)
+            
+            # If that also failed, try 'signature_url'
+            if not resp.ok:
+                alt_payload2 = dict(payload)
+                alt_payload2.pop("digital_signature", None)
+                alt_payload2["signature_url"] = sig_content
+                resp = requests.patch(url, headers=headers, params={"id": f"eq.{user_id}"}, json=alt_payload2, timeout=15)
+
         if not resp.ok:
             detail = resp.json().get("message", resp.text) if resp.content else resp.text
             return jsonify({"message": f"Update failed: {detail}"}), 500
@@ -885,6 +927,73 @@ def upload_avatar(user_id):
 
 
 # ---------------------------------------------------------------------------
+# Digital Signature Upload / Save
+# ---------------------------------------------------------------------------
+
+@app.route("/api/user/<int:user_id>/signature", methods=["POST", "OPTIONS"])
+def save_digital_signature(user_id):
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    try:
+        ensure_users_table()
+    except RuntimeError as exc:
+        return jsonify({"message": str(exc)}), 500
+
+    data = request.get_json(silent=True) or {}
+    signature_data = data.get("signature") or data.get("digitalSignature") or data.get("image") or ""
+
+    if not signature_data:
+        return jsonify({"message": "No signature data provided."}), 400
+
+    patch_url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_USERS_TABLE}"
+    headers = _rest_headers(prefer_return=True)
+    
+    # Try updating digital_signature column first
+    resp = requests.patch(
+        patch_url,
+        headers=headers,
+        params={"id": f"eq.{user_id}"},
+        json={"digital_signature": signature_data},
+        timeout=15,
+    )
+
+    # Fallback to signature column
+    if not resp.ok:
+        resp = requests.patch(
+            patch_url,
+            headers=headers,
+            params={"id": f"eq.{user_id}"},
+            json={"signature": signature_data},
+            timeout=15,
+        )
+
+    # Fallback to signature_url column
+    if not resp.ok:
+        resp = requests.patch(
+            patch_url,
+            headers=headers,
+            params={"id": f"eq.{user_id}"},
+            json={"signature_url": signature_data},
+            timeout=15,
+        )
+
+    if not resp.ok:
+        detail = resp.json().get("message", resp.text) if resp.content else resp.text
+        return jsonify({"message": f"Failed to save signature: {detail}"}), 500
+
+    updated_rows = resp.json() if resp.content else []
+    user_data = _serialize_user(updated_rows[0]) if updated_rows else {}
+
+    return jsonify({
+        "success": True,
+        "message": "Digital signature saved successfully!",
+        "signature": signature_data,
+        "user": user_data,
+    }), 200
+
+
+# ---------------------------------------------------------------------------
 # Admin — Users & Transactions
 # ---------------------------------------------------------------------------
 
@@ -921,12 +1030,99 @@ def admin_transactions():
 
 
 # ---------------------------------------------------------------------------
+# AI Companion & eGov AI Services
+# ---------------------------------------------------------------------------
+
+@app.route("/api/assistant/chat", methods=["POST", "OPTIONS"])
+def assistant_chat():
+    """
+    Conversational AI Assistant (Kuya A / Lolo Aurea).
+    """
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    data = request.get_json(silent=True) or {}
+    message = data.get("message") or data.get("text") or ""
+    history = data.get("history") or []
+    user_profile = data.get("user_profile") or data.get("user") or {}
+
+    if not message.strip():
+        return jsonify({"text": "Kumusta po! Ano po ang maipaglilingkod ko sa inyo?", "action": None}), 200
+
+    try:
+        response_data = assistant_service.generate_assistant_response(
+            message=message,
+            history=history,
+            user_profile=user_profile
+        )
+        return jsonify(response_data), 200
+    except Exception as exc:
+        print(f"[AUREA AI] Chat error: {exc}")
+        return jsonify({
+            "text": "Magandang araw po! Handa po akong tumulong sa inyo. Pakisubukang muli ang inyong tanong.",
+            "action": None
+        }), 200
+
+
+@app.route("/api/assistant/extract-document", methods=["POST", "OPTIONS"])
+def assistant_extract_document():
+    """
+    Multimodal Document Extractor (Senior ID, Medical Prescription, Barangay Clearance).
+    """
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    data = request.get_json(silent=True) or {}
+    image_b64 = data.get("image") or ""
+    mime_type = data.get("mimeType") or "image/jpeg"
+
+    if not image_b64:
+        return jsonify({"success": False, "message": "No document image provided."}), 400
+
+    try:
+        res = assistant_service.extract_document_text(image_b64, mime_type)
+        return jsonify(res), 200
+    except Exception as exc:
+        return jsonify({"success": False, "message": str(exc)}), 500
+
+
+@app.route("/api/assistant/identify-image", methods=["POST", "OPTIONS"])
+def assistant_identify_image():
+    """
+    Multimodal Image Identifier (Pills/Medicine, Bills, Receipts, Senior Documents).
+    """
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    data = request.get_json(silent=True) or {}
+    image_b64 = data.get("image") or ""
+    mime_type = data.get("mimeType") or "image/jpeg"
+
+    if not image_b64:
+        return jsonify({"success": False, "message": "No image provided for identification."}), 400
+
+    try:
+        res = assistant_service.identify_image_content(image_b64, mime_type)
+        return jsonify(res), 200
+    except Exception as exc:
+        return jsonify({"success": False, "message": str(exc)}), 500
+
+
+# ---------------------------------------------------------------------------
+# LOLO AUREA — Register AI Companion Routes (Phase 2+)
+# ---------------------------------------------------------------------------
+
+register_lolo_routes(app)
+
+
+# ---------------------------------------------------------------------------
 # Startup
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
 
     print("[AUREA] Starting backend...")
+    print("[AUREA] LOLO AUREA AI Companion routes registered.")
 
     try:
 
