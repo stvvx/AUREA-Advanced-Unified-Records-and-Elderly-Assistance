@@ -704,7 +704,7 @@ export default function DigitalIdScreen() {
                 <View style={s.qrWrapper}>
                   <QRCode
                     value={qrPayload}
-                    size={84}
+                    size={160}
                     color={C.oscaGreenDark}
                     backgroundColor="#FFFFFF"
                   />
@@ -1828,20 +1828,22 @@ const s = StyleSheet.create({
     letterSpacing: 0.4,
   },
   qrCardBody: {
-    flexDirection: 'row',
+    flexDirection: 'column',
     alignItems: 'center',
-    gap: 14,
+    gap: 16,
   },
   qrWrapper: {
-    padding: 6,
+    padding: 12,
     backgroundColor: '#FFFFFF',
-    borderRadius: 12,
+    borderRadius: 16,
     borderWidth: 1,
     borderColor: '#E5E7EB',
-    ...shadow(C.ink, 0.08, 8, 3),
+    alignSelf: 'center',
+    ...shadow(C.ink, 0.10, 12, 4),
   },
   qrDetailsCol: {
-    flex: 1,
+    width: '100%',
+    alignItems: 'center',
   },
   qrDetailsIdLabel: {
     fontFamily: 'Poppins_600SemiBold',
