@@ -31,7 +31,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
-import BarongElder3D from '../components/assistant/BarongElder3D';
+import BlenderElder3D from "../components/assistant/BlenderElder3D";
+//import BarongElder3D from '../components/assistant/BarongElder3D';
 import AudioVisualizer from '../components/assistant/AudioVisualizer';
 import { speechEngine } from '../lib/speechEngine';
 import { useAuth } from '../context/AuthContext';
@@ -427,13 +428,18 @@ export default function AssistantScreen() {
               colors={['#EBF5ED', '#FDF8EF', '#E2EEE5']}
               style={styles.stageGradient}
             >
-              {/* 3D Senior Citizen Avatar wearing Barong Tagalog */}
+              {/* 3D Senior Citizen Avatar wearing Barong Tagalog 
               <BarongElder3D
                 isSpeaking={isSpeaking}
                 emotion={currentEmotion}
                 height={isWebDesktop ? 380 : 290}
                 onTapAvatar={handleReplayVoice}
-              />
+              /> */}
+
+            <BlenderElder3D
+  isSpeaking={isSpeaking}
+  height={isWebDesktop ? 380 : 290}
+/>
 
               {/* Premium Audio Waveform & Ripple Visualizer */}
               <AudioVisualizer
