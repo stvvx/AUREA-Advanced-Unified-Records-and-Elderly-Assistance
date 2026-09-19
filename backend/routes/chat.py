@@ -121,7 +121,7 @@ def lolo_chat():
         return jsonify({
             "success": True,
             "message": (
-                "Kumusta po kayo! Ako po si Lolo Pat. "
+                "Kumusta po kayo! Ako po si Lolo Aurea. "
                 "Ano po ang maipaglilingkod ko sa inyo ngayon?"
             ),
             "emotion":        "happy",

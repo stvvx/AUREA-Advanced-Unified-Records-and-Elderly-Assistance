@@ -1,6 +1,7 @@
 import base64
 import mimetypes
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -704,7 +705,7 @@ def enroll_face():
             detail = resp.text or resp.reason
             return jsonify({"message": f"Storage upload failed: {detail}"}), 500
 
-        public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_STORAGE_BUCKET}/{file_path}"
+        public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_STORAGE_BUCKET}/{file_path}?v={int(time.time())}"
 
         # Save to users table
         patch_url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_USERS_TABLE}"
@@ -738,7 +739,7 @@ def enroll_face():
 # Get / Update User
 # ---------------------------------------------------------------------------
 
-SELECT_FIELDS = "id,first_name,middle_name,last_name,dob,gender,civil_status,contact,address,email,avatar_url,role,created_at"
+SELECT_FIELDS = "id,first_name,middle_name,last_name,dob,gender,civil_status,contact,address,email,avatar_url,birth_certificate,children,role,created_at"
 
 
 def _serialize_user(u: dict) -> dict:
@@ -749,6 +750,7 @@ def _serialize_user(u: dict) -> dict:
         or u.get("digital_signature_url")
         or ""
     )
+    birth_cert = u.get("birth_certificate") or u.get("birthcert") or None
     return {
         "id": u.get("id"),
         "firstName": u.get("first_name") or "",
@@ -761,6 +763,9 @@ def _serialize_user(u: dict) -> dict:
         "address": u.get("address") or "",
         "email": u.get("email") or "",
         "avatarUrl": u.get("avatar_url") or "",
+        "birthcert": birth_cert,
+        "birthCertificate": birth_cert,
+        "children": u.get("children") or [],
         "signature": sig,
         "digitalSignature": sig,
         "role": u.get("role") or "user",
@@ -803,10 +808,20 @@ def user_profile(user_id):
         "profilePhoto": "avatar_url",
         "gender": "gender",
         "civilStatus": "civil_status",
+        "children": "children",
+        "birthcert": "birth_certificate",
+        "birthCertificate": "birth_certificate",
+        "birth_certificate": "birth_certificate",
     }
     for key, col in field_map.items():
         if key in data:
-            payload[col] = str(data[key]).strip() or None
+            if key == "children":
+                if not isinstance(data[key], list):
+                    return jsonify({"message": "Children must be a list."}), 400
+                payload[col] = data[key]
+            else:
+                val = data[key]
+                payload[col] = (str(val).strip() or None) if val is not None else None
 
     # Handle digital signature fields
     sig_val = data.get("digitalSignature") or data.get("signature")
@@ -840,6 +855,13 @@ def user_profile(user_id):
                 alt_payload2.pop("digital_signature", None)
                 alt_payload2["signature_url"] = sig_content
                 resp = requests.patch(url, headers=headers, params={"id": f"eq.{user_id}"}, json=alt_payload2, timeout=15)
+
+        # If patching birth_certificate failed due to column name mismatch, try 'birthcert'
+        if not resp.ok and "birth_certificate" in payload:
+            alt_payload_bc = dict(payload)
+            bc_content = alt_payload_bc.pop("birth_certificate")
+            alt_payload_bc["birthcert"] = bc_content
+            resp = requests.patch(url, headers=headers, params={"id": f"eq.{user_id}"}, json=alt_payload_bc, timeout=15)
 
         if not resp.ok:
             detail = resp.json().get("message", resp.text) if resp.content else resp.text
@@ -908,7 +930,7 @@ def upload_avatar(user_id):
     except requests.RequestException as exc:
         return jsonify({"message": f"Cannot reach Supabase Storage: {exc}"}), 500
 
-    public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_STORAGE_BUCKET}/{file_path}"
+    public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_STORAGE_BUCKET}/{file_path}?v={int(time.time())}"
 
     # Save URL to users table
     try:
@@ -924,6 +946,121 @@ def upload_avatar(user_id):
         pass  # URL is still returned even if DB update fails
 
     return jsonify({"avatarUrl": public_url}), 200
+
+
+@app.route("/api/user/<int:user_id>/birthcert", methods=["POST", "DELETE", "OPTIONS"])
+def upload_birth_certificate(user_id):
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    if request.method == "DELETE":
+        try:
+            patch_url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_USERS_TABLE}"
+            headers = _rest_headers(prefer_return=True)
+            patch_response = requests.patch(
+                patch_url,
+                headers=headers,
+                params={"id": f"eq.{user_id}"},
+                json={"birth_certificate": None},
+                timeout=15,
+            )
+            if not patch_response.ok:
+                patch_response = requests.patch(
+                    patch_url,
+                    headers=headers,
+                    params={"id": f"eq.{user_id}"},
+                    json={"birthcert": None},
+                    timeout=15,
+                )
+            if not patch_response.ok:
+                detail = patch_response.json().get("message", patch_response.text) if patch_response.content else patch_response.text
+                return jsonify({"message": f"Could not remove birth certificate: {detail}"}), 500
+
+            # Try cleaning up storage file as well
+            try:
+                for ext in [".pdf", ".png", ".jpg"]:
+                    file_path = f"user_{user_id}/birth_certificate{ext}"
+                    storage_del_url = f"{SUPABASE_URL}/storage/v1/object/{SUPABASE_STORAGE_BUCKET}/{file_path}"
+                    requests.delete(
+                        storage_del_url,
+                        headers={
+                            "apikey": SUPABASE_SERVICE_ROLE_KEY,
+                            "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+                        },
+                        timeout=10,
+                    )
+            except Exception:
+                pass
+
+            return jsonify({
+                "message": "Birth certificate removed successfully.",
+                "birthcert": None,
+                "birth_certificate": None,
+                "birthCertificate": None,
+            }), 200
+        except Exception as exc:
+            return jsonify({"message": str(exc)}), 500
+
+    data = request.get_json(silent=True) or {}
+    image_b64 = data.get("image") or ""
+    mime_type = str(data.get("mimeType") or "").lower()
+    file_name = str(data.get("fileName") or "birth_certificate")
+    allowed_types = {"application/pdf", "image/png", "image/jpeg", "image/jpg"}
+    if mime_type not in allowed_types:
+        return jsonify({"message": "Birth certificate must be a PDF, PNG, or JPG file."}), 400
+    if not image_b64:
+        return jsonify({"message": "No birth certificate file provided."}), 400
+
+    try:
+        clean_b64 = image_b64.split(",", 1)[1] if "," in image_b64 else image_b64
+        file_bytes = base64.b64decode(clean_b64.strip())
+        extension = ".pdf" if mime_type == "application/pdf" else ".png" if mime_type == "image/png" else ".jpg"
+        file_path = f"user_{user_id}/birth_certificate{extension}"
+        storage_url = f"{SUPABASE_URL}/storage/v1/object/{SUPABASE_STORAGE_BUCKET}/{file_path}"
+        headers = {
+            "apikey": SUPABASE_SERVICE_ROLE_KEY,
+            "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+            "Content-Type": mime_type,
+            "x-upsert": "true",
+        }
+        response = requests.put(storage_url, headers=headers, data=file_bytes, timeout=30)
+        if not response.ok:
+            return jsonify({"message": f"Birth certificate upload failed: {response.text or response.reason}"}), 500
+
+        public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_STORAGE_BUCKET}/{file_path}?v={int(time.time())}"
+        patch_url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_USERS_TABLE}"
+        headers = _rest_headers(prefer_return=True)
+
+        # Try 'birth_certificate' first (the actual column in Supabase), fallback to 'birthcert'
+        patch_response = requests.patch(
+            patch_url,
+            headers=headers,
+            params={"id": f"eq.{user_id}"},
+            json={"birth_certificate": public_url},
+            timeout=15,
+        )
+        if not patch_response.ok:
+            patch_response = requests.patch(
+                patch_url,
+                headers=headers,
+                params={"id": f"eq.{user_id}"},
+                json={"birthcert": public_url},
+                timeout=15,
+            )
+
+        if not patch_response.ok:
+            detail = patch_response.json().get("message", patch_response.text) if patch_response.content else patch_response.text
+            return jsonify({"message": f"Could not save birth certificate: {detail}"}), 500
+
+        return jsonify({
+            "birthcert": public_url,
+            "birth_certificate": public_url,
+            "birthCertificate": public_url,
+        }), 200
+    except (ValueError, base64.binascii.Error):
+        return jsonify({"message": "Invalid birth certificate file data."}), 400
+    except Exception as exc:
+        return jsonify({"message": str(exc)}), 500
 
 
 # ---------------------------------------------------------------------------

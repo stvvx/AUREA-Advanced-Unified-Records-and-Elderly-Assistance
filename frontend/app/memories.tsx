@@ -227,7 +227,7 @@ function EmptyState() {
       </Animated.Text>
       <Text style={st.emptyTitle}>Wala Pang Alaala</Text>
       <Text style={st.emptySubtitle}>
-        Habang nakikipag-usap kayo kay Lolo Pat, matututo siya tungkol sa inyo
+        Habang nakikipag-usap kayo kay Lolo Aurea, matututo siya tungkol sa inyo
         at maitatago ang mga mahalagang bagay para maaalala sa susunod.
       </Text>
     </View>
@@ -308,7 +308,7 @@ export default function MemoriesScreen() {
     if (!userId || memories.length === 0) return;
     Alert.alert(
       'Burahin Lahat?',
-      `Burahin ang lahat ng ${memories.length} alaala ni Lolo Pat tungkol sa inyo? Hindi ito mababawi.`,
+      `Burahin ang lahat ng ${memories.length} alaala ni Lolo Aurea tungkol sa inyo? Hindi ito mababawi.`,
       [
         { text: 'Huwag', style: 'cancel' },
         {
@@ -373,7 +373,7 @@ export default function MemoriesScreen() {
       {/* ── Context Banner ────────────────────────────────────────────────── */}
       <View style={st.banner}>
         <Text style={st.bannerText}>
-          💡 Ang mga alaala ay ginagamit ni Lolo Pat para maging mas personal ang diyalogo
+          💡 Ang mga alaala ay ginagamit ni Lolo Aurea para maging mas personal ang diyalogo
         </Text>
       </View>
 

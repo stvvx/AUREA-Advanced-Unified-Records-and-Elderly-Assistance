@@ -137,7 +137,7 @@ const HOW_TO_USE_STEPS = [
   {
     icon: 'search',
     title: '2. Hanapin ang Kailangan',
-    text: 'Gamitin ang search bar o piliin sa "Available Benefits" ang serbisyong gusto mo, tulad ng Financial Aid o Physical ID.',
+    text: 'Gamitin ang search bar o piliin sa "Available Benefits" ang serbisyong gusto mo, tulad ng Birthday Benefits o Physical ID.',
   },
   {
     icon: 'create',
@@ -438,15 +438,15 @@ export default function DashboardScreen() {
             {BANNERS.map((b) => (
               <View key={b.key} style={[s.bannerCard, { width: bannerWidth }]}>
                 {b.image ? (
-                  <ImageBackground source={{ uri: b.image }} style={StyleSheet.absoluteFillObject} imageStyle={s.bannerImg}>
+                  <ImageBackground source={{ uri: b.image }} style={StyleSheet.absoluteFill} imageStyle={s.bannerImg}>
                     <LinearGradient
                       colors={['transparent', C.overlayBot]}
                       locations={[0.35, 1]}
-                      style={StyleSheet.absoluteFillObject}
+                      style={StyleSheet.absoluteFill}
                     />
                   </ImageBackground>
                 ) : (
-                  <LinearGradient colors={[C.primaryMid, C.primaryDark]} style={StyleSheet.absoluteFillObject} />
+                  <LinearGradient colors={[C.primaryMid, C.primaryDark]} style={StyleSheet.absoluteFill} />
                 )}
                 <View style={s.bannerContent}>
                   {b.icon && <Ionicons name={b.icon as any} size={18} color={C.gold} style={{ marginBottom: 6 }} />}
@@ -475,7 +475,7 @@ export default function DashboardScreen() {
                       onPress={() => router.push('/assistant')}
                       activeOpacity={0.8}
                       accessibilityRole="button"
-                      accessibilityLabel="Lolo Pat AI Assistant"
+                      accessibilityLabel="Lolo Aurea AI Assistant"
                     >
                       <View
                         style={[
@@ -485,7 +485,7 @@ export default function DashboardScreen() {
                       >
                         <MaterialCommunityIcons name="creation" size={tileIcon} color="#1E60FF" />
                       </View>
-                      <Text style={[s.serviceLabel, { color: '#1E60FF', fontWeight: '700' }]} numberOfLines={1}>Lolo Pat AI</Text>
+                      <Text style={[s.serviceLabel, { color: '#1E60FF', fontWeight: '700' }]} numberOfLines={1}>Lolo Aurea AI</Text>
                     </TouchableOpacity>
                   </View>
 
@@ -647,7 +647,7 @@ const s = StyleSheet.create({
     zIndex: 40,
   },
   menuBackdrop: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     zIndex: 25,
     backgroundColor: 'transparent',
   },

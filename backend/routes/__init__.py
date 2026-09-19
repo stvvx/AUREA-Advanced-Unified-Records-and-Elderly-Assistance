@@ -35,3 +35,7 @@ def register_lolo_routes(app: Flask) -> None:
     from routes.avatar import lolo_avatar_bp
     app.register_blueprint(lolo_avatar_bp)
     print("[LOLO] Registered blueprint: /api/lolo/avatar")
+
+    from routes.benefit_applications import benefit_applications_bp
+    app.register_blueprint(benefit_applications_bp)
+    print("[AUREA] Registered blueprint: /api/benefit-applications")

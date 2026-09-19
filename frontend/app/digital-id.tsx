@@ -449,6 +449,7 @@ export default function DigitalIdScreen() {
                     <View style={s.photoBorderBox}>
                       {profile?.avatarUrl ? (
                         <Image
+                          key={profile.avatarUrl}
                           source={{ uri: profile.avatarUrl }}
                           style={s.photoImage}
                           resizeMode="cover"

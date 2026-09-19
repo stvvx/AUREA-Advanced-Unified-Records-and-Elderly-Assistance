@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import type { ChildProfile } from '../lib/authApi';
 
 type User = {
   id: number;
@@ -14,7 +15,10 @@ type User = {
   address?: string;
   avatarUrl?: string | null;
   profilePhoto?: string | null;
+  birthcert?: string | null;
+  oscaIdNumber?: string;
   role?: string;
+  children?: ChildProfile[];
 };
 
 type AuthContextType = {
@@ -81,6 +85,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       avatarUrl: userData.avatarUrl ?? userData.profilePhoto ?? null,
       profilePhoto: userData.profilePhoto ?? userData.avatarUrl ?? null,
       role: userData.role ?? 'user',
+      children: userData.children ?? [],
+      oscaIdNumber: userData.oscaIdNumber ?? '',
+      birthcert: userData.birthcert ?? null,
     };
 
     await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(normalizedUser));

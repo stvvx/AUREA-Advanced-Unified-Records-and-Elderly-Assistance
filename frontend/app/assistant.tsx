@@ -1,7 +1,7 @@
 /**
  * frontend/app/assistant.tsx
  * ─────────────────────────────────────────────────────────────────────────────
- * Lolo Pat — 3D AI Senior Citizen Voice & Visual Companion for Pateros.
+ * Lolo Aurea — 3D AI Senior Citizen Voice & Visual Companion for Pateros.
  *
  * Features:
  *   - Interactive 3D Barong Tagalog Senior Character (WebGL / Native)
@@ -31,15 +31,12 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
-import BlenderElder3D from "../components/assistant/BlenderElder3D";
-//import BarongElder3D from '../components/assistant/BarongElder3D';
+import BarongElder3D from '../components/assistant/BarongElder3D';
 import AudioVisualizer from '../components/assistant/AudioVisualizer';
 import { speechEngine } from '../lib/speechEngine';
 import { useAuth } from '../context/AuthContext';
 import { Emotion } from '../types/lolo';
-
-const API_BASE_URL =
-  process.env.EXPO_PUBLIC_API_URL || 'http://localhost:5000';
+import { sendLoloMessage } from '../services/loloApi';
 
 interface SpeechTopic {
   icon: keyof typeof Ionicons.glyphMap;
@@ -50,7 +47,7 @@ interface SpeechTopic {
   emotion?: Emotion;
 }
 
-// Curated Senior Voice Topics (Tap to hear Lolo Pat speak immediately)
+// Curated Senior Voice Topics (Tap to hear Lolo Aurea speak immediately)
 const VOICE_TOPICS: SpeechTopic[] = [
   {
     icon: 'card',
@@ -124,7 +121,7 @@ export default function AssistantScreen() {
   const [currentEmotion, setCurrentEmotion] = useState<Emotion>('happy');
   const [inputText, setInputText] = useState('');
   const [currentSpeech, setCurrentSpeech] = useState(
-    'Magandang araw po! Ako si Lolo Pat. Pindutin lamang po ang mikropono o pumili ng paksa sa ibaba upang aking ipaliwanag nang pasalita.'
+    'Magandang araw po! Ako si Lolo Aurea. Pindutin lamang po ang mikropono o pumili ng paksa sa ibaba upang aking ipaliwanag nang pasalita.'
   );
   const [activeTopicIndex, setActiveTopicIndex] = useState<number | null>(null);
 
@@ -141,7 +138,7 @@ export default function AssistantScreen() {
 
     const greetingText = `Magandang araw po${
       fullName ? `, ${fullName}` : ''
-    }! Ako po si Lolo Pat, ang inyong 3D AI companion sa AUREA. Nandito po ako upang ipaliwanag nang pasalita ang inyong mga serbisyo sa Pateros. Pindutin lamang po ang mikropono o ang alinmang paksa sa ibaba.`;
+    }! Ako po si Lolo Aurea, ang inyong 3D AI companion sa AUREA. Nandito po ako upang ipaliwanag nang pasalita ang inyong mga serbisyo sa Pateros. Pindutin lamang po ang mikropono o ang alinmang paksa sa ibaba.`;
 
     setCurrentSpeech(greetingText);
 
@@ -197,37 +194,24 @@ export default function AssistantScreen() {
     setActiveTopicIndex(index);
     setIsLoading(true);
     setCurrentEmotion(topic.emotion || 'happy');
-    setCurrentSpeech('Nag-iisip si Lolo Pat...');
+    setCurrentSpeech('Sandali lang po, inihahanda ni Lolo Aurea ang sagot...');
+    speechEngine.speakInstant('Sandali lang po, inihahanda ko ang sagot.', () => setIsSpeaking(true));
 
     try {
-      const res = await fetch(`${API_BASE_URL}/api/assistant/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: topic.speechText,
-          user_profile: user
-            ? {
-                first_name: user.firstName,
-                last_name: user.lastName,
-                barangay: (user as any).barangay || 'Pateros',
-                senior_id: (user as any).seniorId || (user as any).id,
-              }
-            : null,
-        }),
+      const data = await sendLoloMessage({
+        userId: Number((user as any)?.id || 0),
+        message: topic.speechText,
+        language: 'fil',
+        userProfile: user
+          ? { firstName: user.firstName, lastName: user.lastName, barangay: (user as any).barangay || 'Pateros' }
+          : undefined,
       });
 
-      let speechToPlay = topic.speechText;
-      let actionFromAI = topic.action;
-
-      if (res.ok) {
-        const data = await res.json();
-        if (data.text) {
-          speechToPlay = data.text;
-          actionFromAI = data.action || topic.action;
-        }
-        if (data.emotion) {
-          setCurrentEmotion(data.emotion as Emotion);
-        }
+      speechEngine.stop();
+      const speechToPlay = data.message || topic.speechText;
+      const actionFromAI = data.action || topic.action;
+      if (data.emotion) {
+        setCurrentEmotion(data.emotion);
       }
 
       setCurrentSpeech(speechToPlay);
@@ -241,6 +225,7 @@ export default function AssistantScreen() {
         handleSystemAction(actionFromAI);
       }
     } catch {
+      speechEngine.stop();
       setCurrentSpeech(topic.speechText);
       speechEngine.speak(
         topic.speechText,
@@ -265,30 +250,24 @@ export default function AssistantScreen() {
     setIsSpeaking(false);
     setIsLoading(true);
     setCurrentEmotion('thinking');
-    setCurrentSpeech('Pinakikinggan at pinag-aaralan ni Lolo Pat ang inyong tanong...');
+    setCurrentSpeech('Sandali lang po, iniisip ni Lolo Aurea ang inyong tanong...');
+    speechEngine.speakInstant('Sandali lang po, iniisip ko ang inyong tanong.', () => setIsSpeaking(true));
 
     try {
-      const res = await fetch(`${API_BASE_URL}/api/assistant/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: textToSend,
-          user_profile: user
-            ? {
-                first_name: user.firstName,
-                last_name: user.lastName,
-                barangay: (user as any).barangay || 'Pateros',
-                senior_id: (user as any).seniorId || (user as any).id,
-              }
-            : null,
-        }),
+      const data = await sendLoloMessage({
+        userId: Number((user as any)?.id || 0),
+        message: textToSend,
+        language: 'fil',
+        userProfile: user
+          ? { firstName: user.firstName, lastName: user.lastName, barangay: (user as any).barangay || 'Pateros' }
+          : undefined,
       });
 
-      if (res.ok) {
-        const data = await res.json();
-        const responseText = data.text || 'Opo, naintindihan ko po kayo.';
+      speechEngine.stop();
+      if (data.success) {
+        const responseText = data.message || 'Opo, naintindihan ko po kayo.';
         if (data.emotion) {
-          setCurrentEmotion(data.emotion as Emotion);
+          setCurrentEmotion(data.emotion);
         } else {
           setCurrentEmotion('happy');
         }
@@ -304,15 +283,10 @@ export default function AssistantScreen() {
           handleSystemAction(data.action);
         }
       } else {
-        const fallbackText = 'Salamat po sa inyong tanong. Maaari po kayong sumangguni sa tanggapan ng OSCA Pateros para sa karagdagang tulong.';
-        setCurrentSpeech(fallbackText);
-        speechEngine.speak(
-          fallbackText,
-          () => setIsSpeaking(true),
-          () => setIsSpeaking(false)
-        );
+        throw new Error(data.error || 'LOLO response failed');
       }
     } catch {
+      speechEngine.stop();
       const fallbackText = 'Pasensya na po, medyo mahina ang signal. Subukan po nating muli o pumili ng paksa sa ibaba.';
       setCurrentSpeech(fallbackText);
       speechEngine.speak(
@@ -392,7 +366,7 @@ export default function AssistantScreen() {
 
           <View style={styles.headerTitles}>
             <View style={styles.headerTitleRow}>
-              <Text style={styles.headerTitle}>Lolo Pat</Text>
+              <Text style={styles.headerTitle}>Lolo Aurea</Text>
               <View style={styles.barongTag}>
                 <Text style={styles.barongTagText}>🇵🇭 3D BARONG COMPANION</Text>
               </View>
@@ -428,18 +402,14 @@ export default function AssistantScreen() {
               colors={['#EBF5ED', '#FDF8EF', '#E2EEE5']}
               style={styles.stageGradient}
             >
-              {/* 3D Senior Citizen Avatar wearing Barong Tagalog 
+              {/* Native low-latency 3D-style senior avatar */}
               <BarongElder3D
                 isSpeaking={isSpeaking}
                 emotion={currentEmotion}
+                isListening={isListening}
                 height={isWebDesktop ? 380 : 290}
                 onTapAvatar={handleReplayVoice}
-              /> */}
-
-            <BlenderElder3D
-  isSpeaking={isSpeaking}
-  height={isWebDesktop ? 380 : 290}
-/>
+              />
 
               {/* Premium Audio Waveform & Ripple Visualizer */}
               <AudioVisualizer
@@ -461,7 +431,7 @@ export default function AssistantScreen() {
                     color="#C4892E"
                   />
                   <Text style={styles.speechHeaderTitle}>
-                    {isListening ? 'Naririnig ni Lolo:' : 'Sinasabi ni Lolo Pat:'}
+                    {isListening ? 'Naririnig ni Lolo Aurea:' : 'Sinasabi ni Lolo Aurea:'}
                   </Text>
                 </View>
 
@@ -491,7 +461,7 @@ export default function AssistantScreen() {
               {isLoading ? (
                 <View style={styles.loadingRow}>
                   <ActivityIndicator size="small" color="#1F5C3E" />
-                  <Text style={styles.loadingText}>Nag-iisip at naghahanda ng boses si Lolo Pat...</Text>
+                  <Text style={styles.loadingText}>Nag-iisip at naghahanda ng boses si Lolo Aurea...</Text>
                 </View>
               ) : (
                 <Text style={styles.speechBodyText}>{currentSpeech}</Text>
@@ -507,7 +477,7 @@ export default function AssistantScreen() {
                 <Text style={styles.sectionTitle}>Mga Karaniwang Tanong sa Serbisyo</Text>
               </View>
               <Text style={styles.sectionSubtitle}>
-                Pindutin ang alinmang kard upang ipaliwanag ito ni Lolo Pat nang buong linaw:
+                Pindutin ang alinmang kard upang ipaliwanag ito ni Lolo Aurea nang buong linaw:
               </Text>
 
               <View style={styles.topicGrid}>
@@ -579,7 +549,7 @@ export default function AssistantScreen() {
               isListening && styles.micButtonActive,
             ]}
             onPress={handleToggleListening}
-            accessibilityLabel={isListening ? 'Tapusin ang pagsasalita' : 'Magsalita kay Lolo Pat'}
+            accessibilityLabel={isListening ? 'Tapusin ang pagsasalita' : 'Magsalita kay Lolo Aurea'}
           >
             <Ionicons
               name={isListening ? 'radio' : 'mic'}
@@ -590,7 +560,7 @@ export default function AssistantScreen() {
 
           <TextInput
             style={styles.textInputField}
-            placeholder={isListening ? 'Nakikinig po si Lolo sa inyo...' : 'Magtanong o mag-type kay Lolo Pat...'}
+            placeholder={isListening ? 'Nakikinig po si Lolo Aurea sa inyo...' : 'Magtanong o mag-type kay Lolo Aurea...'}
             placeholderTextColor="#8C9E94"
             value={inputText}
             onChangeText={setInputText}

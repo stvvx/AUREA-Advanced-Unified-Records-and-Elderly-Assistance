@@ -19,9 +19,19 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system/legacy';
 import QRCode from 'react-native-qrcode-svg';
+import { WebView } from 'react-native-webview';
 import { useAuth } from '../context/AuthContext';
-import { getUser, updateUser, uploadAvatar } from '../lib/authApi';
+import {
+  getUser,
+  updateUser,
+  uploadAvatar,
+  uploadBirthCertificate,
+  deleteBirthCertificate,
+  type ChildProfile,
+} from '../lib/authApi';
 
 const C = {
   bg: '#F4F6F0',
@@ -55,16 +65,51 @@ function shadow(color: string, opacity: number, radius = 14, height = 6) {
   return Platform.select({
     ios: { shadowColor: color, shadowOpacity: opacity, shadowRadius: radius, shadowOffset: { width: 0, height } },
     android: { elevation: Math.round(radius * 0.6) },
-    // react-native-web doesn't read shadow*/elevation, so give it a real boxShadow
     web: { boxShadow: `0px ${height}px ${radius}px ${hexToRgba(color, opacity)}` } as any,
     default: {},
   });
 }
 
-// Small helper so buttons/links show a pointer cursor on web without affecting native
 const webPointer = Platform.OS === 'web' ? ({ cursor: 'pointer' } as any) : {};
-// Kills the browser's default blue focus ring on text inputs so our own border styling shows
 const webNoOutline = Platform.OS === 'web' ? ({ outlineStyle: 'none' } as any) : {};
+
+async function readFileAsBase64(uri: string): Promise<string> {
+  if (Platform.OS === 'web') {
+    const res = await fetch(uri);
+    const blob = await res.blob();
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const result = reader.result as string;
+        const b64 = result.includes(',') ? result.split(',')[1] : result;
+        resolve(b64);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  // Native Android/iOS: read directly via legacy FileSystem with proper content:// permissions
+  try {
+    return await FileSystem.readAsStringAsync(uri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+  } catch (fsErr) {
+    console.warn('[Profile] FileSystem.readAsStringAsync failed, attempting blob fallback:', fsErr);
+    const res = await fetch(uri);
+    const blob = await res.blob();
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const result = reader.result as string;
+        const b64 = result.includes(',') ? result.split(',')[1] : result;
+        resolve(b64);
+      };
+      reader.onerror = () => reject(fsErr);
+      reader.readAsDataURL(blob);
+    });
+  }
+}
 
 export default function ProfileScreen() {
   const router = useRouter();
@@ -75,6 +120,13 @@ export default function ProfileScreen() {
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [genderOpen, setGenderOpen] = useState(false);
   const [civilStatusOpen, setCivilStatusOpen] = useState(false);
+
+  const [children, setChildren] = useState<ChildProfile[]>(user?.children ?? []);
+  const [birthcert, setBirthcert] = useState<string | null>(user?.birthcert ?? null);
+  const [birthcertUploading, setBirthcertUploading] = useState(false);
+  const [birthcertDeleting, setBirthcertDeleting] = useState(false);
+  const [viewerVisible, setViewerVisible] = useState(false);
+
   const [form, setForm] = useState({
     firstName: user?.firstName ?? '',
     lastName: user?.lastName ?? '',
@@ -90,7 +142,6 @@ export default function ProfileScreen() {
 
   const ready = useMemo(() => !!user, [user]);
 
-  // Fetch full profile from DB on mount and fall back to the saved session if needed.
   useEffect(() => {
     if (!user?.id) return;
 
@@ -122,13 +173,97 @@ export default function ProfileScreen() {
           address: profile.address ?? sessionFallback.address,
           profilePhoto: nextProfilePhoto,
         });
+        setChildren(profile.children ?? user.children ?? []);
+        setBirthcert(profile.birthcert ?? user.birthcert ?? null);
         if (nextProfilePhoto) setAvatarUri(nextProfilePhoto);
       })
       .catch((err) => {
         console.warn('[Profile] getUser failed:', err?.message);
         setForm(sessionFallback);
       });
-  }, [user?.id, user?.firstName, user?.lastName, user?.email, user?.middleName, user?.dob, user?.gender, user?.civilStatus, user?.contact, user?.address]);
+  }, [user?.id, user?.firstName, user?.lastName, user?.email, user?.middleName, user?.dob, user?.gender, user?.civilStatus, user?.contact, user?.address, user?.birthcert]);
+
+  const handleBirthCertificatePick = async () => {
+    if (!user?.id) return;
+
+    const result = await DocumentPicker.getDocumentAsync({
+      type: ['application/pdf', 'image/png', 'image/jpeg'],
+      copyToCacheDirectory: true,
+      multiple: false,
+    });
+    if (result.canceled || !result.assets?.[0]) return;
+
+    const asset = result.assets[0];
+    let mimeType = asset.mimeType?.toLowerCase() ?? '';
+    if (!mimeType || mimeType === 'application/octet-stream') {
+      const lowerName = asset.name?.toLowerCase() ?? '';
+      if (lowerName.endsWith('.pdf')) mimeType = 'application/pdf';
+      else if (lowerName.endsWith('.png')) mimeType = 'image/png';
+      else if (lowerName.endsWith('.jpg') || lowerName.endsWith('.jpeg')) mimeType = 'image/jpeg';
+    }
+    if (!['application/pdf', 'image/png', 'image/jpeg', 'image/jpg'].includes(mimeType)) {
+      Alert.alert('Invalid file', 'Please choose a PDF, PNG, or JPG birth certificate.');
+      return;
+    }
+
+    setBirthcertUploading(true);
+    try {
+      const base64File = await readFileAsBase64(asset.uri);
+      const response = await uploadBirthCertificate(user.id, base64File, mimeType, asset.name);
+      const freshUrl = response.birthcert
+        ? `${response.birthcert}${response.birthcert.includes('?') ? '&' : '?'}t=${Date.now()}`
+        : response.birthcert;
+      setBirthcert(freshUrl);
+      await updateProfile({ birthcert: freshUrl });
+      Alert.alert('Success', birthcert ? 'Birth certificate replaced successfully.' : 'Birth certificate uploaded successfully.');
+    } catch (error) {
+      Alert.alert('Upload failed', error instanceof Error ? error.message : 'Could not upload the birth certificate.');
+    } finally {
+      setBirthcertUploading(false);
+    }
+  };
+
+  const handleDeleteBirthCertificate = () => {
+    if (!user?.id || !birthcert) return;
+
+    Alert.alert(
+      'Delete Birth Certificate',
+      'Are you sure you want to remove your birth certificate from your profile?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            setBirthcertDeleting(true);
+            try {
+              await deleteBirthCertificate(user.id);
+              await updateProfile({ birthcert: null });
+              setBirthcert(null);
+              setViewerVisible(false);
+              Alert.alert('Deleted', 'Your birth certificate has been removed.');
+            } catch (error) {
+              Alert.alert('Delete failed', error instanceof Error ? error.message : 'Could not delete birth certificate.');
+            } finally {
+              setBirthcertDeleting(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const addChild = () => {
+    setChildren((prev) => [...prev, { id: Date.now().toString(), name: '', dob: '' }]);
+  };
+
+  const updateChild = (id: string, key: 'name' | 'dob', value: string) => {
+    setChildren((prev) => prev.map((c) => (c.id === id ? { ...c, [key]: value } : c)));
+  };
+
+  const removeChild = (id: string) => {
+    setChildren((prev) => prev.filter((c) => c.id !== id));
+  };
 
   const handlePickAvatar = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -138,7 +273,7 @@ export default function ProfileScreen() {
     }
 
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [1, 1],
       quality: 0.7,
@@ -148,24 +283,38 @@ export default function ProfileScreen() {
     if (result.canceled || !result.assets?.[0]) return;
 
     const asset = result.assets[0];
-    if (!asset.base64) {
-      Alert.alert('Error', 'Could not read image data.');
-      return;
-    }
-
     if (!user?.id) return;
+
+    // Instantly show selected photo locally so user sees feedback right away
+    setAvatarUri(asset.uri);
     setAvatarUploading(true);
+    setUploadingPhoto(true);
     try {
+      let b64 = asset.base64;
+      if (!b64 && asset.uri) {
+        b64 = await readFileAsBase64(asset.uri);
+      }
+      if (!b64) {
+        setAvatarUri(user?.profilePhoto ?? user?.avatarUrl ?? null);
+        Alert.alert('Error', 'Could not read image data.');
+        return;
+      }
+
       const mimeType = asset.mimeType ?? 'image/jpeg';
-      const { avatarUrl } = await uploadAvatar(user.id, asset.base64, mimeType);
-      const nextAvatar = avatarUrl || asset.uri;
-      setAvatarUri(nextAvatar);
-      setForm((prev) => ({ ...prev, profilePhoto: nextAvatar }));
-      await updateProfile({ avatarUrl: nextAvatar, profilePhoto: nextAvatar });
+      const { avatarUrl } = await uploadAvatar(user.id, b64, mimeType);
+      const cacheBusted = avatarUrl
+        ? `${avatarUrl}${avatarUrl.includes('?') ? '&' : '?'}t=${Date.now()}`
+        : asset.uri;
+      setAvatarUri(cacheBusted);
+      setForm((prev) => ({ ...prev, profilePhoto: cacheBusted }));
+      await updateProfile({ avatarUrl: cacheBusted, profilePhoto: cacheBusted });
+      Alert.alert('Profile photo updated', 'Your new profile photo has been saved.');
     } catch (err) {
+      setAvatarUri(user?.profilePhoto ?? user?.avatarUrl ?? null);
       Alert.alert('Upload failed', err instanceof Error ? err.message : 'Please try again.');
     } finally {
       setAvatarUploading(false);
+      setUploadingPhoto(false);
     }
   };
 
@@ -196,8 +345,9 @@ export default function ProfileScreen() {
         civilStatus: form.civilStatus.trim(),
         contact: form.contact.trim(),
         address: form.address.trim(),
+        children,
       });
-      await updateProfile(updated); // sync AsyncStorage session
+      await updateProfile(updated);
       Alert.alert('Profile updated', 'Your changes have been saved.');
     } catch (error) {
       Alert.alert('Update failed', error instanceof Error ? error.message : 'Please try again.');
@@ -206,36 +356,8 @@ export default function ProfileScreen() {
     }
   };
 
-  const handlePhotoPick = async () => {
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permission.granted) {
-      Alert.alert('Permission needed', 'Please allow access to your photos to upload a profile photo.');
-      return;
-    }
-
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.8,
-    });
-
-    if (result.canceled || !result.assets?.[0]?.uri) return;
-
-    setUploadingPhoto(true);
-    try {
-      const photoUri = result.assets[0].uri;
-      setForm((prev) => ({ ...prev, profilePhoto: photoUri }));
-      setAvatarUri(photoUri);
-      if (user) {
-        await updateProfile({ profilePhoto: photoUri, avatarUrl: photoUri });
-      }
-      Alert.alert('Profile photo updated', 'Your new photo is ready to use.');
-    } catch (error) {
-      Alert.alert('Upload failed', error instanceof Error ? error.message : 'Could not save the profile photo.');
-    } finally {
-      setUploadingPhoto(false);
-    }
+  const handlePhotoPick = () => {
+    handlePickAvatar();
   };
 
   const handleLogout = async () => {
@@ -259,163 +381,171 @@ export default function ProfileScreen() {
     );
   }
 
-  const fullName = `${form.firstName || 'User'} ${form.lastName || ''}`.trim();
+  const fullName = [form.firstName, form.middleName, form.lastName].filter(Boolean).join(' ') || 'Senior Citizen';
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <SafeAreaView style={styles.safe}>
       <StatusBar barStyle="dark-content" backgroundColor={C.bg} />
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+          {/* Header */}
           <View style={styles.header}>
-            <TouchableOpacity style={[styles.backBtn, webPointer]} onPress={() => router.back()}>
-              <Ionicons name="arrow-back" size={20} color={C.primaryDark} />
+            <TouchableOpacity style={[styles.backBtn, webPointer]} onPress={() => router.back()} activeOpacity={0.8}>
+              <Ionicons name="chevron-back" size={20} color={C.ink} />
             </TouchableOpacity>
             <View style={styles.headerTitleWrap}>
               <Text style={styles.title}>My Profile</Text>
-              <Text style={styles.subtitle}>Manage your personal information</Text>
+              <Text style={styles.subtitle}>Manage your account information</Text>
             </View>
             <View style={styles.placeholder} />
           </View>
 
+          {/* Body */}
           <View style={styles.bodyLayout}>
-            {/* ── Left: profile summary + QR (sidebar on web, top card on mobile) ── */}
+            {/* Left Column: Avatar Card + QR Card */}
             <View style={styles.leftCol}>
-              <View style={[styles.profileCard, shadow(C.primaryDark, 0.12, 20, 8)]}>
-                <LinearGradient
-                  colors={[C.primaryDark, C.primaryMid]}
-                  start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
-                  style={styles.banner}
-                />
-
-                <TouchableOpacity style={[styles.avatarWrap, webPointer]} onPress={handlePickAvatar} activeOpacity={0.85}>
-                  {avatarUploading ? (
-                    <ActivityIndicator color={C.primaryDark} />
-                  ) : avatarUri ? (
-                    <Image source={{ uri: avatarUri }} style={styles.avatarImage} />
+              <View style={[styles.profileCard, shadow(C.ink, 0.08, 16, 4)]}>
+                <LinearGradient colors={[C.primaryMid, C.primaryDark]} style={styles.banner} />
+                <TouchableOpacity
+                  style={[styles.avatarWrap, webPointer]}
+                  onPress={handlePickAvatar}
+                  disabled={avatarUploading}
+                  activeOpacity={0.85}
+                >
+                  {avatarUri ? (
+                    <Image key={avatarUri} source={{ uri: avatarUri }} style={styles.avatarImage} />
                   ) : (
-                    <Ionicons name="person" size={32} color={C.primaryDark} />
+                    <Ionicons name="person" size={46} color={C.primary} />
                   )}
                   <View style={styles.avatarBadge}>
-                    <Ionicons name="camera" size={12} color={C.white} />
+                    {avatarUploading ? (
+                      <ActivityIndicator size="small" color={C.white} />
+                    ) : (
+                      <Ionicons name="camera" size={13} color={C.white} />
+                    )}
                   </View>
                 </TouchableOpacity>
 
                 <Text style={styles.nameText}>{fullName}</Text>
                 <View style={styles.emailRow}>
-                  <Ionicons name="mail-outline" size={12} color={C.inkFaint} />
-                  <Text style={styles.emailText}>{form.email || 'No email linked'}</Text>
+                  <Ionicons name="mail-outline" size={13} color={C.inkFaint} />
+                  <Text style={styles.emailText}>{form.email || 'No email'}</Text>
                 </View>
 
-                {/* QR Code */}
-                {user?.id ? (
-                  <View style={styles.qrSection}>
-                    <View style={styles.qrDivider} />
-                    <View style={[styles.qrWrap, shadow(C.primaryDark, 0.08, 10, 3)]}>
-                      <QRCode
-                        value={JSON.stringify({
-                          id: user.id,
-                          name: [form.firstName, form.middleName, form.lastName].filter(Boolean).join(' '),
-                          dob: form.dob,
-                          gender: form.gender,
-                          civilStatus: form.civilStatus,
-                          contact: form.contact,
-                          address: form.address,
-                          municipality: 'Pateros',
-                        })}
-                        size={104}
-                        color={C.primaryDark}
-                        backgroundColor={C.white}
-                      />
-                    </View>
-                    <View style={styles.qrLabelRow}>
-                      <Ionicons name="shield-checkmark" size={12} color={C.primary} />
-                      <Text style={styles.qrLabel}>Scan to verify identity</Text>
-                    </View>
-                    <TouchableOpacity
-                      style={[styles.viewIdBtn, webPointer]}
-                      onPress={() => router.push('/digital-id')}
-                      activeOpacity={0.85}
-                    >
-                      <Ionicons name="id-card-outline" size={15} color={C.white} />
-                      <Text style={styles.viewIdBtnTxt}>View Digital ID</Text>
-                      <Ionicons name="chevron-forward" size={14} color="rgba(255,255,255,0.7)" />
-                    </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.changePhotoBtn, webPointer]}
+                  onPress={handlePhotoPick}
+                  disabled={uploadingPhoto}
+                  activeOpacity={0.85}
+                >
+                  {uploadingPhoto ? (
+                    <ActivityIndicator color={C.primaryDark} size="small" />
+                  ) : (
+                    <>
+                      <Ionicons name="image-outline" size={15} color={C.primaryDark} />
+                      <Text style={styles.changePhotoBtnText}>Choose from gallery</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+
+                <View style={styles.metaRow}>
+                  <View style={styles.metaPill}>
+                    <Text style={styles.metaLabel}>Member ID</Text>
+                    <Text style={styles.metaVal}>#{user?.id ? String(user.id).padStart(5, '0') : '00000'}</Text>
                   </View>
-                ) : null}
+                  <View style={styles.metaPill}>
+                    <Text style={styles.metaLabel}>Status</Text>
+                    <Text style={[styles.metaVal, { color: C.primary }]}>Active</Text>
+                  </View>
+                </View>
               </View>
 
-              {/* Actions live under the sidebar card on web; below the form on mobile */}
-              {Platform.OS === 'web' && (
-                <View style={styles.actions}>
-                  <TouchableOpacity style={[styles.secondaryBtn, webPointer]} onPress={handleLogout} activeOpacity={0.85}>
-                    <Ionicons name="log-out-outline" size={18} color={C.primaryDark} />
-                    <Text style={styles.secondaryBtnText}>Log out</Text>
-                  </TouchableOpacity>
-
+              {/* Digital ID QR */}
+              {user && (
+                <View style={[styles.qrCard, shadow(C.ink, 0.08, 16, 4)]}>
+                  <View style={styles.qrHeader}>
+                    <Ionicons name="qr-code-outline" size={18} color={C.primaryDark} />
+                    <Text style={styles.qrTitle}>Digital ID</Text>
+                  </View>
+                  <Text style={styles.qrDesc}>Present this code to verify your Senior Citizen status</Text>
+                  <View style={styles.qrWrap}>
+                    <QRCode
+                      value={JSON.stringify({
+                        id: user.id,
+                        name: `${user.firstName} ${user.lastName}`,
+                        dob: user.dob,
+                        role: user.role,
+                      })}
+                      size={140}
+                      color={C.ink}
+                      backgroundColor={C.white}
+                    />
+                  </View>
+                  <View style={styles.qrLabelRow}>
+                    <Ionicons name="shield-checkmark" size={14} color={C.primary} />
+                    <Text style={styles.qrLabel}>OSCA Verified</Text>
+                  </View>
                   <TouchableOpacity
-                    style={[styles.primaryBtn, shadow(C.primaryDark, 0.24, 10, 4), webPointer]}
-                    onPress={handleSave}
-                    disabled={loading}
-                    activeOpacity={0.9}
+                    style={[styles.viewIdBtn, webPointer]}
+                    onPress={() => router.push('/digital-id')}
+                    activeOpacity={0.85}
                   >
-                    {loading ? (
-                      <ActivityIndicator color={C.white} />
-                    ) : (
-                      <>
-                        <Ionicons name="save-outline" size={18} color={C.white} />
-                        <Text style={styles.primaryBtnText}>Save changes</Text>
-                      </>
-                    )}
+                    <Ionicons name="card-outline" size={16} color={C.white} />
+                    <Text style={styles.viewIdBtnTxt}>View Full ID Card</Text>
                   </TouchableOpacity>
                 </View>
               )}
             </View>
 
-            {/* ── Right: editable details form ── */}
+            {/* Right Column: Information Form */}
             <View style={styles.rightCol}>
-              <View style={[styles.section, shadow(C.primaryDark, 0.06, 14, 4)]}>
+              <View style={[styles.formCard, shadow(C.ink, 0.08, 16, 4)]}>
                 <View style={styles.sectionHeader}>
-                  <View style={styles.sectionIconWrap}>
-                    <Ionicons name="person-outline" size={15} color={C.primaryDark} />
-                  </View>
-                  <Text style={styles.sectionTitle}>Personal Details</Text>
+                  <Text style={styles.sectionTitle}>Personal Information</Text>
+                  <Text style={styles.sectionSubtitle}>Update your personal details below</Text>
                 </View>
 
                 <View style={styles.fieldRow}>
-                  <View style={styles.fieldHalf}>
-                    <Text style={styles.label}>First Name</Text>
+                  <View style={styles.fieldThird}>
+                    <Text style={styles.label}>First Name *</Text>
                     <TextInput
                       style={styles.input}
                       value={form.firstName}
                       onChangeText={(value) => updateField('firstName', value)}
-                      placeholder="Juan"
+                      placeholder="First name"
                       placeholderTextColor={C.inkFaint}
                     />
                   </View>
-
-                  <View style={styles.fieldHalf}>
-                    <Text style={styles.label}>Last Name</Text>
-                    <TextInput
-                      style={styles.input}
-                      value={form.lastName}
-                      onChangeText={(value) => updateField('lastName', value)}
-                      placeholder="Dela Cruz"
-                      placeholderTextColor={C.inkFaint}
-                    />
-                  </View>
-                </View>
-
-                <View style={styles.fieldRow}>
-                  <View style={styles.fieldHalf}>
+                  <View style={styles.fieldThird}>
                     <Text style={styles.label}>Middle Name</Text>
                     <TextInput
                       style={styles.input}
                       value={form.middleName}
                       onChangeText={(value) => updateField('middleName', value)}
-                      placeholder="Optional"
+                      placeholder="Middle"
+                      placeholderTextColor={C.inkFaint}
+                    />
+                  </View>
+                  <View style={styles.fieldThird}>
+                    <Text style={styles.label}>Last Name *</Text>
+                    <TextInput
+                      style={styles.input}
+                      value={form.lastName}
+                      onChangeText={(value) => updateField('lastName', value)}
+                      placeholder="Last name"
+                      placeholderTextColor={C.inkFaint}
+                    />
+                  </View>
+                </View>
+
+                <View style={styles.fieldRow}>
+                  <View style={styles.fieldHalf}>
+                    <Text style={styles.label}>OSCA ID Number</Text>
+                    <TextInput
+                      style={[styles.input, styles.readOnly]}
+                      value={user?.oscaIdNumber || '—'}
+                      editable={false}
+                      placeholder="OSCA ID"
                       placeholderTextColor={C.inkFaint}
                     />
                   </View>
@@ -499,6 +629,158 @@ export default function ProfileScreen() {
                   multiline
                   placeholderTextColor={C.inkFaint}
                 />
+
+                {/* Birth Certificate Section */}
+                <View style={styles.birthcertSection}>
+                  <View style={styles.birthcertHeader}>
+                    <View style={styles.sectionHeaderInline}>
+                      <View style={styles.sectionIconWrap}>
+                        <Ionicons name="document-text-outline" size={15} color={C.primaryDark} />
+                      </View>
+                      <View>
+                        <Text style={styles.sectionTitle}>Birth Certificate</Text>
+                        <Text style={styles.childrenHint}>PDF, PNG, or JPG</Text>
+                      </View>
+                    </View>
+                    {!birthcert ? (
+                      <TouchableOpacity
+                        style={[styles.addChildBtn, webPointer]}
+                        onPress={handleBirthCertificatePick}
+                        disabled={birthcertUploading}
+                        activeOpacity={0.85}
+                      >
+                        {birthcertUploading ? (
+                          <ActivityIndicator color={C.white} size="small" />
+                        ) : (
+                          <Ionicons name="cloud-upload-outline" size={17} color={C.white} />
+                        )}
+                        <Text style={styles.addChildBtnText}>Upload</Text>
+                      </TouchableOpacity>
+                    ) : null}
+                  </View>
+
+                  {birthcert ? (
+                    <View style={styles.birthcertCard}>
+                      <TouchableOpacity
+                        style={[styles.birthcertCardMain, webPointer]}
+                        onPress={() => setViewerVisible(true)}
+                        activeOpacity={0.8}
+                      >
+                        <View style={styles.birthcertBadge}>
+                          <Ionicons name="checkmark-circle" size={20} color={C.primary} />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.birthcertCardTitle}>Birth Certificate</Text>
+                          <Text style={styles.birthcertCardSubtitle}>
+                            {birthcert.toLowerCase().includes('.pdf') ? 'PDF Document • Tap to view in-app' : 'Image File • Tap to view in-app'}
+                          </Text>
+                        </View>
+                        <View style={styles.birthcertViewPill}>
+                          <Ionicons name="eye-outline" size={15} color={C.primary} />
+                          <Text style={styles.birthcertViewPillText}>View</Text>
+                        </View>
+                      </TouchableOpacity>
+
+                      <View style={styles.birthcertActionsRow}>
+                        <TouchableOpacity
+                          style={[styles.birthcertActionBtn, styles.birthcertReplaceBtn, webPointer]}
+                          onPress={handleBirthCertificatePick}
+                          disabled={birthcertUploading || birthcertDeleting}
+                          activeOpacity={0.8}
+                        >
+                          {birthcertUploading ? (
+                            <ActivityIndicator size="small" color={C.primaryDark} />
+                          ) : (
+                            <Ionicons name="swap-horizontal-outline" size={16} color={C.primaryDark} />
+                          )}
+                          <Text style={styles.birthcertReplaceBtnText}>Replace</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          style={[styles.birthcertActionBtn, styles.birthcertDeleteBtn, webPointer]}
+                          onPress={handleDeleteBirthCertificate}
+                          disabled={birthcertUploading || birthcertDeleting}
+                          activeOpacity={0.8}
+                        >
+                          {birthcertDeleting ? (
+                            <ActivityIndicator size="small" color={C.error} />
+                          ) : (
+                            <Ionicons name="trash-outline" size={16} color={C.error} />
+                          )}
+                          <Text style={styles.birthcertDeleteBtnText}>Delete</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  ) : (
+                    <TouchableOpacity
+                      style={[styles.birthcertStatus, styles.birthcertMissing, webPointer]}
+                      onPress={handleBirthCertificatePick}
+                      disabled={birthcertUploading}
+                      activeOpacity={0.8}
+                    >
+                      <Ionicons name="alert-circle-outline" size={18} color={C.goldDark} />
+                      <Text style={[styles.birthcertStatusText, styles.birthcertMissingText]}>
+                        Missing - upload your birth certificate
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+
+                <View style={styles.divider} />
+
+                {/* Children Section */}
+                <View style={styles.childrenHeader}>
+                  <View style={styles.sectionHeaderInline}>
+                    <View style={styles.sectionIconWrap}>
+                      <Ionicons name="people-outline" size={15} color={C.primaryDark} />
+                    </View>
+                    <View>
+                      <Text style={styles.sectionTitle}>Children</Text>
+                      <Text style={styles.childrenHint}>Add as many children as needed.</Text>
+                    </View>
+                  </View>
+                  <TouchableOpacity style={[styles.addChildBtn, webPointer]} onPress={addChild} activeOpacity={0.85}>
+                    <Ionicons name="add" size={18} color={C.white} />
+                    <Text style={styles.addChildBtnText}>Add child</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {children.length === 0 ? (
+                  <Text style={styles.noChildrenText}>No children added yet.</Text>
+                ) : (
+                  children.map((child, index) => (
+                    <View key={child.id} style={styles.childRow}>
+                      <View style={styles.childNumber}>
+                        <Text style={styles.childNumberText}>{index + 1}</Text>
+                      </View>
+                      <View style={styles.childFields}>
+                        <Text style={styles.label}>Child name</Text>
+                        <TextInput
+                          style={styles.input}
+                          value={child.name}
+                          onChangeText={(value) => updateChild(child.id, 'name', value)}
+                          placeholder="Full name"
+                          placeholderTextColor={C.inkFaint}
+                        />
+                        <Text style={styles.label}>Date of birth</Text>
+                        <TextInput
+                          style={styles.input}
+                          value={child.dob}
+                          onChangeText={(value) => updateChild(child.id, 'dob', value)}
+                          placeholder="YYYY-MM-DD"
+                          placeholderTextColor={C.inkFaint}
+                        />
+                      </View>
+                      <TouchableOpacity
+                        style={[styles.removeChildBtn, webPointer]}
+                        onPress={() => removeChild(child.id)}
+                        activeOpacity={0.8}
+                      >
+                        <Ionicons name="trash-outline" size={16} color={C.error} />
+                      </TouchableOpacity>
+                    </View>
+                  ))
+                )}
               </View>
 
               {Platform.OS !== 'web' && (
@@ -530,7 +812,7 @@ export default function ProfileScreen() {
         </ScrollView>
       </KeyboardAvoidingView>
 
-      {/* Gender Picker Modal — bottom sheet on mobile, centered dialog on web */}
+      {/* Gender Picker Modal */}
       <Modal visible={genderOpen} transparent animationType="fade" onRequestClose={() => setGenderOpen(false)}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setGenderOpen(false)}>
           <View style={styles.modalSheet}>
@@ -568,6 +850,133 @@ export default function ProfileScreen() {
             ))}
           </View>
         </TouchableOpacity>
+      </Modal>
+
+      {/* Birth Certificate In-App Viewer Modal */}
+      <Modal
+        visible={viewerVisible}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setViewerVisible(false)}
+      >
+        <View style={styles.viewerModalOverlay}>
+          <SafeAreaView style={styles.viewerModalSafe}>
+            {/* Header */}
+            <View style={styles.viewerModalHeader}>
+              <TouchableOpacity
+                style={[styles.viewerModalCloseBtn, webPointer]}
+                onPress={() => setViewerVisible(false)}
+                activeOpacity={0.8}
+                accessibilityLabel="Close viewer"
+              >
+                <Ionicons name="close" size={22} color={C.white} />
+              </TouchableOpacity>
+
+              <View style={styles.viewerModalTitleWrap}>
+                <Text style={styles.viewerModalTitle}>Birth Certificate</Text>
+                <Text style={styles.viewerModalSubtitle}>
+                  {birthcert?.toLowerCase().includes('.pdf') ? 'PDF Document' : 'Image Preview'}
+                </Text>
+              </View>
+
+              <TouchableOpacity
+                style={[styles.viewerModalDeleteHeaderBtn, webPointer]}
+                onPress={handleDeleteBirthCertificate}
+                disabled={birthcertDeleting}
+                activeOpacity={0.8}
+                accessibilityLabel="Delete birth certificate"
+              >
+                {birthcertDeleting ? (
+                  <ActivityIndicator size="small" color="#FF8080" />
+                ) : (
+                  <Ionicons name="trash-outline" size={20} color="#FF8080" />
+                )}
+              </TouchableOpacity>
+            </View>
+
+            {/* Viewer Content Area */}
+            <View style={styles.viewerModalContent}>
+              {birthcert ? (
+                birthcert.toLowerCase().includes('.pdf') ? (
+                  Platform.OS === 'web' ? (
+                    // @ts-ignore
+                    <iframe
+                      key={birthcert}
+                      src={birthcert}
+                      style={{ width: '100%', height: '100%', border: 'none', borderRadius: 12 }}
+                      title="Birth Certificate PDF"
+                    />
+                  ) : (
+                    <WebView
+                      key={birthcert}
+                      source={{
+                        uri:
+                          Platform.OS === 'android'
+                            ? `https://docs.google.com/gview?embedded=true&url=${encodeURIComponent(birthcert)}`
+                            : birthcert,
+                      }}
+                      style={styles.viewerWebView}
+                      startInLoadingState
+                      renderLoading={() => (
+                        <View style={styles.viewerLoadingWrap}>
+                          <ActivityIndicator size="large" color={C.primarySoft} />
+                          <Text style={styles.viewerLoadingText}>Loading PDF...</Text>
+                        </View>
+                      )}
+                    />
+                  )
+                ) : (
+                  <ScrollView
+                    contentContainerStyle={styles.viewerImageScroll}
+                    maximumZoomScale={4}
+                    minimumZoomScale={1}
+                    showsHorizontalScrollIndicator={false}
+                    showsVerticalScrollIndicator={false}
+                    bounces={false}
+                  >
+                    <Image
+                      key={birthcert}
+                      source={{ uri: birthcert }}
+                      style={styles.viewerImage}
+                      resizeMode="contain"
+                    />
+                  </ScrollView>
+                )
+              ) : null}
+            </View>
+
+            {/* Footer Controls */}
+            <View style={styles.viewerModalFooter}>
+              <TouchableOpacity
+                style={[styles.viewerFooterBtn, styles.viewerFooterReplace, webPointer]}
+                onPress={handleBirthCertificatePick}
+                disabled={birthcertUploading || birthcertDeleting}
+                activeOpacity={0.85}
+              >
+                {birthcertUploading ? (
+                  <ActivityIndicator size="small" color={C.primaryDark} />
+                ) : (
+                  <Ionicons name="swap-horizontal-outline" size={18} color={C.primaryDark} />
+                )}
+                <Text style={styles.viewerFooterReplaceText}>Replace</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.viewerFooterBtn, styles.viewerFooterDelete, webPointer]}
+                onPress={handleDeleteBirthCertificate}
+                disabled={birthcertUploading || birthcertDeleting}
+                activeOpacity={0.85}
+              >
+                {birthcertDeleting ? (
+                  <ActivityIndicator size="small" color="#FF8080" />
+                ) : (
+                  <Ionicons name="trash-outline" size={18} color="#FF8080" />
+                )}
+                <Text style={styles.viewerFooterDeleteText}>Delete</Text>
+              </TouchableOpacity>
+            </View>
+          </SafeAreaView>
+        </View>
       </Modal>
     </SafeAreaView>
   );
@@ -619,7 +1028,6 @@ const styles = StyleSheet.create({
     width: 40,
   },
 
-  // Two-column on web (sidebar + form), single stacked column on mobile
   bodyLayout: {
     flexDirection: Platform.OS === 'web' ? 'row' : 'column',
     alignItems: 'flex-start',
@@ -635,7 +1043,6 @@ const styles = StyleSheet.create({
     gap: sp(5),
   },
 
-  // Profile summary card
   profileCard: {
     backgroundColor: C.card,
     borderRadius: 24,
@@ -696,206 +1103,573 @@ const styles = StyleSheet.create({
     fontSize: 12.5,
     color: C.inkSoft,
   },
+  changePhotoBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: C.primarySoft,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 20,
+    marginTop: sp(3),
+  },
+  changePhotoBtnText: {
+    fontFamily: 'InterBody',
+    fontSize: 12,
+    fontWeight: '600',
+    color: C.primaryDark,
+  },
+  metaRow: {
+    flexDirection: 'row',
+    gap: sp(3),
+    marginTop: sp(4),
+    paddingHorizontal: sp(4),
+    width: '100%',
+  },
+  metaPill: {
+    flex: 1,
+    backgroundColor: C.bg,
+    borderRadius: 12,
+    paddingVertical: sp(2.5),
+    alignItems: 'center',
+  },
+  metaLabel: {
+    fontFamily: 'InterBody',
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+    color: C.inkFaint,
+    textTransform: 'uppercase',
+  },
+  metaVal: {
+    fontFamily: 'InterBody',
+    fontSize: 13,
+    fontWeight: '700',
+    color: C.ink,
+    marginTop: 2,
+  },
 
-  section: {
+  formCard: {
     backgroundColor: C.card,
-    borderRadius: 22,
+    borderRadius: 24,
     padding: sp(5),
     width: '100%',
   },
   sectionHeader: {
+    marginBottom: sp(5),
+  },
+  sectionHeaderInline: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: sp(2),
-    marginBottom: sp(4),
+    flex: 1,
   },
   sectionIconWrap: {
-    width: 30,
-    height: 30,
-    borderRadius: 9,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     backgroundColor: C.primarySoft,
     alignItems: 'center',
     justifyContent: 'center',
   },
   sectionTitle: {
-    fontFamily: 'InterBody',
-    fontWeight: '700',
-    fontSize: 15.5,
+    fontFamily: 'FraunTitle',
+    fontSize: 17,
     color: C.ink,
   },
+  sectionSubtitle: {
+    fontFamily: 'InterBody',
+    fontSize: 12,
+    color: C.inkFaint,
+    marginTop: 2,
+  },
+
   fieldRow: {
     flexDirection: 'row',
     gap: sp(3),
-    marginBottom: sp(1),
+    marginBottom: sp(3.5),
+  },
+  fieldFull: {
+    flex: 1,
   },
   fieldHalf: {
     flex: 1,
   },
-  fieldFull: {
-    width: '100%',
+  fieldThird: {
+    flex: 1,
   },
   label: {
     fontFamily: 'InterBody',
-    fontWeight: '600',
-    fontSize: 11.5,
-    letterSpacing: 0.2,
+    fontSize: 12,
+    fontWeight: '700',
     color: C.inkSoft,
-    marginBottom: 7,
+    marginBottom: 6,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
   },
   input: {
-    borderWidth: 1.2,
-    borderColor: C.line,
     backgroundColor: C.bg,
-    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: C.line,
+    borderRadius: 14,
     paddingHorizontal: 14,
     paddingVertical: 12,
     fontFamily: 'InterBody',
     fontSize: 14,
     color: C.ink,
-    marginBottom: sp(3),
     ...webNoOutline,
   },
   textArea: {
-    minHeight: 90,
+    minHeight: 76,
     textAlignVertical: 'top',
+    paddingTop: 12,
+    marginBottom: sp(3.5),
   },
   readOnly: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: C.primarySoft,
-    borderColor: 'transparent',
+    backgroundColor: hexToRgba(C.line, 0.45),
   },
   readOnlyText: {
     fontFamily: 'InterBody',
     fontSize: 14,
-    color: C.inkSoft,
-    fontWeight: '600',
+    color: C.ink,
   },
   placeholderText: {
-    color: C.inkFaint,
     fontFamily: 'InterBody',
     fontSize: 14,
+    color: C.inkFaint,
   },
   divider: {
     height: 1,
     backgroundColor: C.line,
-    marginBottom: sp(3),
+    marginVertical: sp(4),
   },
 
-  actions: {
-    flexDirection: 'row',
-    gap: sp(3),
+  birthcertSection: {
+    marginTop: sp(1),
   },
-  secondaryBtn: {
+  birthcertHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: sp(2),
+    marginBottom: sp(2),
+  },
+  birthcertStatus: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+  },
+  birthcertSubmitted: {
+    backgroundColor: C.primarySoft,
+  },
+  birthcertMissing: {
+    backgroundColor: C.goldSoft,
+  },
+  birthcertStatusText: {
+    fontFamily: 'InterBody',
+    fontSize: 12,
+    fontWeight: '700',
+    color: C.primaryDark,
+  },
+  birthcertMissingText: {
+    color: C.goldDark,
+  },
+  birthcertCard: {
+    backgroundColor: C.card,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: C.line,
+    overflow: 'hidden',
+  },
+  birthcertCardMain: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: sp(3),
+    gap: sp(2.5),
+    backgroundColor: hexToRgba(C.primary, 0.05),
+  },
+  birthcertBadge: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: C.primarySoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  birthcertCardTitle: {
+    fontFamily: 'InterBody',
+    fontSize: 13,
+    fontWeight: '700',
+    color: C.ink,
+  },
+  birthcertCardSubtitle: {
+    fontFamily: 'InterBody',
+    fontSize: 11,
+    color: C.inkFaint,
+    marginTop: 2,
+  },
+  birthcertViewPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: C.primarySoft,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 20,
+  },
+  birthcertViewPillText: {
+    fontFamily: 'InterBody',
+    fontSize: 12,
+    fontWeight: '700',
+    color: C.primaryDark,
+  },
+  birthcertActionsRow: {
+    flexDirection: 'row',
+    borderTopWidth: 1,
+    borderTopColor: C.line,
+    backgroundColor: C.card,
+  },
+  birthcertActionBtn: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
-    backgroundColor: C.goldSoft,
-    borderRadius: 14,
-    paddingVertical: 15,
-    borderWidth: 1,
-    borderColor: '#EEDDB8',
+    paddingVertical: 10,
   },
-  secondaryBtnText: {
+  birthcertReplaceBtn: {
+    borderRightWidth: 1,
+    borderRightColor: C.line,
+  },
+  birthcertReplaceBtnText: {
     fontFamily: 'InterBody',
-    fontWeight: '700',
-    fontSize: 14,
+    fontSize: 12,
+    fontWeight: '600',
     color: C.primaryDark,
   },
+  birthcertDeleteBtn: {},
+  birthcertDeleteBtnText: {
+    fontFamily: 'InterBody',
+    fontSize: 12,
+    fontWeight: '600',
+    color: C.error,
+  },
+
+  childrenHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: sp(2),
+    marginBottom: sp(3),
+  },
+  childrenHint: {
+    fontFamily: 'InterBody',
+    fontSize: 11,
+    color: C.inkFaint,
+    marginTop: 2,
+  },
+  addChildBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: C.primaryDark,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  addChildBtnText: {
+    fontFamily: 'InterBody',
+    fontWeight: '700',
+    fontSize: 12,
+    color: C.white,
+  },
+  noChildrenText: {
+    fontFamily: 'InterBody',
+    fontSize: 13,
+    color: C.inkFaint,
+    marginBottom: sp(2),
+  },
+  childRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: sp(2),
+    borderWidth: 1,
+    borderColor: C.line,
+    borderRadius: 14,
+    padding: sp(3),
+    marginBottom: sp(2),
+    backgroundColor: C.bg,
+  },
+  childNumber: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: C.primarySoft,
+    marginTop: 2,
+  },
+  childNumberText: {
+    fontFamily: 'InterBody',
+    fontWeight: '700',
+    fontSize: 12,
+    color: C.primaryDark,
+  },
+  childFields: {
+    flex: 1,
+  },
+  removeChildBtn: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 10,
+    backgroundColor: '#FCE8E6',
+  },
+
+  actions: {
+    flexDirection: 'row',
+    gap: sp(3),
+    marginTop: sp(4),
+  },
   primaryBtn: {
-    flex: 1.3,
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
     backgroundColor: C.primaryDark,
     borderRadius: 14,
-    paddingVertical: 15,
+    paddingVertical: 14,
   },
   primaryBtnText: {
     fontFamily: 'InterBody',
-    fontWeight: '700',
     fontSize: 14,
+    fontWeight: '700',
     color: C.white,
   },
-  emptyState: {
-    flex: 1,
+  secondaryBtn: {
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    padding: sp(6),
+    gap: 6,
+    backgroundColor: C.card,
+    borderWidth: 1,
+    borderColor: C.line,
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
   },
-  emptyTitle: {
-    fontFamily: 'FraunTitle',
-    fontSize: 20,
-    color: C.ink,
-    marginTop: sp(3),
-  },
-  emptyText: {
+  secondaryBtnText: {
     fontFamily: 'InterBody',
     fontSize: 14,
-    color: C.inkSoft,
-    marginTop: 6,
-    textAlign: 'center',
+    fontWeight: '600',
+    color: C.ink,
   },
+
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(14,31,22,0.5)',
-    justifyContent: Platform.OS === 'web' ? 'center' : 'flex-end',
-    alignItems: Platform.OS === 'web' ? 'center' : 'stretch',
-    padding: Platform.OS === 'web' ? sp(4) : 0,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'flex-end',
   },
   modalSheet: {
     backgroundColor: C.card,
-    borderRadius: Platform.OS === 'web' ? 20 : 0,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    paddingTop: sp(3),
-    paddingBottom: Platform.OS === 'web' ? sp(3) : sp(8),
+    padding: sp(5),
+    paddingBottom: Platform.OS === 'ios' ? sp(9) : sp(5),
     width: '100%',
-    maxWidth: Platform.OS === 'web' ? 360 : undefined,
-    ...shadow(C.primaryDark, 0.25, 24, 10),
+    maxWidth: Platform.OS === 'web' ? 460 : '100%',
+    alignSelf: 'center',
   },
   modalHandle: {
-    width: 44,
-    height: 5,
-    borderRadius: 3,
+    width: 36,
+    height: 4,
+    borderRadius: 2,
     backgroundColor: C.line,
     alignSelf: 'center',
-    marginBottom: sp(4),
+    marginBottom: sp(3),
   },
   modalTitle: {
-    fontFamily: 'InterBody',
-    fontWeight: '600',
-    fontSize: 16,
+    fontFamily: 'FraunTitle',
+    fontSize: 17,
     color: C.ink,
-    textAlign: 'center',
-    marginBottom: sp(2),
-    paddingHorizontal: sp(5),
+    marginBottom: sp(3),
   },
   modalItem: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 16,
-    paddingHorizontal: sp(6),
+    paddingVertical: sp(3),
     borderBottomWidth: 1,
-    borderBottomColor: C.line,
+    borderBottomColor: hexToRgba(C.line, 0.5),
   },
-  modalItemActive: { backgroundColor: C.primarySoft },
-  modalItemText: { fontFamily: 'InterBody', fontSize: 16, color: C.ink },
-  modalItemTextActive: { color: C.primaryDark, fontWeight: '700' },
-  qrSection: {
+  modalItemActive: {
+    backgroundColor: hexToRgba(C.primary, 0.05),
+    borderRadius: 10,
+    paddingHorizontal: sp(2),
+  },
+  modalItemText: {
+    fontFamily: 'InterBody',
+    fontSize: 15,
+    color: C.ink,
+  },
+  modalItemTextActive: {
+    fontWeight: '700',
+    color: C.primaryDark,
+  },
+
+  viewerModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(10, 20, 16, 0.96)',
+  },
+  viewerModalSafe: {
+    flex: 1,
+  },
+  viewerModalHeader: {
+    flexDirection: 'row',
     alignItems: 'center',
-    marginTop: sp(2),
+    justifyContent: 'space-between',
+    paddingHorizontal: sp(4),
+    paddingVertical: sp(3),
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255, 255, 255, 0.12)',
+  },
+  viewerModalCloseBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  viewerModalTitleWrap: {
+    alignItems: 'center',
+  },
+  viewerModalTitle: {
+    fontFamily: 'FraunTitle',
+    fontSize: 17,
+    fontWeight: '600',
+    color: C.white,
+  },
+  viewerModalSubtitle: {
+    fontFamily: 'InterBody',
+    fontSize: 11,
+    color: 'rgba(255, 255, 255, 0.65)',
+    marginTop: 2,
+  },
+  viewerModalDeleteHeaderBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: 'rgba(255, 80, 80, 0.15)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  viewerModalContent: {
+    flex: 1,
+    backgroundColor: '#0F1A14',
+  },
+  viewerWebView: {
+    flex: 1,
+    backgroundColor: '#0F1A14',
+  },
+  viewerLoadingWrap: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: '#0F1A14',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+  },
+  viewerLoadingText: {
+    fontFamily: 'InterBody',
+    fontSize: 13,
+    color: 'rgba(255, 255, 255, 0.7)',
+  },
+  viewerImageScroll: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: sp(3),
+  },
+  viewerImage: {
+    width: '100%',
+    height: '100%',
+    minHeight: 380,
+  },
+  viewerModalFooter: {
+    flexDirection: 'row',
+    gap: sp(3),
+    paddingHorizontal: sp(4),
+    paddingVertical: sp(3.5),
+    backgroundColor: 'rgba(15, 26, 20, 0.95)',
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  viewerFooterBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    borderRadius: 12,
+  },
+  viewerFooterReplace: {
+    backgroundColor: C.primarySoft,
+  },
+  viewerFooterReplaceText: {
+    fontFamily: 'InterBody',
+    fontSize: 13,
+    fontWeight: '700',
+    color: C.primaryDark,
+  },
+  viewerFooterDelete: {
+    backgroundColor: 'rgba(255, 80, 80, 0.16)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 80, 80, 0.3)',
+  },
+  viewerFooterDeleteText: {
+    fontFamily: 'InterBody',
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#FF8080',
+  },
+
+  qrCard: {
+    backgroundColor: C.card,
+    borderRadius: 24,
+    padding: sp(5),
+    alignItems: 'center',
     width: '100%',
   },
-  qrDivider: {
-    height: 1,
-    width: '100%',
-    backgroundColor: C.line,
+  qrHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 4,
+  },
+  qrTitle: {
+    fontFamily: 'FraunTitle',
+    fontSize: 16,
+    color: C.ink,
+  },
+  qrDesc: {
+    fontFamily: 'InterBody',
+    fontSize: 12,
+    color: C.inkFaint,
+    textAlign: 'center',
     marginBottom: sp(4),
+    paddingHorizontal: sp(2),
   },
   qrWrap: {
     padding: 14,
@@ -931,5 +1705,26 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     fontSize: 13,
     color: C.white,
+  },
+
+  emptyState: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: sp(6),
+  },
+  emptyTitle: {
+    fontFamily: 'FraunTitle',
+    fontSize: 20,
+    color: C.ink,
+    marginTop: sp(3),
+  },
+  emptyText: {
+    fontFamily: 'InterBody',
+    fontSize: 13,
+    color: C.inkFaint,
+    marginTop: 6,
+    marginBottom: sp(5),
+    textAlign: 'center',
   },
 });

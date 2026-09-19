@@ -111,7 +111,7 @@ class STTService:
         # Fallback offline / rule-based transcription
         return {
             "success": True,
-            "text": "Magandang araw po Lolo Pat! May itatanong po ako tungkol sa aking benepisyo.",
+            "text": "Magandang araw po Lolo Aurea! May itatanong po ako tungkol sa aking benepisyo.",
             "confidence": 0.85,
             "language": language,
             "source": "fallback_stt",

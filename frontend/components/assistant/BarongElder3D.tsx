@@ -1,7 +1,7 @@
 /**
  * frontend/components/assistant/BarongElder3D.tsx
  * ─────────────────────────────────────────────────────────────────────────────
- * Lolo Pat — Pixar-Quality 3D-Shaded Clay Grandfather Avatar
+ * Lolo Aurea — Pixar-Quality 3D-Shaded Filipino Senior Avatar in Barong
  *
  * Uses advanced SVG sphere shading (multi-layer radial gradients + specular
  * highlights) to create genuine 3D depth — no CDN, no packages, works offline.
@@ -222,42 +222,42 @@ export default function BarongElder3D({
         },
       ]} />
 
-      <TouchableOpacity activeOpacity={0.94} onPress={handleTap} style={styles.touch} accessibilityLabel="Lolo Pat Avatar">
+      <TouchableOpacity activeOpacity={0.94} onPress={handleTap} style={styles.touch} accessibilityLabel="Lolo Aurea Avatar">
         <Animated.View style={[styles.avatarRig, { transform: [{ scale: tapBounce }] }]}>
           <Svg width={320} height={320} viewBox="0 0 320 320">
             <Defs>
               {/* 3D Skin — off-centre radial for sphere depth illusion */}
               <RadialGradient id="sk" cx="40%" cy="30%" r="60%">
-                <Stop offset="0%"   stopColor="#FFE5D0" />
-                <Stop offset="40%"  stopColor="#F5C0A0" />
-                <Stop offset="75%"  stopColor="#E89878" />
-                <Stop offset="100%" stopColor="#C87050" />
+                <Stop offset="0%"   stopColor="#DFA06F" />
+                <Stop offset="40%"  stopColor="#B9784D" />
+                <Stop offset="75%"  stopColor="#8C4F35" />
+                <Stop offset="100%" stopColor="#5A2E24" />
               </RadialGradient>
               <RadialGradient id="skSpec" cx="34%" cy="24%" r="22%">
-                <Stop offset="0%"   stopColor="rgba(255,255,245,0.68)" />
-                <Stop offset="100%" stopColor="rgba(255,255,245,0)" />
+                <Stop offset="0%"   stopColor="rgba(255,224,190,0.42)" />
+                <Stop offset="100%" stopColor="rgba(255,224,190,0)" />
               </RadialGradient>
               <RadialGradient id="skRim" cx="88%" cy="82%" r="38%">
-                <Stop offset="0%"   stopColor="rgba(185,100,65,0.42)" />
-                <Stop offset="100%" stopColor="rgba(185,100,65,0)" />
+                <Stop offset="0%"   stopColor="rgba(70,28,20,0.42)" />
+                <Stop offset="100%" stopColor="rgba(70,28,20,0)" />
               </RadialGradient>
 
               {/* Ear */}
               <RadialGradient id="ear" cx="38%" cy="35%" r="55%">
-                <Stop offset="0%"   stopColor="#FFCFB4" />
-                <Stop offset="65%"  stopColor="#E8A882" />
-                <Stop offset="100%" stopColor="#C87850" />
+                <Stop offset="0%"   stopColor="#DFA06F" />
+                <Stop offset="65%"  stopColor="#A86645" />
+                <Stop offset="100%" stopColor="#683528" />
               </RadialGradient>
 
-              {/* Hair — grey silver */}
+              {/* Hair — deep natural curls */}
               <RadialGradient id="hair" cx="38%" cy="26%" r="54%">
-                <Stop offset="0%"   stopColor="#FFFFFF" />
-                <Stop offset="55%"  stopColor="#ECECEC" />
-                <Stop offset="100%" stopColor="#C8C8C8" />
+                <Stop offset="0%"   stopColor="#4A2B24" />
+                <Stop offset="55%"  stopColor="#1E1313" />
+                <Stop offset="100%" stopColor="#080809" />
               </RadialGradient>
               <RadialGradient id="hairSpec" cx="33%" cy="22%" r="20%">
-                <Stop offset="0%"   stopColor="rgba(255,255,255,0.95)" />
-                <Stop offset="100%" stopColor="rgba(255,255,255,0)" />
+                <Stop offset="0%"   stopColor="rgba(137,88,61,0.72)" />
+                <Stop offset="100%" stopColor="rgba(137,88,61,0)" />
               </RadialGradient>
 
               {/* Nose */}
@@ -271,21 +271,21 @@ export default function BarongElder3D({
                 <Stop offset="100%" stopColor="rgba(255,255,255,0)" />
               </RadialGradient>
 
-              {/* Sweater — teal/green */}
+              {/* Barong Tagalog — warm piña fabric with gold embroidery */}
               <LinearGradient id="sw" x1="30%" y1="0%" x2="70%" y2="100%">
-                <Stop offset="0%"   stopColor="#5E9E90" />
-                <Stop offset="45%"  stopColor="#4A8878" />
-                <Stop offset="100%" stopColor="#326658" />
+                <Stop offset="0%"   stopColor="#FFF6D8" />
+                <Stop offset="45%"  stopColor="#E8D6A4" />
+                <Stop offset="100%" stopColor="#B99B5B" />
               </LinearGradient>
               <RadialGradient id="swSpec" cx="42%" cy="18%" r="35%">
-                <Stop offset="0%"   stopColor="rgba(180,240,220,0.30)" />
-                <Stop offset="100%" stopColor="rgba(180,240,220,0)" />
+                <Stop offset="0%"   stopColor="rgba(255,255,235,0.48)" />
+                <Stop offset="100%" stopColor="rgba(255,255,235,0)" />
               </RadialGradient>
 
-              {/* Collar — khaki */}
+              {/* Barong collar */}
               <LinearGradient id="col" x1="0%" y1="0%" x2="0%" y2="100%">
-                <Stop offset="0%"   stopColor="#AFA060" />
-                <Stop offset="100%" stopColor="#887840" />
+                <Stop offset="0%"   stopColor="#D7B96A" />
+                <Stop offset="100%" stopColor="#8D6A2F" />
               </LinearGradient>
 
               {/* Eye sclera */}
@@ -295,11 +295,11 @@ export default function BarongElder3D({
                 <Stop offset="100%" stopColor="#D8D0C4" />
               </RadialGradient>
 
-              {/* Iris — warm blue/grey */}
+              {/* Iris — warm brown */}
               <RadialGradient id="iris" cx="40%" cy="35%" r="55%">
-                <Stop offset="0%"   stopColor="#6890B8" />
-                <Stop offset="55%"  stopColor="#305888" />
-                <Stop offset="100%" stopColor="#182848" />
+                <Stop offset="0%"   stopColor="#C9914E" />
+                <Stop offset="55%"  stopColor="#75431F" />
+                <Stop offset="100%" stopColor="#2B150B" />
               </RadialGradient>
 
               {/* Cheek blush */}
@@ -329,14 +329,16 @@ export default function BarongElder3D({
             </Defs>
 
             {/* ═══════════════════════════════════════════════
-                BODY — Teal shirt with khaki collar
+                BODY — Barong Tagalog with gold embroidery
             ═══════════════════════════════════════════════ */}
             <G id="body">
               {/* Ground shadow */}
               <Ellipse cx="160" cy="312" rx="92" ry="10" fill="rgba(0,0,0,0.12)" />
-              {/* Shirt */}
+              {/* Translucent barong fabric */}
               <Path d="M 50 320 C 50 248, 88 226, 160 226 C 232 226, 270 248, 270 320 Z" fill="url(#sw)" />
               <Path d="M 50 320 C 50 248, 88 226, 160 226 C 232 226, 270 248, 270 320 Z" fill="url(#swSpec)" />
+              <Path d="M 160 232 L 160 318 M 145 238 L 145 318 M 175 238 L 175 318" stroke="#A77A32" strokeWidth="2" opacity="0.48" />
+              <Path d="M 105 250 Q 160 270 215 250 M 96 267 Q 160 287 224 267" stroke="#B88B3E" strokeWidth="1.4" fill="none" opacity="0.42" />
               {/* Collar left */}
               <Path d="M 122 226 C 110 222, 124 198, 148 204 L 156 226 Z" fill="url(#col)" stroke="#706030" strokeWidth="1.5" />
               {/* Collar right */}
@@ -358,6 +360,8 @@ export default function BarongElder3D({
               <Path d="M 63 152 Q 59 161 65 170" stroke="#D07858" strokeWidth="2.5" fill="none" strokeLinecap="round" />
               <Ellipse cx="250" cy="160" rx="19" ry="26" fill="url(#ear)" />
               <Path d="M 257 152 Q 261 161 255 170" stroke="#D07858" strokeWidth="2.5" fill="none" strokeLinecap="round" />
+              <Circle cx="70" cy="187" r="5" fill="#D7B96A" stroke="#8D6A2F" strokeWidth="2" />
+              <Circle cx="250" cy="187" r="5" fill="#D7B96A" stroke="#8D6A2F" strokeWidth="2" />
 
               {/* ── Face ── */}
               <Ellipse cx="160" cy="142" rx="92" ry="98" fill="url(#sk)" />
@@ -372,7 +376,7 @@ export default function BarongElder3D({
               <Ellipse cx="96"  cy="176" rx="30" ry="22" fill="url(#blush)" />
               <Ellipse cx="224" cy="176" rx="30" ry="22" fill="url(#blush)" />
 
-              {/* ── Grey Hair (3D sphere clusters) ── */}
+              {/* ── Dark curly hair (3D sphere clusters) ── */}
               {[
                 [130, 60, 38], [160, 52, 42], [190, 60, 36],
                 [106, 76, 30], [214, 76, 30],
@@ -460,14 +464,9 @@ export default function BarongElder3D({
               <Ellipse cx="149" cy="194" rx="4"   ry="3"   fill="#804028" />
               <Ellipse cx="171" cy="194" rx="4"   ry="3"   fill="#804028" />
 
-              {/* ── Mustache (white puff clusters) ── */}
-              <G id="mustache">
-                <Ellipse cx="138" cy="210" rx="21" ry="13" fill="url(#hair)" />
-                <Ellipse cx="138" cy="210" rx="21" ry="13" fill="url(#hairSpec)" />
-                <Ellipse cx="182" cy="210" rx="21" ry="13" fill="url(#hair)" />
-                <Ellipse cx="182" cy="210" rx="21" ry="13" fill="url(#hairSpec)" />
-                <Ellipse cx="160" cy="208" rx="10" ry="8"  fill="url(#hair)" />
-              </G>
+              {/* ── Soft smile and mature smile lines ── */}
+              <Path d="M 126 210 Q 116 216 112 224" stroke="#7A402E" strokeWidth="2" fill="none" opacity="0.7" />
+              <Path d="M 194 210 Q 204 216 208 224" stroke="#7A402E" strokeWidth="2" fill="none" opacity="0.7" />
 
               {/* ── MOUTH — resting smile when silent ── */}
               {mouthOpen <= 0.06 && (

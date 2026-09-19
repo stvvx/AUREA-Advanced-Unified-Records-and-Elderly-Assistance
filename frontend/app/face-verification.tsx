@@ -458,7 +458,7 @@ export default function FaceVerificationScreen() {
   const pickAnglePhoto = async (angle: 'center' | 'left' | 'right') => {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ['images'],
         allowsEditing: true,
         aspect: [1, 1],
         quality: 0.85,
@@ -711,7 +711,7 @@ export default function FaceVerificationScreen() {
                 {Platform.OS !== 'web' && !manualMode ? (
                   <CameraView
                     ref={cameraRef}
-                    style={StyleSheet.absoluteFillObject}
+                    style={StyleSheet.absoluteFill}
                     facing="front"
                     onCameraReady={handleCameraReady}
                   />

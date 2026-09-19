@@ -1,7 +1,7 @@
 /**
  * frontend/components/assistant/AudioVisualizer.tsx
  * ─────────────────────────────────────────────────────────────────────────────
- * Premium Audio Waveform & Acoustic Ripple Visualizer for LOLO PAT.
+ * Premium Audio Waveform & Acoustic Ripple Visualizer for LOLO AUREA.
  * Supports:
  *   - Real-time amplitude-driven harmonic waveform bars
  *   - Concentric expanding acoustic pulse ripples
@@ -160,9 +160,9 @@ export default function AudioVisualizer({
   const textColor = isListening ? '#1D4ED8' : '#92400E';
 
   const defaultLabel = isListening
-    ? '🎙️ Nakikinig si Lolo Pat...'
+    ? '🎙️ Nakikinig si Lolo Aurea...'
     : isActive
-    ? '🔊 Nagsasalita si Lolo Pat...'
+    ? '🔊 Nagsasalita si Lolo Aurea...'
     : '💤 Tahimik / Nakatayo si Lolo';
 
   return (
@@ -244,7 +244,7 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
   rippleContainer: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     alignItems: 'center',
     justifyContent: 'center',
   },

@@ -38,7 +38,7 @@ deactivate () {
 # unset irrelevant variables
 deactivate nondestructive
 
-VIRTUAL_ENV="C:\Users\aia\Desktop\AUREA-Advanced-Unified-Records-and-Elderly-Assistance\backend\.venv"
+VIRTUAL_ENV="C:\Users\Jerome Rosario\OneDrive\Desktop\AUREA\backend\.venv"
 export VIRTUAL_ENV
 
 _OLD_VIRTUAL_PATH="$PATH"

@@ -19,6 +19,12 @@ type LoginPayload = {
   password: string;
 };
 
+export type ChildProfile = {
+  id: string;
+  name: string;
+  dob: string;
+};
+
 const normalizeBaseUrl = () => {
   const hostUri =
     Constants.expoConfig?.hostUri ||
@@ -81,7 +87,7 @@ export async function registerUser(payload: RegisterPayload): Promise<{ message:
   return request('/api/auth/register', payload);
 }
 
-export async function loginUser(payload: LoginPayload): Promise<{ message: string; user: { id: number; firstName: string; middleName?: string; lastName: string; dob?: string; gender?: string; civilStatus?: string; contact?: string; address?: string; email: string; avatarUrl?: string | null; profilePhoto?: string | null; role?: string } }> {
+export async function loginUser(payload: LoginPayload): Promise<{ message: string; user: { id: number; firstName: string; middleName?: string; lastName: string; dob?: string; gender?: string; civilStatus?: string; contact?: string; address?: string; email: string; avatarUrl?: string | null; profilePhoto?: string | null; oscaIdNumber?: string; role?: string; children?: ChildProfile[] } }> {
   return request('/api/auth/login', payload);
 }
 
@@ -98,6 +104,9 @@ export type UserProfile = {
   email: string;
   avatarUrl?: string | null;
   profilePhoto?: string | null;
+  birthcert?: string | null;
+  oscaIdNumber?: string;
+  children?: ChildProfile[];
   signature?: string | null;
   digitalSignature?: string | null;
   createdAt?: string;
@@ -120,6 +129,46 @@ export async function getUser(userId: number): Promise<{ user: UserProfile }> {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data?.message || 'Failed to fetch profile.');
   return data as { user: UserProfile };
+}
+
+export async function uploadBirthCertificate(
+  userId: number,
+  base64File: string,
+  mimeType: string,
+  fileName?: string,
+): Promise<{ birthcert: string }> {
+  let response: Response;
+
+  try {
+    response = await fetch(`${API_BASE_URL}/api/user/${userId}/birthcert`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: base64File, mimeType, fileName }),
+    });
+  } catch {
+    throw new Error(`Cannot reach API server at ${API_BASE_URL}. Ensure the backend is running.`);
+  }
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data?.message || 'Failed to upload birth certificate.');
+  return data as { birthcert: string };
+}
+
+export async function deleteBirthCertificate(userId: number): Promise<{ message: string; birthcert: null }> {
+  let response: Response;
+
+  try {
+    response = await fetch(`${API_BASE_URL}/api/user/${userId}/birthcert`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+    });
+  } catch {
+    throw new Error(`Cannot reach API server at ${API_BASE_URL}. Ensure the backend is running.`);
+  }
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data?.message || 'Failed to delete birth certificate.');
+  return data as { message: string; birthcert: null };
 }
 
 export async function updateUser(

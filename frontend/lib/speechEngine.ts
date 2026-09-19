@@ -1,7 +1,7 @@
 /**
  * frontend/lib/speechEngine.ts
  *
- * LOLO PAT Speech Engine
+ * LOLO AUREA Speech Engine
  *
  * TTS:
  *   Web    → Flask → ElevenLabs → Base64 MP3 → Browser Audio
@@ -17,9 +17,21 @@
 
 import { Platform } from 'react-native';
 import * as Speech from 'expo-speech';
-import { Audio } from 'expo-av';
+import {
+  AudioModule,
+  createAudioPlayer,
+  requestRecordingPermissionsAsync,
+  setAudioModeAsync,
+  RecordingPresets,
+  type AudioPlayer,
+  type AudioRecorder,
+  type AudioStatus,
+} from 'expo-audio';
 import * as FileSystem from 'expo-file-system/legacy';
-import { sendLoloAudioSTT } from '../services/loloApi';
+import {
+  API_BASE_URL,
+  sendLoloAudioSTT,
+} from '../services/loloApi';
 
 export type VisemeCallback = (
   amplitude: number,
@@ -51,7 +63,7 @@ class SpeechEngine {
   private visemeTimer: any = null;
 
   // Native ElevenLabs audio
-  private currentSound: Audio.Sound | null = null;
+  private currentSound: AudioPlayer | null = null;
 
   // Web ElevenLabs audio
   private currentWebAudio: any = null;
@@ -61,7 +73,7 @@ class SpeechEngine {
   private speechRequestId = 0;
 
   // Native recording
-  private nativeRecording: Audio.Recording | null = null;
+  private nativeRecording: AudioRecorder | null = null;
 
   private nativeRecordingCallback:
     ((text: string, isFinal: boolean) => void) | null = null;
@@ -279,6 +291,25 @@ class SpeechEngine {
     );
   }
 
+  public speakInstant(
+    text: string,
+    onStart?: () => void,
+    onEnd?: () => void
+  ): void {
+    if (!text.trim()) return;
+
+    void Speech.stop();
+    Speech.speak(text, {
+      language: 'fil-PH',
+      rate: 0.96,
+      pitch: 0.95,
+      onStart,
+      onDone: onEnd,
+      onStopped: onEnd,
+      onError: onEnd,
+    });
+  }
+
   // ===========================================================================
   // ELEVENLABS PLAYBACK
   // ===========================================================================
@@ -317,7 +348,7 @@ class SpeechEngine {
       const backendUrl =
         this.isWeb
           ? 'http://127.0.0.1:5000'
-          : 'http://192.168.0.104:5000';
+          : API_BASE_URL;
 
       console.log(
         '[LOLO TTS] Backend:',
@@ -477,10 +508,10 @@ class SpeechEngine {
       // NATIVE AUDIO MODE
       // -----------------------------------------------------------------------
 
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: false,
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: false,
+      await setAudioModeAsync({
+        allowsRecording: false,
+        playsInSilentMode: true,
+        shouldPlayInBackground: false,
       });
 
       // -----------------------------------------------------------------------
@@ -491,27 +522,20 @@ class SpeechEngine {
         '[LOLO TTS] Loading MP3...'
       );
 
-      const {
-        sound,
-        status,
-      } =
-        await Audio.Sound.createAsync(
-          { uri: fileUri },
+      const sound = createAudioPlayer(
+        { uri: fileUri },
+        { updateInterval: 50 }
+      );
 
-          {
-            shouldPlay: false,
-            volume: 1.0,
-            rate: 1.0,
-            shouldCorrectPitch: true,
-            progressUpdateIntervalMillis: 50,
-          }
-        );
-
-      if (!status.isLoaded) {
+      if (!sound.isLoaded) {
         throw new Error(
           'Expo Audio failed to load MP3.'
         );
       }
+
+      sound.volume = 1.0;
+      sound.playbackRate = 1.0;
+      sound.shouldCorrectPitch = true;
 
       this.currentSound =
         sound;
@@ -520,8 +544,9 @@ class SpeechEngine {
       // PLAYBACK CALLBACK
       // -----------------------------------------------------------------------
 
-      sound.setOnPlaybackStatusUpdate(
-        (playbackStatus) => {
+      sound.addListener(
+        'playbackStatusUpdate',
+        (playbackStatus: AudioStatus) => {
           if (
             !playbackStatus.isLoaded
           ) {
@@ -553,9 +578,7 @@ class SpeechEngine {
                 null;
             }
 
-            void sound
-              .unloadAsync()
-              .catch(() => {});
+            sound.remove();
 
             if (fileUri) {
               void FileSystem
@@ -582,7 +605,7 @@ class SpeechEngine {
         this.speechRequestId
       ) {
         try {
-          await sound.unloadAsync();
+          sound.remove();
         } catch {}
 
         return;
@@ -596,7 +619,7 @@ class SpeechEngine {
 
       this.startVisemeAnimation();
 
-      await sound.playAsync();
+      sound.play();
 
       console.log(
         '[LOLO TTS] NATIVE AUDIO PLAYING'
@@ -620,11 +643,11 @@ class SpeechEngine {
           null;
 
         try {
-          await sound.stopAsync();
+          sound.pause();
         } catch {}
 
         try {
-          await sound.unloadAsync();
+          sound.remove();
         } catch {}
       }
 
@@ -887,6 +910,8 @@ class SpeechEngine {
     // Invalidate pending TTS
     this.speechRequestId++;
 
+    void Speech.stop();
+
     this.isSpeakingActive =
       false;
 
@@ -898,14 +923,11 @@ class SpeechEngine {
       this.currentSound =
         null;
 
-      void sound
-        .stopAsync()
-        .catch(() => {})
-        .finally(() => {
-          void sound
-            .unloadAsync()
-            .catch(() => {});
-        });
+      try {
+        sound.pause();
+      } catch {}
+
+      sound.remove();
     }
 
     // Stop Web audio
@@ -954,7 +976,7 @@ class SpeechEngine {
     if (!this.isWeb) {
       try {
         const permission =
-          await Audio.requestPermissionsAsync();
+          await requestRecordingPermissionsAsync();
 
         if (!permission.granted) {
           onError?.(
@@ -966,15 +988,14 @@ class SpeechEngine {
           return false;
         }
 
-        await Audio.setAudioModeAsync({
-          allowsRecordingIOS: true,
-          playsInSilentModeIOS: true,
+        await setAudioModeAsync({
+          allowsRecording: true,
+          playsInSilentMode: true,
         });
 
         if (this.nativeRecording) {
           try {
-            await this.nativeRecording
-              .stopAndUnloadAsync();
+            await this.nativeRecording.stop();
           } catch {}
 
           this.nativeRecording =
@@ -982,15 +1003,12 @@ class SpeechEngine {
         }
 
         const recording =
-          new Audio.Recording();
+          new AudioModule.AudioRecorder(RecordingPresets.HIGH_QUALITY);
 
         await recording
-          .prepareToRecordAsync(
-            Audio.RecordingOptionsPresets
-              .HIGH_QUALITY
-          );
+          .prepareToRecordAsync();
 
-        await recording.startAsync();
+        recording.record();
 
         this.nativeRecording =
           recording;
@@ -1166,11 +1184,10 @@ class SpeechEngine {
         false;
 
       try {
-        await recording
-          .stopAndUnloadAsync();
+        await recording.stop();
 
         const uri =
-          recording.getURI();
+          recording.uri;
 
         if (!uri) {
           throw new Error(
@@ -1246,9 +1263,9 @@ class SpeechEngine {
           null;
 
         try {
-          await Audio.setAudioModeAsync({
-            allowsRecordingIOS: false,
-            playsInSilentModeIOS: true,
+          await setAudioModeAsync({
+            allowsRecording: false,
+            playsInSilentMode: true,
           });
         } catch {}
       }

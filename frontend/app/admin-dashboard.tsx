@@ -226,7 +226,7 @@ export default function AdminDashboard() {
               style={s.actionCard}
               activeOpacity={0.8}
               onPress={() => {
-                if (a.label === 'Benefits') router.push('/benefit-selection');
+                if (a.label === 'Benefits') router.push('/admin-benefits');
               }}
             >
               <View style={s.actionIconWrap}>

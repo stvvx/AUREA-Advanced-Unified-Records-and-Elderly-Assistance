@@ -39,9 +39,9 @@ export default function AssistantFloatingWidget() {
           style={styles.floatingButton}
           onPress={handleOpen}
           activeOpacity={0.85}
-          accessibilityLabel="Kausapin si Lolo Pat (AUREA Senior AI Assistant)"
+          accessibilityLabel="Kausapin si Lolo Aurea (AUREA Senior AI Assistant)"
         >
-          {/* Avatar Icon with Lolo Pat / eGov AI indicator */}
+          {/* Avatar Icon with Lolo Aurea / eGov AI indicator */}
           <View style={styles.iconContainer}>
             <Image
               source={require('../../assets/images/lolo_aurea_mascot.jpg')}
@@ -53,7 +53,7 @@ export default function AssistantFloatingWidget() {
 
           <View style={styles.textContainer}>
             <View style={styles.titleRow}>
-              <Text style={styles.badgeTitle}>Lolo Pat</Text>
+              <Text style={styles.badgeTitle}>Lolo Aurea</Text>
               <View style={styles.aiPill}>
                 <Text style={styles.aiPillText}>AI</Text>
               </View>
