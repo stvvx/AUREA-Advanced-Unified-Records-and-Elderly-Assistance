@@ -20,6 +20,7 @@ import { useRouter } from 'expo-router';
 import { useAuth } from '../../context/AuthContext';
 import Toast from '../../components/Toast';
 import { BENEFIT_ITEMS } from '../../data/benefits';
+import { fetchUnreadCount } from '../../services/chatApi';
 
 /**
  * DashboardScreen — AUREA
@@ -187,6 +188,22 @@ export default function DashboardScreen() {
   });
   const [searchQuery, setSearchQuery] = React.useState('');
   const [menuOpen, setMenuOpen] = React.useState(false);
+  const [unreadChatCount, setUnreadChatCount] = React.useState(0);
+
+  React.useEffect(() => {
+    if (!user?.id) {
+      setUnreadChatCount(0);
+      return;
+    }
+
+    const checkUnread = () => {
+      fetchUnreadCount(user.id, user.role || 'user').then(setUnreadChatCount);
+    };
+
+    checkUnread();
+    const interval = setInterval(checkUnread, 4000);
+    return () => clearInterval(interval);
+  }, [user?.id, user?.role]);
 
   const filteredBenefits = React.useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -302,6 +319,29 @@ export default function DashboardScreen() {
                 {user && (
                   <TouchableOpacity
                     style={[s.iconBtn, webPointer]}
+                    onPress={() => {
+                      setMenuOpen(false);
+                      router.push('/chat');
+                    }}
+                    activeOpacity={0.8}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    accessibilityRole="button"
+                    accessibilityLabel="Open OSCA support chat"
+                  >
+                    <Ionicons name="chatbubbles-outline" size={21} color={C.primaryDark} />
+                    {unreadChatCount > 0 && (
+                      <View style={s.chatBadge}>
+                        <Text style={s.chatBadgeText}>
+                          {unreadChatCount > 9 ? '9+' : unreadChatCount}
+                        </Text>
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                )}
+
+                {user && (
+                  <TouchableOpacity
+                    style={[s.iconBtn, webPointer]}
                     onPress={() => setMenuOpen((prev) => !prev)}
                     activeOpacity={0.8}
                     hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
@@ -322,7 +362,15 @@ export default function DashboardScreen() {
                     accessibilityRole="button"
                     accessibilityLabel="Open profile"
                   >
-                    <Ionicons name="person-circle" size={38} color={C.primaryDark} />
+                    {user.avatarUrl || user.profilePhoto ? (
+                      <Image
+                        key={user.avatarUrl || user.profilePhoto}
+                        source={{ uri: (user.avatarUrl || user.profilePhoto) ?? '' }}
+                        style={s.avatarImg}
+                      />
+                    ) : (
+                      <Ionicons name="person-circle" size={38} color={C.primaryDark} />
+                    )}
                   </TouchableOpacity>
                 ) : (
                   <TouchableOpacity
@@ -338,6 +386,25 @@ export default function DashboardScreen() {
 
               {user && menuOpen && (
                 <View style={s.headerMenu}>
+                  <TouchableOpacity
+                    style={[s.headerMenuItem, webPointer]}
+                    onPress={() => {
+                      setMenuOpen(false);
+                      router.push('/chat');
+                    }}
+                    activeOpacity={0.8}
+                    accessibilityRole="button"
+                    accessibilityLabel="Open chat"
+                  >
+                    <Ionicons name="chatbubbles-outline" size={16} color={C.ink} />
+                    <Text style={s.headerMenuText}>OSCA Chat Support</Text>
+                    {unreadChatCount > 0 && (
+                      <View style={[s.chatBadge, { position: 'relative', top: 0, right: 0, marginLeft: 'auto' }]}>
+                        <Text style={s.chatBadgeText}>{unreadChatCount}</Text>
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                  <View style={s.headerMenuDivider} />
                   <TouchableOpacity
                     style={[s.headerMenuItem, webPointer]}
                     onPress={handleNotifications}
@@ -681,6 +748,32 @@ const s = StyleSheet.create({
     backgroundColor: C.primarySoft,
     alignItems: 'center', justifyContent: 'center',
     overflow: 'hidden',
+  },
+  avatarImg: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+  },
+  chatBadge: {
+    position: 'absolute',
+    top: -3,
+    right: -3,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: '#DC2626',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+    borderWidth: 1.5,
+    borderColor: C.card,
+  },
+  chatBadgeText: {
+    fontFamily: 'InterBody',
+    fontSize: 10,
+    fontWeight: '700',
+    color: C.white,
+    lineHeight: 12,
   },
   loginPill: {
     backgroundColor: C.primary,

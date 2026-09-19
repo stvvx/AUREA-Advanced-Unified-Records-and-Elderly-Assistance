@@ -53,10 +53,11 @@ const ROLE_META: Record<string, { label: string; color: string; icon: string }> 
 };
 
 const OSCA_ACTIONS = [
-  { icon: 'people',          label: 'Senior Citizens',  desc: 'View & manage registrants'   },
-  { icon: 'document-text',   label: 'Records',          desc: 'Access unified records'       },
-  { icon: 'card',            label: 'ID Requests',      desc: 'Process digital ID requests'  },
-  { icon: 'gift',            label: 'Benefits',         desc: 'Manage benefit distributions' },
+  { icon: 'people',          label: 'Senior Citizens',     desc: 'View & manage registrants'   },
+  { icon: 'chatbubbles',     label: 'Senior Support Chat', desc: 'Real-time chat with seniors' },
+  { icon: 'gift',            label: 'Benefits',            desc: 'Manage benefit distributions' },
+  { icon: 'card',            label: 'ID Requests',         desc: 'Process digital ID requests'  },
+  { icon: 'document-text',   label: 'Records',             desc: 'Access unified records'       },
 ];
 
 const MED_ACTIONS = [
@@ -191,10 +192,16 @@ export default function AdminDashboard() {
               <Text style={s.h1}>AUREA</Text>
             </View>
           </View>
-          <TouchableOpacity style={s.logoutBtn} onPress={handleLogout} activeOpacity={0.8}>
-            <Ionicons name="log-out-outline" size={17} color={C.primaryDark} />
-            <Text style={s.logoutTxt}>Log out</Text>
-          </TouchableOpacity>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <TouchableOpacity style={s.chatBtn} onPress={() => router.push('/chat')} activeOpacity={0.8}>
+              <Ionicons name="chatbubbles-outline" size={17} color={C.primaryDark} />
+              <Text style={s.logoutTxt}>Live Chat</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={s.logoutBtn} onPress={handleLogout} activeOpacity={0.8}>
+              <Ionicons name="log-out-outline" size={17} color={C.primaryDark} />
+              <Text style={s.logoutTxt}>Log out</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* ── WELCOME BANNER ── */}
@@ -227,6 +234,7 @@ export default function AdminDashboard() {
               activeOpacity={0.8}
               onPress={() => {
                 if (a.label === 'Benefits') router.push('/admin-benefits');
+                if (a.label === 'Senior Support Chat') router.push('/chat');
               }}
             >
               <View style={s.actionIconWrap}>
@@ -350,6 +358,12 @@ const s = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: 4,
     borderWidth: 1.5, borderColor: C.primaryDark, borderRadius: 10,
     paddingVertical: 8, paddingHorizontal: 12,
+  },
+  chatBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: C.primarySoft, borderRadius: 10,
+    paddingVertical: 8, paddingHorizontal: 12,
+    borderWidth: 1, borderColor: '#C2DFCB',
   },
   logoutTxt: { fontFamily: 'InterBody', fontWeight: '600', fontSize: 13, color: C.primaryDark },
 

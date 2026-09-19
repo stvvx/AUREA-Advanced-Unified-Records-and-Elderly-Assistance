@@ -46,6 +46,7 @@ export default function RootLayout() {
         <Stack.Screen name="face-verification" options={{ headerShown: false }} />
         <Stack.Screen name="register" options={{ headerShown: false }} />
         <Stack.Screen name="profile" options={{ headerShown: false }} />
+        <Stack.Screen name="chat" options={{ headerShown: false }} />
         <Stack.Screen name="digital-id" options={{ headerShown: false }} />
         <Stack.Screen name="benefit-selection" options={{ headerShown: false }} />
         <Stack.Screen name="benefit-application" options={{ headerShown: false }} />

@@ -39,3 +39,8 @@ def register_lolo_routes(app: Flask) -> None:
     from routes.benefit_applications import benefit_applications_bp
     app.register_blueprint(benefit_applications_bp)
     print("[AUREA] Registered blueprint: /api/benefit-applications")
+
+    from routes.osca_chat import osca_chat_bp
+    app.register_blueprint(osca_chat_bp)
+    print("[AUREA] Registered blueprint: /api/chat")
+
