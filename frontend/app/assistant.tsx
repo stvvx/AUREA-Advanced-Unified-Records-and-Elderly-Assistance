@@ -31,7 +31,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
-import BarongElder3D from '../components/assistant/BarongElder3D';
+//import BarongElder3D from '../components/assistant/BarongElder3D';
+import BlenderElder3D from '../components/assistant/BlenderElder3D';
 import AudioVisualizer from '../components/assistant/AudioVisualizer';
 import { speechEngine } from '../lib/speechEngine';
 import { useAuth } from '../context/AuthContext';
@@ -138,7 +139,7 @@ export default function AssistantScreen() {
 
     const greetingText = `Magandang araw po${
       fullName ? `, ${fullName}` : ''
-    }! Ako po si Lolo Aurea, ang inyong 3D AI companion sa AUREA. Nandito po ako upang ipaliwanag nang pasalita ang inyong mga serbisyo sa Pateros. Pindutin lamang po ang mikropono o ang alinmang paksa sa ibaba.`;
+    }! Ako po si Lolo Aurea, ang inyong 3D AI companion sa AUREA. Nandito po ako upang ipaliwanag ang mga serbisyo sa Pateros. Pindutin lamang po ang mikropono o ang alinmang paksa sa ibaba.`;
 
     setCurrentSpeech(greetingText);
 
@@ -195,7 +196,11 @@ export default function AssistantScreen() {
     setIsLoading(true);
     setCurrentEmotion(topic.emotion || 'happy');
     setCurrentSpeech('Sandali lang po, inihahanda ni Lolo Aurea ang sagot...');
-    speechEngine.speakInstant('Sandali lang po, inihahanda ko ang sagot.', () => setIsSpeaking(true));
+    speechEngine.speak(
+  'Sandali lang po, inihahanda ko ang sagot.',
+  () => setIsSpeaking(true),
+  () => setIsSpeaking(false)
+);
 
     try {
       const data = await sendLoloMessage({
@@ -251,7 +256,11 @@ export default function AssistantScreen() {
     setIsLoading(true);
     setCurrentEmotion('thinking');
     setCurrentSpeech('Sandali lang po, iniisip ni Lolo Aurea ang inyong tanong...');
-    speechEngine.speakInstant('Sandali lang po, iniisip ko ang inyong tanong.', () => setIsSpeaking(true));
+    speechEngine.speak(
+  'Sandali lang po, iniisip ko ang inyong tanong.',
+  () => setIsSpeaking(true),
+  () => setIsSpeaking(false)
+);
 
     try {
       const data = await sendLoloMessage({
@@ -402,7 +411,7 @@ export default function AssistantScreen() {
               colors={['#EBF5ED', '#FDF8EF', '#E2EEE5']}
               style={styles.stageGradient}
             >
-              {/* Native low-latency 3D-style senior avatar */}
+              {/* Native low-latency 3D-style senior avatar 
               <BarongElder3D
                 isSpeaking={isSpeaking}
                 emotion={currentEmotion}
@@ -410,6 +419,12 @@ export default function AssistantScreen() {
                 height={isWebDesktop ? 380 : 290}
                 onTapAvatar={handleReplayVoice}
               />
+              */}
+
+              <BlenderElder3D
+  isSpeaking={isSpeaking}
+  height={isWebDesktop ? 380 : 290}
+/>
 
               {/* Premium Audio Waveform & Ripple Visualizer */}
               <AudioVisualizer

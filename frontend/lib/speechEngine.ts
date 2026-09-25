@@ -12,7 +12,19 @@
  *   Web    → Browser SpeechRecognition
  *
  * Lip Sync:
- *   Viseme animation while ElevenLabs audio is playing
+ *   Word-timing-based viseme animation, synced to the real audio
+ *   playback position (no backend changes required). We don't have
+ *   true amplitude/phoneme data, so instead we:
+ *     1. Split the spoken text into words.
+ *     2. Estimate each word's "weight" (syllable count) and spread
+ *        the words across the real audio duration proportionally.
+ *     3. Every tick, find which word the actual playback position
+ *        currently falls into, and emit a mouth-open pulse per
+ *        syllable within that word (with closed-mouth treatment for
+ *        words starting m/b/p).
+ *   This is an approximation, not true phoneme-accurate lip sync,
+ *   but it tracks the real timing/pacing of the audio instead of
+ *   being a fixed, disconnected animation.
  */
 
 import { Platform } from 'react-native';
@@ -48,6 +60,18 @@ export interface SpeechOptions {
   onError?: (error: any) => void;
 }
 
+// ===========================================================================
+// WORD-TIMING SCHEDULE TYPES
+// ===========================================================================
+
+type WordScheduleItem = {
+  startSec: number;
+  endSec: number;
+  text: string;
+  syllables: number;
+  closedStart: boolean;
+};
+
 class SpeechEngine {
   private isWeb = Platform.OS === 'web';
 
@@ -61,6 +85,12 @@ class SpeechEngine {
   // Visemes
   private visemeListeners: Set<VisemeCallback> = new Set();
   private visemeTimer: any = null;
+
+  // Word-timing lip sync state
+  private lastPositionSec = 0;
+  private lastDurationSec = 0;
+  private wordSchedule: WordScheduleItem[] = [];
+  private currentSpeechText = '';
 
   // Native ElevenLabs audio
   private currentSound: AudioPlayer | null = null;
@@ -184,50 +214,228 @@ class SpeechEngine {
     });
   }
 
-  private startVisemeAnimation(): void {
+  // ---------------------------------------------------------------------------
+  // WORD SCHEDULE BUILDER
+  //
+  // Spreads the spoken text's words across the real audio duration,
+  // weighted by an estimated syllable count per word. Words that end
+  // in punctuation (. , ! ? ; :) reserve a small shared pause budget
+  // so the mouth actually closes on natural breaks instead of
+  // chattering nonstop through the whole clip.
+  // ---------------------------------------------------------------------------
+
+  private buildWordSchedule(
+    text: string,
+    durationSec: number
+  ): void {
+    const raw = (text || '').trim();
+
+    if (!raw || durationSec <= 0) {
+      this.wordSchedule = [];
+      return;
+    }
+
+    const tokens = raw.split(/\s+/).filter(Boolean);
+
+    if (!tokens.length) {
+      this.wordSchedule = [];
+      return;
+    }
+
+    const vowelPattern = /[aeiouAEIOU]/g;
+
+    const items = tokens.map((token) => {
+      const clean = token.replace(
+        /[^\p{L}\p{N}]/gu,
+        ''
+      );
+
+      const vowelMatches = clean.match(vowelPattern);
+
+      const syllables = Math.max(
+        1,
+        vowelMatches
+          ? vowelMatches.length
+          : Math.ceil(clean.length / 3)
+      );
+
+      const endsWithPause = /[.,!?;:]$/.test(token);
+      const closedStart = /^[mbp]/i.test(clean);
+
+      // Weight each word's share of the speaking budget by its
+      // syllable count, with a floor so even one-syllable words
+      // still get visible airtime.
+      const weight = Math.max(1, syllables);
+
+      return {
+        clean,
+        syllables,
+        endsWithPause,
+        closedStart,
+        weight,
+      };
+    });
+
+    const totalWeight =
+      items.reduce((sum, i) => sum + i.weight, 0) || 1;
+
+    // Reserve a modest pause budget for punctuation breaks, capped
+    // so it can never eat more than a quarter of the clip.
+    const pauseCount = items.filter(
+      (i) => i.endsWithPause
+    ).length;
+
+    const pauseBudget = Math.min(
+      durationSec * 0.25,
+      pauseCount * 0.18
+    );
+
+    const speakingBudget = Math.max(
+      0.1,
+      durationSec - pauseBudget
+    );
+
+    const perPause =
+      pauseCount > 0
+        ? pauseBudget / pauseCount
+        : 0;
+
+    let cursor = 0;
+
+    const schedule: WordScheduleItem[] = [];
+
+    items.forEach((item) => {
+      const wordDuration =
+        (item.weight / totalWeight) *
+        speakingBudget;
+
+      const start = cursor;
+      const end = start + wordDuration;
+
+      schedule.push({
+        startSec: start,
+        endSec: end,
+        text: item.clean,
+        syllables: item.syllables,
+        closedStart: item.closedStart,
+      });
+
+      cursor =
+        end +
+        (item.endsWithPause ? perPause : 0);
+    });
+
+    this.wordSchedule = schedule;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Given the current playback position, find which scheduled word
+  // it falls in and produce a mouth-open pulse for that word's
+  // current syllable.
+  // ---------------------------------------------------------------------------
+
+  private computeVisemeFromSchedule(
+    positionSec: number
+  ): { amplitude: number; phoneme: string } {
+    if (!this.wordSchedule.length) {
+      return { amplitude: 0, phoneme: 'neutral' };
+    }
+
+    const word = this.wordSchedule.find(
+      (w) =>
+        positionSec >= w.startSec &&
+        positionSec <= w.endSec
+    );
+
+    if (!word) {
+      // We're in a pause between words.
+      return { amplitude: 0.05, phoneme: 'M' };
+    }
+
+    const span = Math.max(
+      0.001,
+      word.endSec - word.startSec
+    );
+
+    const localT = Math.min(
+      1,
+      Math.max(0, (positionSec - word.startSec) / span)
+    );
+
+    // Simulate one open/close pulse per syllable across the word.
+    const pulsePosition = localT * word.syllables;
+    const pulseFrac =
+      pulsePosition - Math.floor(pulsePosition);
+
+    const bump = Math.sin(pulseFrac * Math.PI);
+
+    let amplitude = 0.15 + bump * 0.65;
+
+    // Closed-mouth consonants (m/b/p) at the start of a word keep
+    // the mouth mostly shut for the first part of that word.
+    if (word.closedStart && localT < 0.25) {
+      amplitude *= 0.25;
+    }
+
+    amplitude = Math.max(0.05, Math.min(1, amplitude));
+
+    const phoneme =
+      word.closedStart && localT < 0.25 ? 'M' : 'A';
+
+    return { amplitude, phoneme };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Starts the lip-sync tick loop for a given spoken text. Reads the
+  // real playback position (updated elsewhere via playbackStatusUpdate
+  // on native / timeupdate on web) and drives the mouth from the word
+  // schedule once the real audio duration is known. Before duration is
+  // known, uses a brief soft idle motion so the mouth isn't frozen.
+  // ---------------------------------------------------------------------------
+
+  private startVisemeAnimation(text: string): void {
     this.stopVisemeAnimation();
 
-    let frame = 0;
+    this.currentSpeechText = text;
+    this.wordSchedule = [];
+    this.lastPositionSec = 0;
+    // NOTE: do not reset lastDurationSec here — on some platforms
+    // duration is known slightly before play() resolves, and we
+    // don't want to throw that away.
+
+    const startedAt = Date.now();
 
     this.visemeTimer = setInterval(() => {
-      frame++;
+      if (
+        !this.wordSchedule.length &&
+        this.lastDurationSec > 0.1
+      ) {
+        this.buildWordSchedule(
+          this.currentSpeechText,
+          this.lastDurationSec
+        );
+      }
 
-      const wave =
-        (Math.sin(frame * 0.28) + 1) / 2;
+      if (!this.wordSchedule.length) {
+        // Duration not known yet — gentle idle motion so the mouth
+        // isn't frozen while we wait for the first status update.
+        const t = (Date.now() - startedAt) / 1000;
 
-      const microMod =
-        Math.sin(frame * 0.56) * 0.2;
+        const amplitude =
+          0.15 +
+          ((Math.sin(t * 6) + 1) / 2) * 0.25;
 
-      const amplitude = Math.max(
-        0.08,
-        Math.min(
-          0.92,
-          wave * 0.7 +
-            microMod +
-            0.15
-        )
-      );
+        this.emitViseme(amplitude, 'A');
+        return;
+      }
 
-      const phonemes = [
-        'A',
-        'E',
-        'O',
-        'A',
-        'U',
-        'M',
-      ];
+      const { amplitude, phoneme } =
+        this.computeVisemeFromSchedule(
+          this.lastPositionSec
+        );
 
-      const phoneme =
-        phonemes[
-          Math.floor(frame / 2) %
-            phonemes.length
-        ];
-
-      this.emitViseme(
-        amplitude,
-        phoneme
-      );
-    }, 50);
+      this.emitViseme(amplitude, phoneme);
+    }, 40);
   }
 
   private stopVisemeAnimation(): void {
@@ -235,6 +443,11 @@ class SpeechEngine {
       clearInterval(this.visemeTimer);
       this.visemeTimer = null;
     }
+
+    this.wordSchedule = [];
+    this.currentSpeechText = '';
+    this.lastPositionSec = 0;
+    this.lastDurationSec = 0;
 
     this.emitViseme(
       0,
@@ -446,6 +659,7 @@ class SpeechEngine {
       if (this.isWeb) {
         await this.playWebAudio(
           result.audioBase64,
+          text,
           requestId,
           onStart,
           onEnd
@@ -515,30 +729,99 @@ class SpeechEngine {
       });
 
       // -----------------------------------------------------------------------
-      // CREATE SOUND
-      // -----------------------------------------------------------------------
+// CREATE SOUND
+// -----------------------------------------------------------------------
 
-      console.log(
-        '[LOLO TTS] Loading MP3...'
-      );
+console.log('[LOLO TTS] Loading MP3...');
 
-      const sound = createAudioPlayer(
-        { uri: fileUri },
-        { updateInterval: 50 }
-      );
+const fileInfo = await FileSystem.getInfoAsync(fileUri);
 
-      if (!sound.isLoaded) {
-        throw new Error(
-          'Expo Audio failed to load MP3.'
-        );
+console.log(
+  '[LOLO TTS] File check:',
+  fileUri,
+  fileInfo
+);
+
+if (!fileInfo.exists) {
+  throw new Error(
+    `[LOLO TTS] MP3 file does not exist: ${fileUri}`
+  );
+}
+
+const sound = createAudioPlayer({
+  uri: fileUri,
+});
+
+if (!sound.isLoaded) {
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+
+    const timeout = setTimeout(() => {
+      if (settled) {
+        return;
       }
 
+      settled = true;
+      subscription.remove();
+
+      reject(
+        new Error(
+          'Expo Audio failed to load MP3.'
+        )
+      );
+    }, 10000);
+
+    const subscription = sound.addListener(
+      'playbackStatusUpdate',
+      (status: AudioStatus) => {
+        if (!status.isLoaded || settled) {
+          return;
+        }
+
+        settled = true;
+        clearTimeout(timeout);
+        subscription.remove();
+
+        resolve();
+      }
+    );
+  });
+}
+
       sound.volume = 1.0;
-      sound.playbackRate = 1.0;
-      sound.shouldCorrectPitch = true;
+      sound.setPlaybackRate(1.0);
 
       this.currentSound =
         sound;
+
+      // -----------------------------------------------------------------------
+      // LIP-SYNC POSITION TRACKING
+      //
+      // Keeps lastPositionSec / lastDurationSec up to date from the
+      // real player status, independent of the finish-detection
+      // listener below, so the word-timing tick loop always has an
+      // accurate read on where playback actually is.
+      // -----------------------------------------------------------------------
+
+      sound.addListener(
+        'playbackStatusUpdate',
+        (status: AudioStatus) => {
+          if (!status.isLoaded) {
+            return;
+          }
+
+          if (typeof (status as any).currentTime === 'number') {
+            this.lastPositionSec = (status as any).currentTime;
+          }
+
+          if (
+            typeof (status as any).duration === 'number' &&
+            (status as any).duration > 0
+          ) {
+            this.lastDurationSec = (status as any).duration;
+          }
+        }
+      );
 
       // -----------------------------------------------------------------------
       // PLAYBACK CALLBACK
@@ -547,16 +830,13 @@ class SpeechEngine {
       sound.addListener(
         'playbackStatusUpdate',
         (playbackStatus: AudioStatus) => {
-          if (
-            !playbackStatus.isLoaded
-          ) {
-            console.error(
-              '[LOLO TTS] Playback error:',
-              playbackStatus.error
-            );
+          if (!playbackStatus.isLoaded) {
+  console.error(
+    '[LOLO TTS] Playback error: Audio is not loaded.'
+  );
 
-            return;
-          }
+  return;
+}
 
           if (
             playbackStatus.didJustFinish
@@ -617,7 +897,7 @@ class SpeechEngine {
 
       onStart?.();
 
-      this.startVisemeAnimation();
+      this.startVisemeAnimation(text);
 
       sound.play();
 
@@ -673,6 +953,7 @@ class SpeechEngine {
 
   private async playWebAudio(
     audioBase64: string,
+    text: string,
     requestId: number,
     onStart?: () => void,
     onEnd?: () => void
@@ -744,6 +1025,22 @@ class SpeechEngine {
     this.currentWebAudioUrl =
       audioUrl;
 
+    // -----------------------------------------------------------------------
+    // LIP-SYNC POSITION TRACKING (WEB)
+    // -----------------------------------------------------------------------
+
+    audio.onloadedmetadata = () => {
+      this.lastDurationSec = audio.duration || 0;
+    };
+
+    audio.ontimeupdate = () => {
+      this.lastPositionSec = audio.currentTime || 0;
+
+      if (audio.duration && audio.duration > 0) {
+        this.lastDurationSec = audio.duration;
+      }
+    };
+
     audio.onplay = () => {
       if (
         requestId !==
@@ -759,7 +1056,7 @@ class SpeechEngine {
       this.isSpeakingActive =
         true;
 
-      this.startVisemeAnimation();
+      this.startVisemeAnimation(text);
 
       onStart?.();
     };

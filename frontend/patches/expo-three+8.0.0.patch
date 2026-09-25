@@ -1,0 +1,12 @@
+diff --git a/node_modules/expo-three/tsconfig.json b/node_modules/expo-three/tsconfig.json
+index a24ec0f..093d9a7 100644
+--- a/node_modules/expo-three/tsconfig.json
++++ b/node_modules/expo-three/tsconfig.json
+@@ -2,6 +2,7 @@
+ {
+   "extends": "expo-module-scripts/tsconfig.base",
+   "compilerOptions": {
++    "rootDir": "./src",
+     "outDir": "./build"
+   },
+   "include": ["./src"],
