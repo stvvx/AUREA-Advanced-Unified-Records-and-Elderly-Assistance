@@ -75,6 +75,10 @@ type WordScheduleItem = {
 class SpeechEngine {
   private isWeb = Platform.OS === 'web';
 
+  private handsFreeActive = false;
+private vadTimer: any = null;
+private handsFreeRecorder: AudioRecorder | null = null;
+
   // Browser STT only
   private recognition: any = null;
 
@@ -1249,6 +1253,214 @@ if (!sound.isLoaded) {
     return true;
   }
 
+    // ===========================================================================
+  // HANDS-FREE LISTENING
+  // ===========================================================================
+
+  public async startHandsFree(
+    onTranscript: (text: string) => void,
+    onError?: (e: any) => void
+  ): Promise<boolean> {
+    this.stop(); // never listen while speaking
+    this.handsFreeActive = true;
+
+    return this.isWeb
+      ? this.handsFreeWeb(onTranscript, onError)
+      : this.handsFreeNative(onTranscript, onError);
+  }
+
+  public stopHandsFree(): void {
+    this.handsFreeActive = false;
+    this.isListeningActive = false;
+
+    if (this.vadTimer) {
+      clearInterval(this.vadTimer);
+      this.vadTimer = null;
+    }
+
+    if (this.isWeb) {
+      try { this.recognition?.stop(); } catch {}
+    } else if (this.handsFreeRecorder) {
+      const r = this.handsFreeRecorder;
+      this.handsFreeRecorder = null;
+      void Promise.resolve(r.stop()).catch(() => {});
+    }
+  }
+
+  // ---------------- WEB ----------------
+  private async handsFreeWeb(
+    onTranscript: (t: string) => void,
+    onError?: (e: any) => void
+  ): Promise<boolean> {
+    if (!this.recognition) {
+      onError?.(new Error('No SpeechRecognition'));
+      return false;
+    }
+
+    let delivered = false;
+
+    this.recognition.onresult = (event: any) => {
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        if (event.results[i].isFinal) {
+          const t = event.results[i][0].transcript.trim();
+          if (t && !delivered) {
+            delivered = true;
+            this.stopHandsFree();
+            onTranscript(t);
+          }
+        }
+      }
+    };
+
+    this.recognition.onerror = (e: any) => {
+      if (e.error !== 'no-speech' && e.error !== 'aborted') {
+        onError?.(e.error);
+      }
+    };
+
+    this.recognition.onend = () => {
+      if (this.handsFreeActive && !delivered) {
+        setTimeout(() => {
+          if (this.handsFreeActive) {
+            try { this.recognition.start(); } catch {}
+          }
+        }, 300);
+      }
+    };
+
+    try {
+      this.recognition.lang = 'fil-PH';
+      this.recognition.start();
+      this.isListeningActive = true;
+      return true;
+    } catch (e) {
+      onError?.(e);
+      return false;
+    }
+  }
+
+  // ---------------- NATIVE ----------------
+  private async handsFreeNative(
+    onTranscript: (t: string) => void,
+    onError?: (e: any) => void
+  ): Promise<boolean> {
+    const perm = await requestRecordingPermissionsAsync();
+    if (!perm.granted) {
+      onError?.(new Error('Mic permission denied'));
+      return false;
+    }
+
+    await setAudioModeAsync({
+      allowsRecording: true,
+      playsInSilentMode: true,
+    });
+
+    this.isListeningActive = true;
+
+    const POLL_MS = 100;
+    const MIN_VOICED_MS = 300;
+    const SILENCE_END_MS = 1300;
+    const IDLE_RESTART_MS = 10000;
+    const MAX_UTTERANCE_MS = 20000;
+
+    const cycle = async () => {
+      if (!this.handsFreeActive) return;
+
+      try {
+        const rec = new AudioModule.AudioRecorder({
+          ...RecordingPresets.HIGH_QUALITY,
+          isMeteringEnabled: true,
+        } as any);
+
+        await rec.prepareToRecordAsync();
+        rec.record();
+        this.handsFreeRecorder = rec;
+
+        const startedAt = Date.now();
+        const noiseSamples: number[] = [];
+        let threshold = -40;
+        let voicedMs = 0;
+        let speechDetected = false;
+        let lastVoiceAt = Date.now();
+
+        this.vadTimer = setInterval(async () => {
+          if (!this.handsFreeActive || this.handsFreeRecorder !== rec) return;
+
+          const now = Date.now();
+          const db = (rec.getStatus() as any)?.metering ?? -160;
+
+          // 1) learn the background noise level for the first 500ms
+          if (now - startedAt < 500) {
+            if (db > -160) noiseSamples.push(db);
+            if (noiseSamples.length) {
+              const avg =
+                noiseSamples.reduce((a, b) => a + b, 0) / noiseSamples.length;
+              threshold = Math.max(avg + 12, -45);
+            }
+            return;
+          }
+
+          // 2) voice detection
+          if (db > threshold) {
+            voicedMs += POLL_MS;
+            lastVoiceAt = now;
+            if (voicedMs >= MIN_VOICED_MS) speechDetected = true;
+          }
+
+          const silentFor = now - lastVoiceAt;
+          const finished =
+            speechDetected &&
+            (silentFor > SILENCE_END_MS || now - startedAt > MAX_UTTERANCE_MS);
+          const idleTimeout =
+            !speechDetected && now - startedAt > IDLE_RESTART_MS;
+
+          if (!finished && !idleTimeout) return;
+
+          clearInterval(this.vadTimer);
+          this.vadTimer = null;
+          this.handsFreeRecorder = null;
+          await rec.stop();
+
+          if (idleTimeout) {
+            void cycle(); // nobody spoke, just keep waiting
+            return;
+          }
+
+          try {
+            const b64 = await FileSystem.readAsStringAsync(rec.uri!, {
+              encoding: FileSystem.EncodingType.Base64,
+            });
+
+            const res = await sendLoloAudioSTT({
+              audio: b64,
+              mimeType: 'audio/m4a',
+              language: 'fil',
+            });
+
+            const text = (res.text || '').trim();
+
+            if (res.success && text) {
+              this.handsFreeActive = false;
+              this.isListeningActive = false;
+              onTranscript(text);
+            } else {
+              void cycle(); // noise / unclear, keep listening
+            }
+          } catch (e) {
+            onError?.(e);
+            setTimeout(() => void cycle(), 1000);
+          }
+        }, POLL_MS);
+      } catch (e) {
+        onError?.(e);
+        this.isListeningActive = false;
+      }
+    };
+
+    void cycle();
+    return true;
+  }
+
   // ===========================================================================
   // START LISTENING
   // ===========================================================================
@@ -1264,6 +1476,7 @@ if (!sound.isLoaded) {
     onEnd?: () => void
   ): Promise<boolean> {
     // Stop LOLO talking
+    this.stopHandsFree();
     this.stop();
 
     // -------------------------------------------------------------------------

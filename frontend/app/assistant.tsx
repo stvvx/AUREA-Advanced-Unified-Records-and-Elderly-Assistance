@@ -131,6 +131,48 @@ export default function AssistantScreen() {
 
   const scrollViewRef = useRef<ScrollView>(null);
 
+    // Hands-free mode
+  const handsFreeRef = useRef(true);   // false when the user mutes the mic
+  const busyRef = useRef(false);       // true while waiting for an AI answer
+  const [handsFree, setHandsFree] = useState(true);
+
+  const resumeListening = () => {
+    if (!handsFreeRef.current || busyRef.current) return;
+
+    // small gap so the mic doesn't catch the tail of Lolo's voice
+    setTimeout(() => {
+      if (!handsFreeRef.current || busyRef.current) return;
+
+      setIsListening(true);
+
+      speechEngine.startHandsFree(
+        (text) => {
+          setIsListening(false);
+          handleSendCustomQuery(text);
+        },
+        (err) => {
+          console.warn('[Assistant] hands-free error:', err);
+          setIsListening(false);
+        }
+      );
+    }, 500);
+  };
+
+  // Speak, and start listening again when finished
+  const speakAndResume = (text: string) => {
+    speechEngine.speak(
+      text,
+      () => {
+        setIsSpeaking(true);
+        setIsListening(false);
+      },
+      () => {
+        setIsSpeaking(false);
+        resumeListening();
+      }
+    );
+  };
+
   // ───────────────────────────────────────────────────────────────────────────
   // STATE
   // ───────────────────────────────────────────────────────────────────────────
@@ -155,7 +197,7 @@ export default function AssistantScreen() {
   // INITIAL GREETING
   // ───────────────────────────────────────────────────────────────────────────
 
-  useEffect(() => {
+   useEffect(() => {
     if (!user) {
       router.replace('/login');
       return;
@@ -167,24 +209,21 @@ export default function AssistantScreen() {
 
     const greetingText = `Magandang araw po${
       fullName ? `, ${fullName}` : ''
-    }! Ako po si Lolo Aurea, ang inyong 3D AI companion sa AUREA. Nandito po ako upang ipaliwanag ang mga serbisyo sa Pateros. Pindutin lamang po ang mikropono o magtanong sa akin.`;
+    }! Ako po si Lolo Aurea, ang inyong 3D AI companion sa AUREA. Nandito po ako upang ipaliwanag ang mga serbisyo sa Pateros. Magsalita lamang po kayo, nakikinig po ako.`;
 
     setCurrentSpeech(greetingText);
 
     const timer = setTimeout(() => {
-      speechEngine.speak(
-        greetingText,
-        () => setIsSpeaking(true),
-        () => setIsSpeaking(false)
-      );
+      speakAndResume(greetingText);
     }, 600);
 
     return () => {
       clearTimeout(timer);
+      handsFreeRef.current = false;
+      speechEngine.stopHandsFree();
       speechEngine.stop();
     };
   }, [user]);
-
   // ───────────────────────────────────────────────────────────────────────────
   // SYSTEM ACTIONS
   // ───────────────────────────────────────────────────────────────────────────
@@ -227,13 +266,15 @@ export default function AssistantScreen() {
   // ───────────────────────────────────────────────────────────────────────────
   // SELECT TOPIC
   // ───────────────────────────────────────────────────────────────────────────
-
   const handleSelectTopic = async (
     topic: SpeechTopic,
     index: number
   ) => {
+    busyRef.current = true;
+    speechEngine.stopHandsFree();
     speechEngine.stop();
 
+    setIsListening(false);
     setIsSpeaking(false);
     setActiveTopicIndex(index);
     setIsLoading(true);
@@ -243,6 +284,7 @@ export default function AssistantScreen() {
       'Sandali lang po, inihahanda ni Lolo Aurea ang sagot...'
     );
 
+    // filler: plain speak, no resume
     speechEngine.speak(
       'Sandali lang po, inihahanda ko ang sagot.',
       () => setIsSpeaking(true),
@@ -254,74 +296,53 @@ export default function AssistantScreen() {
         userId: Number((user as any)?.id || 0),
         message: topic.speechText,
         language: 'fil',
-
         userProfile: user
           ? {
               firstName: user.firstName,
               lastName: user.lastName,
-              barangay:
-                (user as any).barangay || 'Pateros',
+              barangay: (user as any).barangay || 'Pateros',
             }
           : undefined,
       });
 
       speechEngine.stop();
 
-      const speechToPlay =
-        data.message || topic.speechText;
+      const speechToPlay = data.message || topic.speechText;
+      const actionFromAI = data.action || topic.action;
 
-      const actionFromAI =
-        data.action || topic.action;
-
-      if (data.emotion) {
-        setCurrentEmotion(data.emotion);
-      }
+      if (data.emotion) setCurrentEmotion(data.emotion);
 
       setCurrentSpeech(speechToPlay);
+      busyRef.current = false;
+      speakAndResume(speechToPlay);
 
-      speechEngine.speak(
-        speechToPlay,
-        () => setIsSpeaking(true),
-        () => setIsSpeaking(false)
-      );
-
-      if (actionFromAI) {
-        handleSystemAction(actionFromAI);
-      }
+      if (actionFromAI) handleSystemAction(actionFromAI);
     } catch {
       speechEngine.stop();
-
       setCurrentSpeech(topic.speechText);
+      busyRef.current = false;
+      speakAndResume(topic.speechText);
 
-      speechEngine.speak(
-        topic.speechText,
-        () => setIsSpeaking(true),
-        () => setIsSpeaking(false)
-      );
-
-      if (topic.action) {
-        handleSystemAction(topic.action);
-      }
+      if (topic.action) handleSystemAction(topic.action);
     } finally {
+      busyRef.current = false;
       setIsLoading(false);
     }
   };
-
   // ───────────────────────────────────────────────────────────────────────────
   // CUSTOM QUERY
   // ───────────────────────────────────────────────────────────────────────────
 
-  const handleSendCustomQuery = async (
-    queryText: string
-  ) => {
+   const handleSendCustomQuery = async (queryText: string) => {
     const textToSend = queryText.trim();
-
     if (!textToSend) return;
 
-    setInputText('');
-
+    busyRef.current = true;
+    speechEngine.stopHandsFree();
     speechEngine.stop();
 
+    setInputText('');
+    setIsListening(false);
     setIsSpeaking(false);
     setIsLoading(true);
     setCurrentEmotion('thinking');
@@ -330,6 +351,7 @@ export default function AssistantScreen() {
       'Sandali lang po, iniisip ni Lolo Aurea ang inyong tanong...'
     );
 
+    // filler: plain speak, no resume
     speechEngine.speak(
       'Sandali lang po, iniisip ko ang inyong tanong.',
       () => setIsSpeaking(true),
@@ -341,13 +363,11 @@ export default function AssistantScreen() {
         userId: Number((user as any)?.id || 0),
         message: textToSend,
         language: 'fil',
-
         userProfile: user
           ? {
               firstName: user.firstName,
               lastName: user.lastName,
-              barangay:
-                (user as any).barangay || 'Pateros',
+              barangay: (user as any).barangay || 'Pateros',
             }
           : undefined,
       });
@@ -356,30 +376,17 @@ export default function AssistantScreen() {
 
       if (data.success) {
         const responseText =
-          data.message ||
-          'Opo, naintindihan ko po kayo.';
+          data.message || 'Opo, naintindihan ko po kayo.';
 
-        if (data.emotion) {
-          setCurrentEmotion(data.emotion);
-        } else {
-          setCurrentEmotion('happy');
-        }
-
+        setCurrentEmotion(data.emotion ? data.emotion : 'happy');
         setCurrentSpeech(responseText);
 
-        speechEngine.speak(
-          responseText,
-          () => setIsSpeaking(true),
-          () => setIsSpeaking(false)
-        );
+        busyRef.current = false;
+        speakAndResume(responseText);
 
-        if (data.action) {
-          handleSystemAction(data.action);
-        }
+        if (data.action) handleSystemAction(data.action);
       } else {
-        throw new Error(
-          data.error || 'LOLO response failed'
-        );
+        throw new Error(data.error || 'LOLO response failed');
       }
     } catch {
       speechEngine.stop();
@@ -388,57 +395,31 @@ export default function AssistantScreen() {
         'Pasensya na po, medyo mahina ang signal. Subukan po nating muli o magtanong ulit.';
 
       setCurrentSpeech(fallbackText);
-
-      speechEngine.speak(
-        fallbackText,
-        () => setIsSpeaking(true),
-        () => setIsSpeaking(false)
-      );
+      busyRef.current = false;
+      speakAndResume(fallbackText);
     } finally {
+      busyRef.current = false;
       setIsLoading(false);
     }
   };
-
   // ───────────────────────────────────────────────────────────────────────────
   // MICROPHONE
   // ───────────────────────────────────────────────────────────────────────────
 
-  const handleToggleListening = async () => {
-    if (isListening) {
+    const handleToggleListening = () => {
+    if (handsFreeRef.current) {
+      // mute
+      handsFreeRef.current = false;
+      setHandsFree(false);
       setIsListening(false);
-      await speechEngine.stopListening();
-      return;
+      speechEngine.stopHandsFree();
+    } else {
+      // unmute
+      handsFreeRef.current = true;
+      setHandsFree(true);
+      resumeListening();
     }
-
-    speechEngine.stop();
-
-    setIsSpeaking(false);
-    setIsListening(true);
-    setCurrentEmotion('thinking');
-
-    await speechEngine.startListening(
-      (transcribedText, isFinal) => {
-        if (isFinal && transcribedText) {
-          setIsListening(false);
-          handleSendCustomQuery(transcribedText);
-        }
-      },
-
-      (error) => {
-        console.warn(
-          '[Assistant] STT Error:',
-          error
-        );
-
-        setIsListening(false);
-      },
-
-      () => {
-        setIsListening(false);
-      }
-    );
   };
-
   // ───────────────────────────────────────────────────────────────────────────
   // REPLAY
   // ───────────────────────────────────────────────────────────────────────────
@@ -486,18 +467,22 @@ export default function AssistantScreen() {
 
         <View style={styles.header}>
 
-          <TouchableOpacity
-            style={styles.headerBtn}
-            onPress={() => {
-              speechEngine.stop();
-              router.back();
-            }}
-            accessibilityLabel="Bumalik sa Dashboard"
+                    <TouchableOpacity
+            style={[
+              styles.micButton,
+              !handsFree && styles.micButtonActive, // red = muted
+            ]}
+            onPress={handleToggleListening}
+            accessibilityLabel={
+              handsFree
+                ? 'I-mute ang mikropono'
+                : 'I-unmute ang mikropono'
+            }
           >
             <Ionicons
-              name="arrow-back"
-              size={24}
-              color="#1F5C3E"
+              name={handsFree ? 'mic' : 'mic-off'}
+              size={26}
+              color="#FFFFFF"
             />
           </TouchableOpacity>
 
@@ -861,10 +846,10 @@ export default function AssistantScreen() {
 
           <TextInput
             style={styles.textInputField}
-            placeholder={
-              isListening
-                ? 'Nakikinig po si Lolo Aurea sa inyo...'
-                : 'Magtanong o mag-type kay Lolo Aurea...'
+                        placeholder={
+              !handsFree
+                ? 'Naka-mute ang mikropono. Mag-type dito...'
+                : 'Nakikinig po ako, o mag-type dito...'
             }
             placeholderTextColor="#8C9E94"
             value={inputText}

@@ -4,7 +4,7 @@ backend/services/stt_service.py
 Speech-to-Text (STT) Service for LOLO PAT AI Companion — Phase 8.
 
 Transcribes spoken Filipino/Tagalog and English audio using Gemini Multimodal
-Audio processing or fallback local transcription.
+Audio processing.
 ─────────────────────────────────────────────────────────────────────────────
 """
 
@@ -65,19 +65,20 @@ class STTService:
 
         client = _get_gemini_client()
 
-        # If Gemini is available, use multimodal audio transcription
         if client:
             try:
                 from google.genai import types
 
+                # CHANGED (1): the prompt now lets Gemini say "no speech"
                 prompt = (
-                    "You are a precise Speech-to-Text transcription AI for the AUREA mobile application. "
-                    "The speaker is an elderly Filipino citizen speaking Tagalog, Filipino, Taglish, or English. "
-                    "Transcribe the spoken audio verbatim with proper punctuation and spelling. "
-                    "Do NOT add explanations, timestamps, or greetings. Output ONLY the exact transcribed text."
+                    "You are a precise Speech-to-Text AI for the AUREA app. "
+                    "The speaker is an elderly Filipino speaking Tagalog, Filipino, Taglish, or English. "
+                    "Transcribe verbatim with proper punctuation and spelling. "
+                    "If there is no clearly intelligible human speech (silence, noise, coughing, "
+                    "TV or background sounds), output exactly: [NO_SPEECH]. "
+                    "Output ONLY the transcription, nothing else."
                 )
 
-                # Ensure supported audio mime type
                 normalized_mime = mime_type or "audio/m4a"
                 if "m4a" in normalized_mime:
                     normalized_mime = "audio/mp4"
@@ -94,9 +95,17 @@ class STTService:
                 )
 
                 transcribed_text = (response.text or "").strip()
-                # Clean any quotes or stray code fences
                 transcribed_text = re.sub(r"^```[a-zA-Z]*\n?", "", transcribed_text)
                 transcribed_text = re.sub(r"\n?```$", "", transcribed_text).strip(' "\'')
+
+                # CHANGED (2): treat "no speech" as an empty result
+                if "NO_SPEECH" in transcribed_text.upper() or len(transcribed_text) < 2:
+                    return {
+                        "success": False,
+                        "text": "",
+                        "error": "no_speech",
+                        "language": language,
+                    }
 
                 return {
                     "success": True,
@@ -108,11 +117,11 @@ class STTService:
             except Exception as exc:
                 print(f"[LOLO STT] Gemini audio transcription error: {exc}")
 
-        # Fallback offline / rule-based transcription
+        # CHANGED (3): the fake "Magandang araw po Lolo Aurea!..." fallback is gone.
+        # If Gemini is unavailable or failed, report failure instead of inventing text.
         return {
-            "success": True,
-            "text": "Magandang araw po Lolo Aurea! May itatanong po ako tungkol sa aking benepisyo.",
-            "confidence": 0.85,
+            "success": False,
+            "text": "",
+            "error": "stt_unavailable",
             "language": language,
-            "source": "fallback_stt",
         }
