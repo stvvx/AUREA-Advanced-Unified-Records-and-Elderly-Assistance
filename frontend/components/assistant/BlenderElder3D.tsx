@@ -20,8 +20,11 @@ type BlenderElder3DProps = {
 // ================================================================
 
 const TARGET_HEIGHT = 3;
-const CAMERA_FOV = 35;
-const CAMERA_PADDING = 1.15;
+
+// Bust-shot camera
+const CAMERA_FOV = 32;
+const CAMERA_DISTANCE = 3.4;
+const CAMERA_LOOK_AT_Y = 0.55;
 
 // Blender mouth values
 const MOUTH_CLOSED_Y = 0.003;
@@ -1611,53 +1614,52 @@ export default function BlenderElder3D({
         (MOUTH_OPEN_Y / MOUTH_CLOSED_Y) *
         MOUTH_OPEN_MULTIPLIER;
     }
+// ============================================================
+// CAMERA — BUST SHOT
+// ============================================================
+//
+// The model remains full-size internally.
+// The camera is simply moved closer and aimed higher,
+// so only the head, neck, shoulders, and upper chest
+// are visible.
+//
+// This gives the same portrait-style framing as the
+// reference image instead of showing the whole body.
+// ============================================================
 
-    // ============================================================
-    // CAMERA
-    // ============================================================
+const dist = CAMERA_DISTANCE;
 
-    const dist =
-      (
-        TARGET_HEIGHT / 2 /
-        Math.tan(
-          THREE.MathUtils.degToRad(
-            CAMERA_FOV
-          ) / 2
-        )
-      ) *
-      CAMERA_PADDING;
+// Move camera closer for a bust-up composition.
+camera.position.set(
+  0,
+  CAMERA_LOOK_AT_Y,
+  dist
+);
 
-    camera.position.set(
-      0,
-      0,
-      dist
-    );
+camera.near = 0.05;
+camera.far = 100;
 
-    camera.near =
-      0.05;
+// Aim directly at the upper chest / neck area.
+// The lower torso will naturally fall outside
+// the camera's field of view.
+camera.lookAt(
+  0,
+  CAMERA_LOOK_AT_Y,
+  0
+);
 
-    camera.far =
-      dist * 10;
+camera.updateProjectionMatrix();
 
-    camera.lookAt(
-      0,
-      0,
-      0
-    );
-
-    camera.updateProjectionMatrix();
-
-    console.log(
-      '[LOLO] Fit:',
-      {
-        originalSize:
-          size.toArray(),
-
-        scale,
-
-        dist,
-      }
-    );
+console.log(
+  '[LOLO] Bust Camera:',
+  {
+    fov: CAMERA_FOV,
+    distance: dist,
+    lookAtY: CAMERA_LOOK_AT_Y,
+    originalSize: size.toArray(),
+    scale,
+  }
+);
 
     // ============================================================
     // BLINK SETUP
