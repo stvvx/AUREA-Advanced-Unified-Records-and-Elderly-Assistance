@@ -14,6 +14,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -24,6 +25,51 @@ import * as FileSystem from 'expo-file-system/legacy';
 import QRCode from 'react-native-qrcode-svg';
 import { WebView } from 'react-native-webview';
 import { useAuth } from '../context/AuthContext';
+
+function getAge(dob?: string): number | null {
+  if (!dob) return null;
+  const value = dob.trim();
+  const slashMatch = value.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  const isoMatch = value.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  const year = Number(slashMatch?.[3] ?? isoMatch?.[1]);
+  const month = Number(slashMatch?.[1] ?? isoMatch?.[2]);
+  const day = Number(slashMatch?.[2] ?? isoMatch?.[3]);
+  if (!year || !month || !day) return null;
+  const birthDate = new Date(year, month - 1, day);
+  if (
+    birthDate.getFullYear() !== year
+    || birthDate.getMonth() !== month - 1
+    || birthDate.getDate() !== day
+  ) return null;
+  const today = new Date();
+  let age = today.getFullYear() - year;
+  if (
+    today.getMonth() + 1 < month
+    || (today.getMonth() + 1 === month && today.getDate() < day)
+  ) age -= 1;
+  return age >= 0 ? age : null;
+}
+
+function toDobString(date: Date): string {
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${month}/${day}/${date.getFullYear()}`;
+}
+
+function parseDobString(value?: string): Date | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  const slashMatch = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  const isoMatch = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  const year = Number(slashMatch?.[3] ?? isoMatch?.[1]);
+  const month = Number(slashMatch?.[1] ?? isoMatch?.[2]);
+  const day = Number(slashMatch?.[2] ?? isoMatch?.[3]);
+  if (!year || !month || !day) return null;
+  const date = new Date(year, month - 1, day);
+  return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day
+    ? date
+    : null;
+}
 import {
   getUser,
   updateUser,
@@ -122,6 +168,8 @@ export default function ProfileScreen() {
   const [civilStatusOpen, setCivilStatusOpen] = useState(false);
 
   const [children, setChildren] = useState<ChildProfile[]>(user?.children ?? []);
+  const [childDobPickerId, setChildDobPickerId] = useState<string | null>(null);
+  const [childDobDraft, setChildDobDraft] = useState(new Date());
   const [birthcert, setBirthcert] = useState<string | null>(user?.birthcert ?? null);
   const [birthcertUploading, setBirthcertUploading] = useState(false);
   const [birthcertDeleting, setBirthcertDeleting] = useState(false);
@@ -265,6 +313,15 @@ export default function ProfileScreen() {
     setChildren((prev) => prev.filter((c) => c.id !== id));
   };
 
+  const openChildDobPicker = (child: ChildProfile) => {
+    setChildDobDraft(parseDobString(child.dob) ?? new Date());
+    setChildDobPickerId(child.id);
+  };
+
+  const setChildDob = (date: Date) => {
+    if (childDobPickerId) updateChild(childDobPickerId, 'dob', toDobString(date));
+  };
+
   const handlePickAvatar = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
@@ -382,6 +439,8 @@ export default function ProfileScreen() {
   }
 
   const fullName = [form.firstName, form.middleName, form.lastName].filter(Boolean).join(' ') || 'Senior Citizen';
+  const profileAge = getAge(user?.dob);
+  const canHaveSeniorQr = profileAge !== null && profileAge >= 60;
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -461,7 +520,7 @@ export default function ProfileScreen() {
               </View>
 
               {/* Digital ID QR */}
-              {user && (
+              {user && canHaveSeniorQr ? (
                 <View style={[styles.qrCard, shadow(C.ink, 0.08, 16, 4)]}>
                   <View style={styles.qrHeader}>
                     <Ionicons name="qr-code-outline" size={18} color={C.primaryDark} />
@@ -494,7 +553,15 @@ export default function ProfileScreen() {
                     <Text style={styles.viewIdBtnTxt}>View Full ID Card</Text>
                   </TouchableOpacity>
                 </View>
-              )}
+              ) : user ? (
+                <View style={[styles.qrCard, shadow(C.ink, 0.08, 16, 4)]}>
+                  <View style={styles.qrHeader}>
+                    <Ionicons name="lock-closed-outline" size={18} color={C.primaryDark} />
+                    <Text style={styles.qrTitle}>Digital ID unavailable</Text>
+                  </View>
+                  <Text style={styles.qrDesc}>A Senior Citizen QR code is available only to users aged 60 and above.</Text>
+                </View>
+              ) : null}
             </View>
 
             {/* Right Column: Information Form */}
@@ -763,13 +830,81 @@ export default function ProfileScreen() {
                           placeholderTextColor={C.inkFaint}
                         />
                         <Text style={styles.label}>Date of birth</Text>
-                        <TextInput
-                          style={styles.input}
-                          value={child.dob}
-                          onChangeText={(value) => updateChild(child.id, 'dob', value)}
-                          placeholder="YYYY-MM-DD"
-                          placeholderTextColor={C.inkFaint}
-                        />
+                        {Platform.OS === 'web' ? (
+                          <input
+                            type="date"
+                            value={parseDobString(child.dob)?.toISOString().split('T')[0] ?? ''}
+                            onChange={(event) => {
+                              const value = event.target.value;
+                              if (value) {
+                                const [year, month, day] = value.split('-').map(Number);
+                                updateChild(child.id, 'dob', toDobString(new Date(year, month - 1, day)));
+                              }
+                            }}
+                            max={new Date().toISOString().split('T')[0]}
+                            style={styles.input as any}
+                          />
+                        ) : (
+                          <TouchableOpacity
+                            style={[styles.input, webPointer, { justifyContent: 'space-between' }]}
+                            onPress={() => openChildDobPicker(child)}
+                            activeOpacity={0.8}
+                          >
+                            <Text style={child.dob ? styles.readOnlyText : styles.placeholderText}>
+                              {child.dob || 'Select date of birth'}
+                            </Text>
+                            <Ionicons name="calendar-outline" size={16} color={C.inkFaint} />
+                          </TouchableOpacity>
+                        )}
+                        {Platform.OS === 'android' && childDobPickerId === child.id && (
+                          <DateTimePicker
+                            value={childDobDraft}
+                            mode="date"
+                            display="calendar"
+                            maximumDate={new Date()}
+                            onValueChange={(_, selectedDate) => {
+                              if (selectedDate) setChildDob(selectedDate);
+                              setChildDobPickerId(null);
+                            }}
+                            onDismiss={() => setChildDobPickerId(null)}
+                          />
+                        )}
+                        {Platform.OS === 'ios' && childDobPickerId === child.id && (
+                          <Modal
+                            visible
+                            transparent
+                            animationType="fade"
+                            onRequestClose={() => setChildDobPickerId(null)}
+                          >
+                            <TouchableOpacity
+                              style={styles.modalOverlay}
+                              activeOpacity={1}
+                              onPress={() => setChildDobPickerId(null)}
+                            >
+                              <View style={styles.modalSheet}>
+                                <Text style={styles.modalTitle}>Select child date of birth</Text>
+                                <DateTimePicker
+                                  value={childDobDraft}
+                                  mode="date"
+                                  display="spinner"
+                                  maximumDate={new Date()}
+                                  onValueChange={(_, selectedDate) => {
+                                    if (selectedDate) {
+                                      setChildDobDraft(selectedDate);
+                                      setChildDob(selectedDate);
+                                    }
+                                  }}
+                                />
+                                <TouchableOpacity
+                                  style={styles.primaryBtn}
+                                  onPress={() => setChildDobPickerId(null)}
+                                >
+                                  <Text style={styles.primaryBtnText}>Done</Text>
+                                </TouchableOpacity>
+                              </View>
+                            </TouchableOpacity>
+                          </Modal>
+                        )}
                       </View>
                       <TouchableOpacity
                         style={[styles.removeChildBtn, webPointer]}

@@ -8,3 +8,4 @@ pillow==12.3.0
 numpy==2.2.6
 google-genai>=1.14.0
 flask-cors==5.0.1
+edge-tts

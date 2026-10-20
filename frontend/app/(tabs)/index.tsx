@@ -417,6 +417,21 @@ export default function DashboardScreen() {
                   </TouchableOpacity>
 
                   <View style={s.headerMenuDivider} />
+                  <TouchableOpacity
+                    style={[s.headerMenuItem, webPointer]}
+                    onPress={() => {
+                      setMenuOpen(false);
+                      router.push('/settings');
+                    }}
+                    activeOpacity={0.8}
+                    accessibilityRole="button"
+                    accessibilityLabel="Open settings"
+                  >
+                    <Ionicons name="settings-outline" size={16} color={C.ink} />
+                    <Text style={s.headerMenuText}>Settings</Text>
+                  </TouchableOpacity>
+
+                  <View style={s.headerMenuDivider} />
 
                   <TouchableOpacity
                     style={[s.headerMenuItem, webPointer]}

@@ -138,6 +138,30 @@ function formatIdNumber(id?: number): string {
   return `SA-${String(id).padStart(4, '0')}`;
 }
 
+function getAge(dob?: string): number | null {
+  if (!dob) return null;
+  const value = dob.trim();
+  const slashMatch = value.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  const isoMatch = value.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  const year = Number(slashMatch?.[3] ?? isoMatch?.[1]);
+  const month = Number(slashMatch?.[1] ?? isoMatch?.[2]);
+  const day = Number(slashMatch?.[2] ?? isoMatch?.[3]);
+  if (!year || !month || !day) return null;
+  const birthDate = new Date(year, month - 1, day);
+  if (
+    birthDate.getFullYear() !== year
+    || birthDate.getMonth() !== month - 1
+    || birthDate.getDate() !== day
+  ) return null;
+  const today = new Date();
+  let age = today.getFullYear() - birthDate.getFullYear();
+  if (
+    today.getMonth() < birthDate.getMonth()
+    || (today.getMonth() === birthDate.getMonth() && today.getDate() < birthDate.getDate())
+  ) age -= 1;
+  return age;
+}
+
 export default function DigitalIdScreen() {
   const router = useRouter();
   const { user } = useAuth();
@@ -212,6 +236,23 @@ export default function DigitalIdScreen() {
           <Text style={s.emptyText}>Please sign in to view your official digital OSCA ID card.</Text>
           <TouchableOpacity style={s.loginBtn} onPress={() => router.push('/login')}>
             <Text style={s.loginBtnTxt}>Go to Sign In</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  const profileAge = getAge(profile?.dob || user.dob);
+  if (!loading && (profileAge === null || profileAge < 60)) {
+    return (
+      <SafeAreaView style={s.safe} edges={['top']}>
+        <StatusBar barStyle="dark-content" backgroundColor={C.bg} />
+        <View style={s.centered}>
+          <Ionicons name="lock-closed-outline" size={54} color={C.oscaGreen} />
+          <Text style={s.emptyTitle}>Senior Citizen ID unavailable</Text>
+          <Text style={s.emptyText}>A Senior Citizen ID is available only to users aged 60 and above.</Text>
+          <TouchableOpacity style={s.loginBtn} onPress={() => router.back()}>
+            <Text style={s.loginBtnTxt}>Go Back</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>

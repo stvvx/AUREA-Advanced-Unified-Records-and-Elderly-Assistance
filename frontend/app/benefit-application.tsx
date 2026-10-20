@@ -280,6 +280,7 @@ export default function BenefitApplicationScreen() {
   const [locatingCenter, setLocatingCenter] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [toast, setToast] = useState({ visible: false, message: '', type: 'success' as 'success' | 'error' });
+  const isSenior = Number(calculateAgeFromDob(user?.dob)) >= 60;
 
   const updateField = (key: keyof typeof form, value: string) => {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -607,6 +608,20 @@ export default function BenefitApplicationScreen() {
       setSubmitting(false);
     }
   };
+
+  if (!user || !isSenior) {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: '#F6F8F2' }}>
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+          <Text style={{ fontSize: 22, fontWeight: '700', color: '#132018', textAlign: 'center', marginBottom: 8 }}>Senior service unavailable</Text>
+          <Text style={{ fontSize: 15, color: '#3E5246', textAlign: 'center', marginBottom: 20 }}>Senior citizen services are available only to users aged 60 and above.</Text>
+          <TouchableOpacity style={{ backgroundColor: '#1F5C3E', borderRadius: 10, paddingHorizontal: 20, paddingVertical: 12 }} onPress={() => router.back()}>
+            <Text style={{ fontSize: 15, fontWeight: '700', color: '#FFFFFF' }}>Go Back</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={s.safe} edges={['top']}>

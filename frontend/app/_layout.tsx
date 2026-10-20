@@ -11,6 +11,7 @@ import {
 } from '@expo-google-fonts/poppins';
 
 import { AuthProvider } from '../context/AuthContext';
+import { SettingsProvider } from '../context/SettingsContext';
 import AssistantFloatingWidget from '../components/assistant/AssistantFloatingWidget';
 
 // Suppress non-fatal development warnings from blocking the UI
@@ -38,8 +39,9 @@ export default function RootLayout() {
   }
 
   return (
-    <AuthProvider>
-      <Stack>
+    <SettingsProvider>
+      <AuthProvider>
+        <Stack>
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="assistant" options={{ headerShown: false }} />
         <Stack.Screen name="login" options={{ headerShown: false }} />
@@ -52,9 +54,11 @@ export default function RootLayout() {
         <Stack.Screen name="benefit-application" options={{ headerShown: false }} />
         <Stack.Screen name="admin-dashboard" options={{ headerShown: false }} />
         <Stack.Screen name="admin-benefits" options={{ headerShown: false }} />
+        <Stack.Screen name="settings" options={{ headerShown: false }} />
         <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
-      </Stack>
-      <StatusBar style="auto" />
-    </AuthProvider>
+        </Stack>
+        <StatusBar style="auto" />
+      </AuthProvider>
+    </SettingsProvider>
   );
 }

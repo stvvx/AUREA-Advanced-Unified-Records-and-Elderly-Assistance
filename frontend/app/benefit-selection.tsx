@@ -14,10 +14,24 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { BENEFITS } from '../data/benefits';
 import { useAuth } from '../context/AuthContext';
 
+function getAge(dob?: string): number | null {
+  if (!dob) return null;
+  const birthDate = new Date(dob);
+  if (Number.isNaN(birthDate.getTime())) return null;
+  const today = new Date();
+  let age = today.getFullYear() - birthDate.getFullYear();
+  if (
+    today.getMonth() < birthDate.getMonth()
+    || (today.getMonth() === birthDate.getMonth() && today.getDate() < birthDate.getDate())
+  ) age -= 1;
+  return age;
+}
+
 export default function BenefitSelectionScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ query?: string }>();
   const { user } = useAuth();
+  const isSenior = getAge(user?.dob) !== null && (getAge(user?.dob) ?? 0) >= 60;
 
   const filteredBenefits = React.useMemo(() => {
     const query = typeof params.query === 'string' ? params.query.trim().toLowerCase() : '';
@@ -64,6 +78,12 @@ export default function BenefitSelectionScreen() {
             >
               <Text style={s.lockButtonText}>Go to Login</Text>
             </TouchableOpacity>
+          </View>
+        ) : !isSenior ? (
+          <View style={s.lockCard}>
+            <Ionicons name="lock-closed-outline" size={24} color="#FFFFFF" style={{ marginBottom: 10 }} />
+            <Text style={s.lockTitle}>Senior services unavailable</Text>
+            <Text style={s.lockText}>Senior citizen services and benefits are available only to users aged 60 and above.</Text>
           </View>
         ) : (
           <View style={s.list}>

@@ -173,8 +173,6 @@ export default function RegisterScreen() {
 
   const scrollTop = () => scrollRef.current?.scrollTo({ y: 0, animated: true });
 
-  // Validation is split per step so seniors get a focused, specific message
-  // instead of a single wall of requirements at the very end.
   const validateStep = (index: number): string | null => {
     if (index === 0) {
       if (!form.firstName?.trim()) return 'Please enter your first name.';
@@ -332,12 +330,7 @@ export default function RegisterScreen() {
             mode="date"
             display="calendar"
             maximumDate={new Date()}
-            onChange={(event, selectedDate) => {
-              if (event.type === 'dismissed') {
-                setDobOpen(false);
-                return;
-              }
-
+            onValueChange={(_, selectedDate) => {
               if (selectedDate) {
                 setDobDraft(selectedDate);
                 set('dob', toDobString(selectedDate));
@@ -345,6 +338,7 @@ export default function RegisterScreen() {
 
               setDobOpen(false);
             }}
+            onDismiss={() => setDobOpen(false)}
           />
         )}
 
@@ -590,7 +584,7 @@ export default function RegisterScreen() {
                   mode="date"
                   display="spinner"
                   maximumDate={new Date()}
-                  onChange={(_, selectedDate) => {
+                  onValueChange={(_, selectedDate) => {
                     if (selectedDate) {
                       setDobDraft(selectedDate);
                     }

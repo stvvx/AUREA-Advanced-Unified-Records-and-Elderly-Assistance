@@ -107,13 +107,32 @@ def create_benefit_application():
         users = _supabase(
             "GET",
             "users",
-            params={"select": "id", "id": f"eq.{user_id}", "limit": "1"},
+            params={"select": "id,dob", "id": f"eq.{user_id}", "limit": "1"},
         )
     except Exception as exc:
         return jsonify({"success": False, "error": str(exc)}), 500
 
     if not isinstance(users, list) or not users:
         return jsonify({"success": False, "error": "Applicant was not found."}), 404
+
+    applicant_dob = str(users[0].get("dob") or "").strip()
+    try:
+        try:
+            applicant_birth_date = datetime.strptime(applicant_dob, "%Y-%m-%d").date()
+        except ValueError:
+            applicant_birth_date = datetime.strptime(applicant_dob, "%m/%d/%Y").date()
+        today = date.today()
+        applicant_age = today.year - applicant_birth_date.year - (
+            (today.month, today.day) < (applicant_birth_date.month, applicant_birth_date.day)
+        )
+    except ValueError:
+        return jsonify({"success": False, "error": "A valid date of birth is required."}), 400
+
+    if applicant_age < 60:
+        return jsonify({
+            "success": False,
+            "error": "Only users aged 60 and above may avail senior citizen services.",
+        }), 403
 
     date_of_birth = str(data.get("date_of_birth") or "").strip()
     benefit_type = classify_benefit_type(date_of_birth)

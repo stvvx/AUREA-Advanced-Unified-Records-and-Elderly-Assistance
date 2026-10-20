@@ -8,7 +8,9 @@ import {
   TouchableOpacity,
   Platform,
   ActivityIndicator,
+  TextInput,
 } from 'react-native';
+import { WebView } from 'react-native-webview';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -60,6 +62,24 @@ const OSCA_ACTIONS = [
   { icon: 'document-text',   label: 'Records',             desc: 'Access unified records'       },
 ];
 
+const BARANGAYS = [
+  'Aguho', 'Magtanggol', 'Martires Del 96', 'Poblacion', 'San Pedro',
+  'San Roque', 'Santa Ana', 'Santo Rosario-Kanluran', 'Santo Rosario-Silangan', 'Tabacalera',
+];
+
+const BARANGAY_CENTERS: Record<string, [number, number]> = {
+  Aguho: [14.5486, 121.0707],
+  Magtanggol: [14.5455, 121.0718],
+  'Martires Del 96': [14.5434, 121.0698],
+  Poblacion: [14.5448, 121.0681],
+  'San Pedro': [14.5481, 121.0668],
+  'San Roque': [14.5418, 121.0718],
+  'Santa Ana': [14.5428, 121.0663],
+  'Santo Rosario-Kanluran': [14.5472, 121.0741],
+  'Santo Rosario-Silangan': [14.5500, 121.0730],
+  Tabacalera: [14.5503, 121.0688],
+};
+
 const MED_ACTIONS = [
   { icon: 'medkit',          label: 'Medical Records',  desc: 'View health records'          },
   { icon: 'calendar',        label: 'Appointments',     desc: 'Manage health appointments'   },
@@ -80,6 +100,63 @@ function getActions(role: string) {
   if (role === 'super admin') return SUPER_ACTIONS;
   if (role === 'med admin')   return MED_ACTIONS;
   return OSCA_ACTIONS;
+}
+
+function parseBirthDate(dob?: string): Date | null {
+  if (!dob) return null;
+  const value = dob.trim();
+  let year: number;
+  let month: number;
+  let day: number;
+
+  const slashMatch = value.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  const isoMatch = value.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (slashMatch) {
+    month = Number(slashMatch[1]);
+    day = Number(slashMatch[2]);
+    year = Number(slashMatch[3]);
+  } else if (isoMatch) {
+    year = Number(isoMatch[1]);
+    month = Number(isoMatch[2]);
+    day = Number(isoMatch[3]);
+  } else {
+    return null;
+  }
+
+  const birthDate = new Date(year, month - 1, day);
+  if (
+    birthDate.getFullYear() !== year
+    || birthDate.getMonth() !== month - 1
+    || birthDate.getDate() !== day
+  ) return null;
+
+  return birthDate;
+}
+
+function getAge(dob?: string): number | null {
+  const birthDate = parseBirthDate(dob);
+  if (!birthDate) return null;
+  const today = new Date();
+  let age = today.getFullYear() - birthDate.getFullYear();
+  const birthdayPassed = today.getMonth() > birthDate.getMonth()
+    || (today.getMonth() === birthDate.getMonth() && today.getDate() >= birthDate.getDate());
+  if (!birthdayPassed) age -= 1;
+  return age >= 0 ? age : null;
+}
+
+function getSeniorCategory(dob?: string): string {
+  const age = getAge(dob);
+  if (age === null || age < 60) return 'Not eligible';
+  if (age >= 100) return 'Centenarian';
+  if (age >= 90) return 'Nonagenarian';
+  if (age >= 80) return 'Octogenarian';
+  return 'Senior Citizen';
+}
+
+function getAgeFilter(age: number | null): string {
+  if (age === null || age < 60) return 'Unknown age';
+  if (age >= 100) return '100+';
+  return `${Math.floor(age / 10) * 10}-${Math.floor(age / 10) * 10 + 9}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -120,6 +197,47 @@ async function fetchTransactions(): Promise<any[]> {
   return data.transactions ?? [];
 }
 
+function normalizeBarangay(address?: string): string | null {
+  const value = String(address ?? '').toLowerCase().replace(/[.,]/g, ' ');
+  return BARANGAYS.find((barangay) => {
+    const normalized = barangay.toLowerCase();
+    return value.includes(normalized) || value.includes(`brgy ${normalized}`);
+  }) ?? null;
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>'"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character] ?? character);
+}
+
+function buildBarangayMapHtml(seniors: any[]): string {
+  const counts = BARANGAYS.reduce<Record<string, number>>((result, barangay) => {
+    result[barangay] = 0;
+    return result;
+  }, {});
+  seniors.forEach((senior) => {
+    const barangay = normalizeBarangay(senior.address);
+    if (barangay) counts[barangay] += 1;
+  });
+
+  const heatPoints = BARANGAYS
+    .filter((barangay) => counts[barangay] > 0)
+    .map((barangay) => {
+      const [latitude, longitude] = BARANGAY_CENTERS[barangay];
+      return `[${latitude},${longitude},${counts[barangay]}]`;
+    })
+    .join(',');
+  const maxCount = Math.max(...BARANGAYS.map((barangay) => counts[barangay]), 1);
+  const barangayScript = BARANGAYS.map((barangay) => {
+    const [latitude, longitude] = BARANGAY_CENTERS[barangay];
+    const count = counts[barangay];
+    const radius = count > 0 ? Math.min(24, 8 + count * 1.5) : 6;
+    const fillColor = count === 0 ? '#71857A' : '#B3432E';
+    return `L.circleMarker([${latitude},${longitude}],{radius:${radius},color:'#FFFFFF',fillColor:'${fillColor}',fillOpacity:0,opacity:0,weight:0}).addTo(map).bindPopup('<strong>${escapeHtml(barangay)}</strong><br>${count} eligible senior citizen${count === 1 ? '' : 's'}');`;
+  }).join('');
+
+  return `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"><style>html,body,#map{height:100%;margin:0}#map{background:#dfeadf}.leaflet-tile{filter:grayscale(100%) brightness(.82)}</style></head><body><div id="map"></div><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script><script>const map=L.map('map',{zoomControl:true}).setView([14.5465,121.0702],15);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'&copy; OpenStreetMap contributors',maxZoom:19}).addTo(map);const heatPoints=[${heatPoints}];if(heatPoints.length&&L.heatLayer){L.heatLayer(heatPoints,{radius:70,blur:48,maxZoom:17,max:${maxCount},gradient:{0.05:'#172554',0.2:'#3730A3',0.38:'#7C3AED',0.55:'#22D3EE',0.7:'#84CC16',0.84:'#FDE047',1:'#EF4444'}}).addTo(map);}${barangayScript}</script></body></html>`;
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -131,12 +249,15 @@ export default function AdminDashboard() {
   const meta = ROLE_META[role] ?? ROLE_META['osca admin'];
   const actions = getActions(role);
   const isSuperAdmin = role === 'super admin';
+  const canViewSeniorMap = isSuperAdmin || role === 'osca admin';
 
   const [users, setUsers]               = useState<any[]>([]);
   const [transactions, setTransactions] = useState<any[]>([]);
   const [loadingUsers, setLoadingUsers] = useState(false);
   const [loadingTx, setLoadingTx]       = useState(false);
-  const [activeTab, setActiveTab]       = useState<'users' | 'transactions'>('users');
+  const [activeTab, setActiveTab]       = useState<'users' | 'transactions' | 'seniors'>('users');
+  const [seniorSearch, setSeniorSearch] = useState('');
+  const [seniorFilter, setSeniorFilter] = useState('All');
 
   const [toast, setToast] = useState({ visible: false, message: '', type: 'success' as 'success' | 'error' });
   const showToast = (message: string, type: 'success' | 'error' = 'success') =>
@@ -149,13 +270,13 @@ export default function AdminDashboard() {
   };
 
   useEffect(() => {
-    if (!isSuperAdmin) return;
+    if (!canViewSeniorMap) return;
     setLoadingUsers(true);
     fetchUsers()
       .then(setUsers)
       .catch(() => showToast('Could not load users.', 'error'))
       .finally(() => setLoadingUsers(false));
-  }, [isSuperAdmin]);
+  }, [canViewSeniorMap]);
 
   useEffect(() => {
     if (!isSuperAdmin || activeTab !== 'transactions') return;
@@ -165,6 +286,37 @@ export default function AdminDashboard() {
       .catch(() => showToast('Could not load transactions.', 'error'))
       .finally(() => setLoadingTx(false));
   }, [isSuperAdmin, activeTab]);
+
+  const seniors = users.filter((candidate) => {
+    const candidateRole = String(candidate.role ?? 'user').toLowerCase();
+    const age = getAge(candidate.dob);
+    return !['admin', 'osca admin', 'med admin', 'super admin'].includes(candidateRole)
+      && age !== null
+      && age >= 60;
+  });
+  const barangayCounts = BARANGAYS.reduce<Record<string, number>>((counts, barangay) => {
+    counts[barangay] = 0;
+    return counts;
+  }, {});
+  seniors.forEach((senior) => {
+    const barangay = normalizeBarangay(senior.address);
+    if (barangay) barangayCounts[barangay] += 1;
+  });
+  const mappedSeniorCount = Object.values(barangayCounts).reduce((total, count) => total + count, 0);
+  const unmappedSeniorCount = seniors.length - mappedSeniorCount;
+  const barangayMapHtml = buildBarangayMapHtml(seniors);
+  const filteredSeniors = seniors.filter((senior) => {
+    const age = getAge(senior.dob);
+    const category = getSeniorCategory(senior.dob);
+    const faceStatus = senior.avatarUrl ? 'Face Enrolled' : 'Face Not Enrolled';
+    const query = seniorSearch.trim().toLowerCase();
+    const matchesQuery = !query || [
+      senior.firstName, senior.middleName, senior.lastName, senior.email,
+      senior.contact, senior.address, senior.civilStatus,
+    ].some((value) => String(value ?? '').toLowerCase().includes(query));
+    const ageFilter = getAgeFilter(age);
+    return matchesQuery && (seniorFilter === 'All' || ageFilter === seniorFilter || category === seniorFilter || faceStatus === seniorFilter);
+  });
 
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
@@ -246,6 +398,59 @@ export default function AdminDashboard() {
           ))}
         </View>
 
+        {canViewSeniorMap && (
+          <View style={s.mapSection}>
+            <View style={s.sectionHead}>
+              <Text style={s.sectionEye}>SENIOR CITIZEN DISTRIBUTION</Text>
+              <Text style={s.sectionTitle}>Pateros barangay heatmap</Text>
+              <Text style={s.mapDescription}>Counts are based on registered users aged 60+ and their saved address.</Text>
+            </View>
+            <View style={s.mapCard}>
+              <View style={s.mapLegend}>
+                <Text style={s.mapLegendTitle}>Senior citizens per barangay</Text>
+                <LinearGradient
+                  colors={['#172554', '#3730A3', '#7C3AED', '#22D3EE', '#84CC16', '#FDE047', '#EF4444']}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0 }}
+                  style={s.mapLegendGradient}
+                />
+                <View style={s.mapLegendLabels}>
+                  <Text style={s.mapLegendLabel}>Low</Text>
+                  <Text style={s.mapLegendLabel}>Moderate</Text>
+                  <Text style={s.mapLegendLabel}>High</Text>
+                </View>
+              </View>
+              {loadingUsers ? (
+                <ActivityIndicator color={C.primaryDark} style={{ height: 260 }} />
+              ) : (
+                <WebView
+                  originWhitelist={['*']}
+                  source={{ html: barangayMapHtml }}
+                  style={s.map}
+                  javaScriptEnabled
+                  domStorageEnabled
+                  scrollEnabled={false}
+                />
+              )}
+              <View style={s.mapSummary}>
+                <View>
+                  <Text style={s.mapSummaryValue}>{seniors.length}</Text>
+                  <Text style={s.mapSummaryLabel}>eligible seniors</Text>
+                </View>
+                <View>
+                  <Text style={s.mapSummaryValue}>{mappedSeniorCount}</Text>
+                  <Text style={s.mapSummaryLabel}>mapped by barangay</Text>
+                </View>
+                <View>
+                  <Text style={s.mapSummaryValue}>{unmappedSeniorCount}</Text>
+                  <Text style={s.mapSummaryLabel}>address needs review</Text>
+                </View>
+              </View>
+              <Text style={s.mapAttribution}>Map data © OpenStreetMap contributors · Approximate barangay centers</Text>
+            </View>
+          </View>
+        )}
+
         {/* ── SUPER ADMIN: USERS & TRANSACTIONS ── */}
         {isSuperAdmin && (
           <>
@@ -272,6 +477,14 @@ export default function AdminDashboard() {
                 <Ionicons name="swap-horizontal" size={15} color={activeTab === 'transactions' ? C.white : C.primaryDark} />
                 <Text style={[s.tabTxt, activeTab === 'transactions' && s.tabTxtActive]}>Transactions</Text>
               </TouchableOpacity>
+              <TouchableOpacity
+                style={[s.tab, activeTab === 'seniors' && s.tabActive]}
+                onPress={() => setActiveTab('seniors')}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="person" size={15} color={activeTab === 'seniors' ? C.white : C.primaryDark} />
+                <Text style={[s.tabTxt, activeTab === 'seniors' && s.tabTxtActive]}>Seniors</Text>
+              </TouchableOpacity>
             </View>
 
             {/* Users list */}
@@ -289,7 +502,9 @@ export default function AdminDashboard() {
                       </View>
                       <View style={{ flex: 1 }}>
                         <Text style={s.listName}>{u.firstName} {u.lastName}</Text>
-                        <Text style={s.listSub}>{u.email}</Text>
+                        <Text style={s.listSub}>{u.email} · {u.contact || 'No contact'}</Text>
+                        <Text style={s.userDetail}>DOB: {u.dob || 'Not set'} · Age: {getAge(u.dob) ?? 'Unknown'}</Text>
+                        <Text style={s.userDetail}>{u.address || 'No address'} · {u.civilStatus || 'Civil status not set'}</Text>
                       </View>
                       <View style={[s.roleBadge, { backgroundColor: ROLE_META[u.role]?.color ? C.primarySoft : C.goldSoft }]}>
                         <Text style={s.roleBadgeTxt}>{u.role ?? 'user'}</Text>
@@ -318,6 +533,58 @@ export default function AdminDashboard() {
                         <Text style={s.listSub}>{tx.createdAt ?? tx.created_at ?? ''}</Text>
                       </View>
                       <Text style={s.txStatus}>{tx.status ?? '—'}</Text>
+                    </View>
+                  ))
+                )}
+              </View>
+            )}
+
+            {/* Senior citizens list */}
+            {activeTab === 'seniors' && (
+              <View style={s.listCard}>
+                <View style={s.seniorHeader}>
+                  <Text style={s.seniorCount}>{filteredSeniors.length} of {seniors.length} senior citizens</Text>
+                  <TextInput
+                    value={seniorSearch}
+                    onChangeText={setSeniorSearch}
+                    placeholder="Search name, email, address..."
+                    placeholderTextColor={C.inkFaint}
+                    style={s.searchInput}
+                    autoCapitalize="none"
+                  />
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.filterRow}>
+                    {['All', '60-69', '70-79', '80-89', '90-99', '100+', 'Face Enrolled', 'Face Not Enrolled'].map((filter) => (
+                      <TouchableOpacity
+                        key={filter}
+                        style={[s.filterChip, seniorFilter === filter && s.filterChipActive]}
+                        onPress={() => setSeniorFilter(filter)}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={[s.filterChipTxt, seniorFilter === filter && s.filterChipTxtActive]}>{filter}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </View>
+                {loadingUsers ? (
+                  <ActivityIndicator color={C.primaryDark} style={{ padding: sp(5) }} />
+                ) : filteredSeniors.length === 0 ? (
+                  <Text style={s.emptyTxt}>No senior citizens match this filter.</Text>
+                ) : (
+                  filteredSeniors.map((senior, i) => (
+                    <View key={senior.id ?? i} style={[s.seniorRow, i < filteredSeniors.length - 1 && s.listRowBorder]}>
+                      <View style={s.listAvatar}>
+                        <Ionicons name="person" size={18} color={C.primaryDark} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={s.listName}>{senior.firstName} {senior.middleName} {senior.lastName}</Text>
+                        <Text style={s.listSub}>{senior.email} · {senior.contact || 'No contact'}</Text>
+                        <Text style={s.seniorDetail}>{senior.address || 'No address'} · {senior.civilStatus || 'Civil status not set'}</Text>
+                        <Text style={s.seniorDetail}>DOB: {senior.dob || 'Not set'} · Age: {getAge(senior.dob) ?? 'Unknown'} · {senior.avatarUrl ? 'Face enrolled' : 'Face not enrolled'}</Text>
+                      </View>
+                      <View style={s.seniorBadges}>
+                        <Text style={s.categoryBadge}>{getSeniorCategory(senior.dob)}</Text>
+                        <Text style={s.roleBadgeTxt}>{senior.role ?? 'user'}</Text>
+                      </View>
                     </View>
                   ))
                 )}
@@ -402,6 +669,34 @@ const s = StyleSheet.create({
   actionLabel: { fontFamily: 'InterBody', fontWeight: '700', fontSize: 14.5, color: C.ink, marginBottom: 4 },
   actionDesc:  { fontFamily: 'InterBody', fontSize: 12.5, lineHeight: 19, color: C.inkSoft },
 
+  mapSection: { marginBottom: sp(2) },
+  mapDescription: { fontFamily: 'InterBody', fontSize: 12.5, color: C.inkSoft, marginTop: 5 },
+  mapCard: {
+    backgroundColor: C.card, borderRadius: 20,
+    borderWidth: 1, borderColor: C.line,
+    overflow: 'hidden', marginBottom: sp(7),
+    ...shadow(C.ink, 0.05, 8, 2),
+  },
+  mapLegend: {
+    paddingHorizontal: sp(4), paddingTop: sp(3), paddingBottom: sp(2),
+    borderBottomWidth: 1, borderBottomColor: C.line,
+  },
+  mapLegendTitle: {
+    fontFamily: 'InterBody', fontWeight: '700', fontSize: 12, color: C.ink,
+    marginBottom: 7,
+  },
+  mapLegendGradient: { height: 12, borderRadius: 4, width: '100%' },
+  mapLegendLabels: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 },
+  mapLegendLabel: { fontFamily: 'InterBody', fontSize: 10.5, color: C.inkSoft },
+  map: { height: 280, width: '100%' },
+  mapSummary: {
+    flexDirection: 'row', justifyContent: 'space-between', gap: sp(2),
+    padding: sp(4), borderBottomWidth: 1, borderBottomColor: C.line,
+  },
+  mapSummaryValue: { fontFamily: 'FraunTitle', fontSize: 20, color: C.primaryDark },
+  mapSummaryLabel: { fontFamily: 'InterBody', fontSize: 10.5, color: C.inkFaint, marginTop: 2 },
+  mapAttribution: { fontFamily: 'InterBody', fontSize: 10, color: C.inkFaint, padding: sp(3) },
+
   tabs: {
     flexDirection: 'row', gap: sp(2),
     marginBottom: sp(3),
@@ -422,7 +717,21 @@ const s = StyleSheet.create({
     ...shadow(C.ink, 0.05, 8, 2),
     overflow: 'hidden',
   },
+  seniorHeader: { padding: sp(4), borderBottomWidth: 1, borderBottomColor: C.line, gap: sp(3) },
+  seniorCount: { fontFamily: 'InterBody', fontWeight: '700', fontSize: 13, color: C.inkSoft },
+  searchInput: {
+    borderWidth: 1, borderColor: C.line, borderRadius: 10,
+    paddingHorizontal: 12, paddingVertical: 9,
+    fontFamily: 'InterBody', fontSize: 13, color: C.ink,
+    backgroundColor: C.bg,
+  },
+  filterRow: { gap: 8, paddingRight: 4 },
+  filterChip: { borderWidth: 1, borderColor: C.line, borderRadius: 14, paddingHorizontal: 10, paddingVertical: 6, backgroundColor: C.white },
+  filterChipActive: { backgroundColor: C.primaryDark, borderColor: C.primaryDark },
+  filterChipTxt: { fontFamily: 'InterBody', fontWeight: '600', fontSize: 11, color: C.inkSoft },
+  filterChipTxtActive: { color: C.white },
   listRow: { flexDirection: 'row', alignItems: 'center', gap: sp(3), padding: sp(4) },
+  seniorRow: { flexDirection: 'row', alignItems: 'flex-start', gap: sp(3), padding: sp(4) },
   listRowBorder: { borderBottomWidth: 1, borderBottomColor: C.line },
   listAvatar: {
     width: 38, height: 38, borderRadius: 19,
@@ -431,8 +740,12 @@ const s = StyleSheet.create({
   },
   listName: { fontFamily: 'InterBody', fontWeight: '600', fontSize: 14, color: C.ink },
   listSub:  { fontFamily: 'InterBody', fontSize: 12, color: C.inkFaint, marginTop: 2 },
+  userDetail: { fontFamily: 'InterBody', fontSize: 11.5, color: C.inkSoft, marginTop: 3 },
   roleBadge: { borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
   roleBadgeTxt: { fontFamily: 'InterBody', fontWeight: '700', fontSize: 11, color: C.primaryDark },
+  seniorDetail: { fontFamily: 'InterBody', fontSize: 11.5, color: C.inkSoft, marginTop: 3 },
+  seniorBadges: { alignItems: 'flex-end', gap: 6, maxWidth: 110 },
+  categoryBadge: { fontFamily: 'InterBody', fontWeight: '700', fontSize: 10, color: C.goldDark, backgroundColor: C.goldSoft, borderRadius: 8, paddingHorizontal: 7, paddingVertical: 4, textAlign: 'right' },
   txStatus: { fontFamily: 'InterBody', fontWeight: '600', fontSize: 12, color: C.goldDark },
   emptyTxt: { fontFamily: 'InterBody', fontSize: 14, color: C.inkFaint, textAlign: 'center', padding: sp(6) },
 
