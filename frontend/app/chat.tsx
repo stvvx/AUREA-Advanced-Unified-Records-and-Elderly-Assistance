@@ -264,7 +264,7 @@ export default function ChatScreen() {
   if (isAdmin && !selectedUser) {
     return (
       <SafeAreaView style={s.safe} edges={['top']}>
-        <StatusBar barStyle="dark-content" backgroundColor={C.bg} />
+        <StatusBar barStyle="dark-content" />
 
         {/* Top Header */}
         <View style={s.header}>
@@ -373,7 +373,7 @@ export default function ChatScreen() {
   // ── Conversation Screen (Senior Citizen OR Admin viewing a specific Senior) ──
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
-      <StatusBar barStyle="dark-content" backgroundColor={C.bg} />
+      <StatusBar barStyle="dark-content" />
 
       {/* Header + Banner wrapped together and measured, so the
           KeyboardAvoidingView offset below always matches the actual

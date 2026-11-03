@@ -39,9 +39,21 @@ SUPABASE_USERS_TABLE = (
 
 PORT = int(os.environ.get("PORT", "5000"))
 
+FACE_VERIFICATION_EXEMPT_ROLES = {
+    "osca admin",
+    "osca staff",
+    "med admin",
+    "health center",
+    "super admin",
+}
+
 _table_ready = False
 
 app = Flask(__name__)
+
+
+def requires_face_verification(role: str | None) -> bool:
+    return (role or "user").strip().lower() not in FACE_VERIFICATION_EXEMPT_ROLES
 
 
 # ---------------------------------------------------------------------------
@@ -502,6 +514,7 @@ def login():
             "gender": user.get("gender") or "",
             "civilStatus": user.get("civil_status") or "",
             "role": user.get("role") or "user",
+            "requiresFaceVerification": requires_face_verification(user.get("role")),
             "hasEnrolledFace": bool(user.get("avatar_url")),
         },
     }), 200
@@ -598,6 +611,13 @@ def verify_face():
             return jsonify({"message": "User not found.", "verified": False}), 404
 
         user = result[0]
+        if not requires_face_verification(user.get("role")):
+            return jsonify({
+                "verified": False,
+                "message": "Face verification is not required for this account.",
+                "user": _serialize_user(user),
+            }), 403
+
         avatar_url = user.get("avatar_url")
 
         if not avatar_url:
@@ -670,6 +690,23 @@ def enroll_face():
 
     try:
         ensure_users_table()
+
+        user_result = supabase_rest(
+            "GET",
+            SUPABASE_USERS_TABLE,
+            params={
+                "select": "id,role",
+                "id": f"eq.{user_id}",
+                "limit": "1",
+            },
+        )
+        if not user_result:
+            return jsonify({"message": "User not found."}), 404
+        if not requires_face_verification(user_result[0].get("role")):
+            return jsonify({
+                "success": False,
+                "message": "Face enrollment is not required for this account.",
+            }), 403
 
         # Validate that a clear face is present
         validation = face_verifier.validate_enrollment_photo(image_b64)

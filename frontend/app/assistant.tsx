@@ -129,7 +129,7 @@ export default function AssistantScreen() {
   const isWebDesktop =
     Platform.OS === 'web' && width > 768;
 
-  const scrollViewRef = useRef<ScrollView>(null);
+  const scrollViewRef = useRef<React.ElementRef<typeof ScrollView>>(null);
 
     // Hands-free mode
   const handsFreeRef = useRef(true);   // false when the user mutes the mic

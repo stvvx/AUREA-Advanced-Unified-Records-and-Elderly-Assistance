@@ -8,7 +8,6 @@ import {
   TouchableOpacity,
   Pressable,
   TextInput,
-  ImageBackground,
   Image,
   useWindowDimensions,
   Platform,
@@ -56,6 +55,7 @@ const C = {
   primaryMid:  '#2E7A50',
   primarySoft: '#DCEFE3',
   gold:        '#C4892E',
+  goldLight:   '#F2C879', // lighter gold for text over photos (better contrast)
   goldDark:    '#7E5417',
   goldSoft:    '#FBF0DA',
   white:       '#FFFFFF',
@@ -65,14 +65,14 @@ const C = {
 
 const sp = (n: number) => n * 4;
 
-const HERO_URI =
-  'https://d1qvryx77qeesd.cloudfront.net/2024/09/DOT-NCR-Pateros-Town-Plaza-02.jpg';
+const HERO_IMAGE = require('../../assets/images/pateros_hero.jpg');
+const PATEROS_LOGO = require('../../assets/images/pateros-logo.png');
 
 // Banner carousel — eGovPH style: rotating announcement/promo cards
 const BANNERS = [
   {
     key: 'pateros',
-    image: HERO_URI,
+    image: HERO_IMAGE,
     tag: 'Municipality of Pateros',
     title: 'Advanced Unified Records\nand Elderly Assistance',
   },
@@ -169,7 +169,15 @@ export default function DashboardScreen() {
 
   const tileSize = isTablet ? 64 : 56;
   const tileIcon = isTablet ? 27 : 24;
-  const bannerWidth = isDesktop ? 340 : isTablet ? 320 : Math.min(280, width - sp(9));
+
+  // Horizontal page padding — must match the contentInner padding
+  // below so the banner carousel can bleed to the screen edge.
+  const pagePad = isDesktop ? sp(8) : small ? sp(4) : sp(5);
+
+  // Banner size: height scales with width so the photo keeps its
+  // proportions instead of being cropped by a fixed 150px height.
+  const bannerWidth = isDesktop ? 380 : isTablet ? 340 : Math.min(300, width - sp(12));
+  const bannerHeight = Math.round(bannerWidth * 0.62);
 
   // Percentage-based columns (not fixed pixel tiles) so every row
   // lines up evenly no matter the exact container width — this was
@@ -264,7 +272,7 @@ export default function DashboardScreen() {
 
   const announcements = (
     <View style={s.announceCard}>
-      <Image source={{ uri: HERO_URI }} style={s.announceThumb} />
+      <Image source={PATEROS_LOGO} style={s.announceThumb} resizeMode="contain" />
       <View style={{ flex: 1 }}>
         <Text style={s.announceTitle}>OSCA office hours this week</Text>
         <Text style={s.announceText}>
@@ -277,7 +285,7 @@ export default function DashboardScreen() {
 
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
-      <StatusBar barStyle="dark-content" backgroundColor={C.bg} />
+      <StatusBar barStyle="dark-content" />
       <Toast
         visible={toast.visible}
         message={toast.message}
@@ -298,7 +306,7 @@ export default function DashboardScreen() {
         <View
           style={[
             s.contentInner,
-            { paddingHorizontal: small ? sp(4) : sp(5) },
+            { paddingHorizontal: pagePad },
             isTablet && s.contentInnerTablet,
             isDesktop && s.contentInnerDesktop,
           ]}
@@ -510,28 +518,37 @@ export default function DashboardScreen() {
             )}
           </View>
 
-          {/* ── BANNER CAROUSEL ──────────────────────────────── */}
+          {/* ── BANNER CAROUSEL ──────────────────────────────────
+              Card height scales with width (bannerHeight) so the
+              photo keeps its proportions. The carousel bleeds to the
+              screen edge (negative margin = page padding) so the
+              second card isn't clipped abruptly. */}
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
-            contentContainerStyle={s.bannerScroll}
-            style={s.bannerScrollWrap}
+            contentContainerStyle={[s.bannerScroll, { paddingHorizontal: pagePad }]}
+            style={[s.bannerScrollWrap, { marginHorizontal: -pagePad }]}
           >
             {BANNERS.map((b) => (
-              <View key={b.key} style={[s.bannerCard, { width: bannerWidth }]}>
+              <View key={b.key} style={[s.bannerCard, { width: bannerWidth, height: bannerHeight }]}>
                 {b.image ? (
-                  <ImageBackground source={{ uri: b.image }} style={StyleSheet.absoluteFill} imageStyle={s.bannerImg}>
+                  <>
+                    <Image
+                      source={b.image}
+                      style={[StyleSheet.absoluteFill, s.bannerImg]}
+                      resizeMode="cover"
+                    />
                     <LinearGradient
-                      colors={['transparent', C.overlayBot]}
-                      locations={[0.35, 1]}
+                      colors={['rgba(4,14,9,0)', 'rgba(4,14,9,0.35)', C.overlayBot]}
+                      locations={[0.2, 0.55, 1]}
                       style={StyleSheet.absoluteFill}
                     />
-                  </ImageBackground>
+                  </>
                 ) : (
                   <LinearGradient colors={[C.primaryMid, C.primaryDark]} style={StyleSheet.absoluteFill} />
                 )}
                 <View style={s.bannerContent}>
-                  {b.icon && <Ionicons name={b.icon as any} size={18} color={C.gold} style={{ marginBottom: 6 }} />}
+                  {b.icon && <Ionicons name={b.icon as any} size={18} color={C.goldLight} style={{ marginBottom: 6 }} />}
                   <Text style={s.bannerTag}>{b.tag}</Text>
                   <Text style={s.bannerTitle}>{b.title}</Text>
                 </View>
@@ -911,20 +928,20 @@ const s = StyleSheet.create({
     fontWeight: '600',
   },
 
-  /* Banner carousel */
+  /* Banner carousel — width/height and edge bleed are set inline
+     from bannerWidth / bannerHeight / pagePad in the component. */
   bannerScrollWrap: { marginBottom: sp(6) },
-  bannerScroll: { gap: sp(3), paddingRight: sp(3) },
+  bannerScroll: { gap: sp(3) },
   bannerCard: {
-    width: 280,
-    height: 150,
     borderRadius: 20,
     overflow: 'hidden',
     justifyContent: 'flex-end',
+    backgroundColor: C.primaryDark, // placeholder while the image loads
     ...shadow(C.primaryDark, 0.2, 12, 4),
   },
   bannerImg: { borderRadius: 20 },
   bannerContent: { padding: sp(4) },
-  bannerTag: { fontFamily: 'InterBody', fontWeight: '700', fontSize: 11, color: C.gold, marginBottom: 4 },
+  bannerTag: { fontFamily: 'InterBody', fontWeight: '700', fontSize: 12, color: C.goldLight, marginBottom: 4 },
   bannerTitle: { fontFamily: 'FraunTitle', fontSize: 17, lineHeight: 21, color: C.white },
 
   /* Sections */
@@ -1001,7 +1018,7 @@ const s = StyleSheet.create({
     borderWidth: 1, borderColor: C.line,
     ...shadow(C.ink, 0.04, 8, 2),
   },
-  announceThumb: { width: 76, height: 76, borderRadius: 12, backgroundColor: C.line },
+  announceThumb: { width: 76, height: 76, borderRadius: 12, backgroundColor: C.line, padding: 8 },
   announceTitle: { fontFamily: 'InterBody', fontWeight: '700', fontSize: 14, color: C.ink, marginBottom: 4 },
   announceText: { fontFamily: 'InterBody', fontSize: 12.5, lineHeight: 18, color: C.inkSoft },
 

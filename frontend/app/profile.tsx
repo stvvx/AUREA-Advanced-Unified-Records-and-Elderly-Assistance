@@ -425,7 +425,7 @@ export default function ProfileScreen() {
   if (!ready) {
     return (
       <SafeAreaView style={styles.safe}>
-        <StatusBar barStyle="dark-content" backgroundColor={C.bg} />
+        <StatusBar barStyle="dark-content" />
         <View style={styles.emptyState}>
           <Ionicons name="person-circle-outline" size={48} color={C.primaryDark} />
           <Text style={styles.emptyTitle}>Profile unavailable</Text>
@@ -444,7 +444,7 @@ export default function ProfileScreen() {
 
   return (
     <SafeAreaView style={styles.safe}>
-      <StatusBar barStyle="dark-content" backgroundColor={C.bg} />
+      <StatusBar barStyle="dark-content" />
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
           {/* Header */}

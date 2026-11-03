@@ -19,7 +19,14 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import * as Haptics from 'expo-haptics';
 import Toast from '../components/Toast';
-import { verifyFace, enrollFace, getUser, MultiAngleImages } from '../lib/authApi';
+import {
+  isAdministrativeRole,
+  requiresFaceVerification,
+  verifyFace,
+  enrollFace,
+  getUser,
+  MultiAngleImages,
+} from '../lib/authApi';
 import { useAuth } from '../context/AuthContext';
 
 // ---------------------------------------------------------------------------
@@ -62,11 +69,14 @@ export default function FaceVerificationScreen() {
 
   const { login } = useAuth();
   const cameraRef = useRef<CameraView>(null);
+  const webVideoRef = useRef<HTMLVideoElement | null>(null);
+  const webStreamRef = useRef<MediaStream | null>(null);
 
   const userId = params.userId ? parseInt(params.userId, 10) : 0;
   const userName = params.userName || 'Citizen';
   const initialAvatar = params.avatarUrl || null;
   const userRole = params.role || 'user';
+  const faceVerificationRequired = requiresFaceVerification(userRole);
 
   const [permission, requestPermission] = useCameraPermissions();
   const [hasRegisteredFace, setHasRegisteredFace] = useState<boolean>(
@@ -74,6 +84,7 @@ export default function FaceVerificationScreen() {
   );
 
   const [cameraReady, setCameraReady] = useState(false);
+  const [webCameraReady, setWebCameraReady] = useState(false);
   const [currentStep, setCurrentStep] = useState<LivenessStep>('center');
   const [statusMessage, setStatusMessage] = useState<string>('Step 1: Look straight into the camera');
   const [tagalogGuidance, setTagalogGuidance] = useState<string>('Humarap nang diretso sa camera.');
@@ -186,6 +197,11 @@ export default function FaceVerificationScreen() {
 
   // Check enrollment state if initialAvatar was empty
   useEffect(() => {
+    if (!faceVerificationRequired) {
+      router.replace(isAdministrativeRole(userRole) ? '/admin-dashboard' : '/(tabs)');
+      return;
+    }
+
     if (userId && !initialAvatar && params.isEnrollment !== 'true') {
       getUser(userId)
         .then(({ user }) => {
@@ -197,14 +213,58 @@ export default function FaceVerificationScreen() {
         })
         .catch(() => undefined);
     }
-  }, [userId, initialAvatar, params.isEnrollment]);
+  }, [faceVerificationRequired, initialAvatar, params.isEnrollment, router, userId, userRole]);
 
   // Request camera permissions on mount
   useEffect(() => {
-    if (!permission?.granted) {
+    if (Platform.OS !== 'web' && !permission?.granted) {
       requestPermission();
     }
   }, [permission, requestPermission]);
+
+  useEffect(() => {
+    return () => {
+      webStreamRef.current?.getTracks().forEach((track) => track.stop());
+    };
+  }, []);
+
+  useEffect(() => {
+    if (Platform.OS === 'web' && webCameraReady && webVideoRef.current && webStreamRef.current) {
+      webVideoRef.current.srcObject = webStreamRef.current;
+      webVideoRef.current.play().catch(() => undefined);
+    }
+  }, [webCameraReady]);
+
+  const requestWebCamera = async () => {
+    if (Platform.OS !== 'web') {
+      await requestPermission();
+      return;
+    }
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      showToast('Camera access is not supported by this browser.', 'error');
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'user' },
+        audio: false,
+      });
+      webStreamRef.current = stream;
+      if (webVideoRef.current) {
+        webVideoRef.current.srcObject = stream;
+        await webVideoRef.current.play();
+      }
+      setWebCameraReady(true);
+      setCameraReady(true);
+    } catch (error) {
+      const message = error instanceof DOMException && error.name === 'NotAllowedError'
+        ? 'Camera access was denied. Allow camera access in your browser settings and try again.'
+        : 'Could not open the camera. Please check your browser camera permissions.';
+      showToast(message, 'error');
+    }
+  };
 
   const showToast = (message: string, type: 'success' | 'error') => {
     setToast({ visible: true, message, type });
@@ -212,6 +272,17 @@ export default function FaceVerificationScreen() {
 
   // Safe camera snapshot helper
   const takeSnapshot = async (): Promise<string | null> => {
+    if (Platform.OS === 'web') {
+      const video = webVideoRef.current;
+      if (!video || !video.videoWidth || !video.videoHeight) return null;
+
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      canvas.getContext('2d')?.drawImage(video, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL('image/jpeg', 0.85).split(',', 2)[1] || null;
+    }
+
     if (!cameraRef.current) return null;
     try {
       const photo = await cameraRef.current.takePictureAsync({
@@ -503,7 +574,7 @@ export default function FaceVerificationScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
-      <StatusBar barStyle="dark-content" backgroundColor={colors.bg} />
+      <StatusBar barStyle="dark-content" />
       <Toast
         visible={toast.visible}
         message={toast.message}
@@ -651,7 +722,7 @@ export default function FaceVerificationScreen() {
 
         {/* Live Camera Biometric Viewfinder */}
         <View style={styles.viewfinderCard}>
-          {!permission?.granted ? (
+          {(Platform.OS === 'web' ? !webCameraReady : !permission?.granted) ? (
             <View style={styles.permissionWrap}>
               <Ionicons name="videocam-outline" size={64} color={colors.primaryDeep} />
               <Text style={styles.permissionTitle}>Camera Access Required</Text>
@@ -660,7 +731,7 @@ export default function FaceVerificationScreen() {
               </Text>
               <TouchableOpacity
                 style={styles.allowBtn}
-                onPress={requestPermission}
+                onPress={requestWebCamera}
                 activeOpacity={0.85}
               >
                 <Ionicons name="camera" size={20} color={colors.white} />
@@ -715,6 +786,25 @@ export default function FaceVerificationScreen() {
                     facing="front"
                     onCameraReady={handleCameraReady}
                   />
+                ) : Platform.OS === 'web' && !manualMode ? (
+                  React.createElement('video', {
+                    ref: (element: HTMLVideoElement | null) => {
+                      webVideoRef.current = element;
+                      if (element && webStreamRef.current) {
+                        element.srcObject = webStreamRef.current;
+                      }
+                    },
+                    autoPlay: true,
+                    playsInline: true,
+                    muted: true,
+                    style: {
+                      position: 'absolute',
+                      width: '100%',
+                      height: '100%',
+                      objectFit: 'cover',
+                      transform: 'scaleX(-1)',
+                    },
+                  })
                 ) : (
                   <View style={styles.webPlaceholder}>
                     <Ionicons name="camera" size={60} color={colors.inkFaint} />

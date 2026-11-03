@@ -48,7 +48,7 @@ export default function BenefitSelectionScreen() {
 
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
-      <StatusBar barStyle="light-content" backgroundColor="#000000" />
+      <StatusBar barStyle="light-content" />
       <ScrollView
         style={s.scroll}
         contentContainerStyle={s.container}

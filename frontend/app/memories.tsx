@@ -329,7 +329,7 @@ export default function MemoriesScreen() {
 
   return (
     <View style={st.screen}>
-      <StatusBar barStyle="light-content" backgroundColor={COLORS.bg} />
+      <StatusBar barStyle="light-content" />
 
       {/* ── Background Gradient ──────────────────────────────────────────── */}
       <LinearGradient

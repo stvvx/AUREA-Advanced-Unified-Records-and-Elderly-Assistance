@@ -17,7 +17,6 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import DateTimePicker from '@react-native-community/datetimepicker';
 import { useRouter } from 'expo-router';
 import Toast from '../components/Toast';
 import { registerUser } from '../lib/authApi';
@@ -96,6 +95,26 @@ function toDobString(date: Date) {
   return `${mm}/${dd}/${yyyy}`;
 }
 
+function toDateInputValue(date: Date) {
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
+  return `${date.getFullYear()}-${mm}-${dd}`;
+}
+
+const MONTHS = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+];
+
+const DOB_YEARS = Array.from(
+  { length: new Date().getFullYear() - 1900 + 1 },
+  (_, index) => new Date().getFullYear() - index,
+);
+
+function daysInMonth(year: number, month: number) {
+  return new Date(year, month, 0).getDate();
+}
+
 function parseDobString(value?: string): Date | null {
   if (!value) return null;
 
@@ -121,7 +140,7 @@ function parseDobString(value?: string): Date | null {
 export default function RegisterScreen() {
   const router = useRouter();
   const { login } = useAuth();
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<React.ElementRef<typeof ScrollView>>(null);
 
   const [step, setStep] = useState(0);
   const [form, setForm] = useState<Record<string, string>>({});
@@ -313,7 +332,7 @@ export default function RegisterScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      <StatusBar barStyle="dark-content" backgroundColor={colors.bg} />
+      <StatusBar barStyle="dark-content" />
       <Toast
         visible={toast.visible}
         message={toast.message}
@@ -324,24 +343,6 @@ export default function RegisterScreen() {
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
-        {dobOpen && Platform.OS === 'android' && (
-          <DateTimePicker
-            value={dobDraft}
-            mode="date"
-            display="calendar"
-            maximumDate={new Date()}
-            onValueChange={(_, selectedDate) => {
-              if (selectedDate) {
-                setDobDraft(selectedDate);
-                set('dob', toDobString(selectedDate));
-              }
-
-              setDobOpen(false);
-            }}
-            onDismiss={() => setDobOpen(false)}
-          />
-        )}
-
         {/* Top bar: back + step progress (stays visible on every step) */}
         <View style={styles.topBar}>
           <TouchableOpacity
@@ -415,7 +416,7 @@ export default function RegisterScreen() {
                       <>
                         <input
                           type="date"
-                          value={form.dob ? parseDobString(form.dob)?.toISOString().split('T')[0] : ''}
+                          value={form.dob ? toDateInputValue(parseDobString(form.dob) ?? dobDraft) : ''}
                           onChange={(e) => {
                             const value = e.target.value;
                             if (value) {
@@ -571,25 +572,55 @@ export default function RegisterScreen() {
         </View>
       </KeyboardAvoidingView>
 
-        {/* Date of Birth Picker Modal (iOS only) */}
-        {Platform.OS === 'ios' && (
-          <Modal visible={dobOpen} transparent animationType="fade" onRequestClose={() => setDobOpen(false)}>
+        <Modal visible={dobOpen} transparent animationType="fade" onRequestClose={() => setDobOpen(false)}>
             <Pressable style={styles.modalOverlay} onPress={() => setDobOpen(false)}>
               <Pressable style={[styles.modalSheet, { paddingHorizontal: space(5) }]} onPress={() => {}}>
                 <View style={styles.modalHandle} />
                 <Text style={styles.modalTitle}>Select Date of Birth</Text>
-
-                <DateTimePicker
-                  value={dobDraft}
-                  mode="date"
-                  display="spinner"
-                  maximumDate={new Date()}
-                  onValueChange={(_, selectedDate) => {
-                    if (selectedDate) {
-                      setDobDraft(selectedDate);
-                    }
-                  }}
-                />
+                <View style={styles.datePickerColumns}>
+                  {([
+                    ['month', MONTHS, dobDraft.getMonth()],
+                    ['day', Array.from({ length: daysInMonth(dobDraft.getFullYear(), dobDraft.getMonth() + 1) }, (_, index) => String(index + 1)), dobDraft.getDate() - 1],
+                    ['year', DOB_YEARS.map(String), DOB_YEARS.indexOf(dobDraft.getFullYear())],
+                  ] as const).map(([column, options, selectedIndex]) => (
+                    <View key={column} style={styles.datePickerColumn}>
+                      <Text style={styles.datePickerColumnLabel}>{column.toUpperCase()}</Text>
+                      <FlatList
+                        data={options}
+                        keyExtractor={(item) => String(item)}
+                        initialScrollIndex={Math.max(0, selectedIndex)}
+                        getItemLayout={(_, index) => ({ length: 44, offset: 44 * index, index })}
+                        showsVerticalScrollIndicator={false}
+                        renderItem={({ item, index }) => {
+                          const isSelected = index === selectedIndex;
+                          return (
+                            <TouchableOpacity
+                              style={[styles.datePickerOption, isSelected && styles.datePickerOptionSelected]}
+                              onPress={() => {
+                                const next = new Date(dobDraft);
+                                if (column === 'month') {
+                                  const month = Number(index);
+                                  next.setDate(Math.min(next.getDate(), daysInMonth(next.getFullYear(), month + 1)));
+                                  next.setMonth(month);
+                                } else if (column === 'day') {
+                                  next.setDate(Number(item));
+                                } else {
+                                  next.setFullYear(Number(item));
+                                  next.setDate(Math.min(next.getDate(), daysInMonth(next.getFullYear(), next.getMonth() + 1)));
+                                }
+                                setDobDraft(next);
+                              }}
+                            >
+                              <Text style={[styles.datePickerOptionText, isSelected && styles.datePickerOptionTextSelected]}>
+                                {item}
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        }}
+                      />
+                    </View>
+                  ))}
+                </View>
 
                 <View style={styles.modalActions}>
                   <TouchableOpacity
@@ -609,8 +640,7 @@ export default function RegisterScreen() {
                 </View>
               </Pressable>
             </Pressable>
-          </Modal>
-        )}
+        </Modal>
 
       {/* Gender Picker Modal */}
       <Modal visible={genderOpen} transparent animationType="fade" onRequestClose={() => setGenderOpen(false)}>
@@ -970,6 +1000,40 @@ const styles = StyleSheet.create({
     color: colors.ink,
   },
   modalItemTextActive: {
+    color: colors.primaryDeep,
+    fontWeight: '700',
+  },
+  datePickerColumns: {
+    flexDirection: 'row',
+    gap: space(2),
+    height: 220,
+  },
+  datePickerColumn: {
+    flex: 1,
+  },
+  datePickerColumnLabel: {
+    fontFamily: 'InterBody',
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.inkSoft,
+    textAlign: 'center',
+    marginBottom: space(1),
+  },
+  datePickerOption: {
+    height: 44,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  datePickerOptionSelected: {
+    backgroundColor: colors.primarySoft,
+  },
+  datePickerOptionText: {
+    fontFamily: 'InterBody',
+    fontSize: 15,
+    color: colors.inkSoft,
+  },
+  datePickerOptionTextSelected: {
     color: colors.primaryDeep,
     fontWeight: '700',
   },

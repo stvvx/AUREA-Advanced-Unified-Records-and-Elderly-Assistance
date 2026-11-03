@@ -19,6 +19,22 @@ type LoginPayload = {
   password: string;
 };
 
+const FACE_VERIFICATION_EXEMPT_ROLES = new Set([
+  'osca admin',
+  'osca staff',
+  'med admin',
+  'health center',
+  'super admin',
+]);
+
+export function requiresFaceVerification(role?: string): boolean {
+  return !FACE_VERIFICATION_EXEMPT_ROLES.has((role ?? 'user').trim().toLowerCase());
+}
+
+export function isAdministrativeRole(role?: string): boolean {
+  return !requiresFaceVerification(role);
+}
+
 export type ChildProfile = {
   id: string;
   name: string;
@@ -87,7 +103,7 @@ export async function registerUser(payload: RegisterPayload): Promise<{ message:
   return request('/api/auth/register', payload);
 }
 
-export async function loginUser(payload: LoginPayload): Promise<{ message: string; user: { id: number; firstName: string; middleName?: string; lastName: string; dob?: string; gender?: string; civilStatus?: string; contact?: string; address?: string; email: string; avatarUrl?: string | null; profilePhoto?: string | null; oscaIdNumber?: string; role?: string; children?: ChildProfile[] } }> {
+export async function loginUser(payload: LoginPayload): Promise<{ message: string; user: { id: number; firstName: string; middleName?: string; lastName: string; dob?: string; gender?: string; civilStatus?: string; contact?: string; address?: string; email: string; avatarUrl?: string | null; profilePhoto?: string | null; oscaIdNumber?: string; role?: string; requiresFaceVerification?: boolean; children?: ChildProfile[] } }> {
   return request('/api/auth/login', payload);
 }
 

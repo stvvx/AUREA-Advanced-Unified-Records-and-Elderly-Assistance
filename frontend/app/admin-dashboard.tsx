@@ -238,6 +238,27 @@ function buildBarangayMapHtml(seniors: any[]): string {
   return `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"><style>html,body,#map{height:100%;margin:0}#map{background:#dfeadf}.leaflet-tile{filter:grayscale(100%) brightness(.82)}</style></head><body><div id="map"></div><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script><script>const map=L.map('map',{zoomControl:true}).setView([14.5465,121.0702],15);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'&copy; OpenStreetMap contributors',maxZoom:19}).addTo(map);const heatPoints=[${heatPoints}];if(heatPoints.length&&L.heatLayer){L.heatLayer(heatPoints,{radius:70,blur:48,maxZoom:17,max:${maxCount},gradient:{0.05:'#172554',0.2:'#3730A3',0.38:'#7C3AED',0.55:'#22D3EE',0.7:'#84CC16',0.84:'#FDE047',1:'#EF4444'}}).addTo(map);}${barangayScript}</script></body></html>`;
 }
 
+function BarangayMap({ html }: { html: string }) {
+  if (Platform.OS === 'web') {
+    return React.createElement('iframe', {
+      title: 'Pateros senior citizen barangay heatmap',
+      srcDoc: html,
+      style: { border: 'none', width: '100%', height: '280px' },
+    });
+  }
+
+  return (
+    <WebView
+      originWhitelist={['*']}
+      source={{ html }}
+      style={s.map}
+      javaScriptEnabled
+      domStorageEnabled
+      scrollEnabled={false}
+    />
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -320,7 +341,7 @@ export default function AdminDashboard() {
 
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
-      <StatusBar barStyle="dark-content" backgroundColor={C.bg} />
+      <StatusBar barStyle="dark-content" />
       <Toast
         visible={toast.visible}
         message={toast.message}
@@ -423,14 +444,7 @@ export default function AdminDashboard() {
               {loadingUsers ? (
                 <ActivityIndicator color={C.primaryDark} style={{ height: 260 }} />
               ) : (
-                <WebView
-                  originWhitelist={['*']}
-                  source={{ html: barangayMapHtml }}
-                  style={s.map}
-                  javaScriptEnabled
-                  domStorageEnabled
-                  scrollEnabled={false}
-                />
+                <BarangayMap html={barangayMapHtml} />
               )}
               <View style={s.mapSummary}>
                 <View>

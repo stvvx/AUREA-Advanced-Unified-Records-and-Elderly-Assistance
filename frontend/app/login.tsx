@@ -16,7 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import Toast from '../components/Toast';
-import { loginUser } from '../lib/authApi';
+import { isAdministrativeRole, loginUser, requiresFaceVerification } from '../lib/authApi';
 import { useAuth } from '../context/AuthContext';
 
 // ---------------------------------------------------------------------------
@@ -60,9 +60,20 @@ export default function LoginScreen() {
     setLoading(true);
     try {
       const data = await loginUser({ email: email.trim(), password });
+      const needsFaceVerification =
+        data.user.requiresFaceVerification ?? requiresFaceVerification(data.user.role);
+
+      if (!needsFaceVerification) {
+        await login(data.user);
+        showToast('Login successful!', 'success');
+        setTimeout(() => {
+          router.replace(isAdministrativeRole(data.user.role) ? '/admin-dashboard' : '/(tabs)');
+        }, 500);
+        return;
+      }
+
       showToast('Credentials verified! Please verify your face…', 'success');
 
-      // Direct to facial verification before granting full session and dashboard access
       setTimeout(() => {
         router.replace({
           pathname: '/face-verification',
@@ -84,7 +95,7 @@ export default function LoginScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      <StatusBar barStyle="dark-content" backgroundColor={colors.bg} />
+      <StatusBar barStyle="dark-content" />
       <Toast
         visible={toast.visible}
         message={toast.message}

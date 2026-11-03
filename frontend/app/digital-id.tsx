@@ -229,7 +229,7 @@ export default function DigitalIdScreen() {
   if (!user) {
     return (
       <SafeAreaView style={s.safe} edges={['top']}>
-        <StatusBar barStyle="dark-content" backgroundColor={C.bg} />
+        <StatusBar barStyle="dark-content" />
         <View style={s.centered}>
           <Ionicons name="id-card-outline" size={54} color={C.oscaGreen} />
           <Text style={s.emptyTitle}>Senior Citizen ID</Text>
@@ -246,7 +246,7 @@ export default function DigitalIdScreen() {
   if (!loading && (profileAge === null || profileAge < 60)) {
     return (
       <SafeAreaView style={s.safe} edges={['top']}>
-        <StatusBar barStyle="dark-content" backgroundColor={C.bg} />
+        <StatusBar barStyle="dark-content" />
         <View style={s.centered}>
           <Ionicons name="lock-closed-outline" size={54} color={C.oscaGreen} />
           <Text style={s.emptyTitle}>Senior Citizen ID unavailable</Text>
@@ -306,7 +306,7 @@ export default function DigitalIdScreen() {
 
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
-      <StatusBar barStyle="dark-content" backgroundColor={C.bg} />
+      <StatusBar barStyle="dark-content" />
 
       {/* Top App Bar */}
       <View style={s.topBar}>
