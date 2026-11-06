@@ -52,6 +52,7 @@ export default function RootLayout() {
         <Stack.Screen name="digital-id" options={{ headerShown: false }} />
         <Stack.Screen name="benefit-selection" options={{ headerShown: false }} />
         <Stack.Screen name="benefit-application" options={{ headerShown: false }} />
+        <Stack.Screen name="movie-book" options={{ headerShown: false }} />
         <Stack.Screen name="admin-dashboard" options={{ headerShown: false }} />
         <Stack.Screen name="admin-benefits" options={{ headerShown: false }} />
         <Stack.Screen name="settings" options={{ headerShown: false }} />

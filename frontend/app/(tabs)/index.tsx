@@ -369,6 +369,15 @@ export default function DashboardScreen() {
 
   }, [searchQuery]);
 
+  const openBenefit = (benefitId: string) => {
+    if (benefitId === 'movie-center') {
+      router.push('/movie-book');
+      return;
+    }
+
+    router.push({ pathname: '/benefit-application', params: { benefitId } });
+  };
+
   const handleSearchSubmit = () => {
 
     if (!user) {
@@ -401,7 +410,7 @@ export default function DashboardScreen() {
 
     if (exactMatch) {
 
-      router.push({ pathname: '/benefit-application', params: { benefitId: exactMatch.id } });
+      openBenefit(exactMatch.id);
 
       return;
 
@@ -871,13 +880,9 @@ export default function DashboardScreen() {
                     key={item.id}
 
                     style={[s.searchResultItem, webPointer]}
-
                     onPress={() => {
-
                       setSearchQuery(item.label);
-
-                      router.push({ pathname: '/benefit-application', params: { benefitId: item.id } });
-
+                      openBenefit(item.id);
                     }}
 
                     activeOpacity={0.8}
@@ -1033,12 +1038,7 @@ export default function DashboardScreen() {
                       <TouchableOpacity
 
                         style={[s.serviceItem, webPointer]}
-
-                        onPress={() =>
-
-                          router.push({ pathname: '/benefit-application', params: { benefitId: item.id } })
-
-                        }
+                        onPress={() => openBenefit(item.id)}
 
                         activeOpacity={0.8}
 

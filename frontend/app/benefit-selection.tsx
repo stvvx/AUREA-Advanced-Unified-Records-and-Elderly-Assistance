@@ -94,7 +94,20 @@ export default function BenefitSelectionScreen() {
               activeOpacity={0.8}
               accessibilityRole="button"
               accessibilityLabel={item.applicationValue}
-              onPress={() => router.push({ pathname: '/benefit-application', params: { benefitId: item.id } })}
+              
+             onPress={() => {
+  console.log('Selected benefit:', item.id);
+
+  if (item.id === 'movie-center') {
+    console.log('Opening Movie Center...');
+    router.push('/movie-book');
+  } else {
+    router.push({
+      pathname: '/benefit-application',
+      params: { benefitId: item.id },
+    });
+  }
+}}
             >
               <Text style={s.itemText}>{item.applicationValue}</Text>
             </TouchableOpacity>

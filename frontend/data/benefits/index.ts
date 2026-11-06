@@ -25,7 +25,9 @@ export const BENEFITS: BenefitDefinition[] = [
 
 export const BENEFIT_ITEMS = BENEFITS;
 
-export function getBenefitById(benefitId?: string): BenefitDefinition | undefined {
+export function getBenefitById(
+  benefitId?: string
+): BenefitDefinition | undefined {
   if (!benefitId) {
     return undefined;
   }
