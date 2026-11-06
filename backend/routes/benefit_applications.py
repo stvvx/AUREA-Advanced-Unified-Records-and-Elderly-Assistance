@@ -1,5 +1,6 @@
 import base64
 import mimetypes
+import re
 from datetime import date, datetime
 
 from flask import Blueprint, jsonify, request
@@ -15,6 +16,7 @@ benefit_applications_bp = Blueprint(
 )
 
 APPLICANT_FIELDS = {
+    "ncsc_registration_reference_number",
     "osca_id_number",
     "benefit_type",
     "date_of_birth",
@@ -92,6 +94,19 @@ def classify_benefit_type(date_of_birth: str) -> str | None:
     return None
 
 
+def missing_schema_column(error: Exception) -> str | None:
+    message = str(error).lower()
+    if "column" not in message and "schema cache" not in message:
+        return None
+
+    match = re.search(
+        r"(?:could not find the ['\"]?([a-z0-9_]+)['\"]? column|"
+        r"column ['\"]?([a-z0-9_]+)['\"]?)",
+        message,
+    )
+    return next((value for value in match.groups() if value), None) if match else None
+
+
 @benefit_applications_bp.route("", methods=["POST", "OPTIONS"])
 def create_benefit_application():
     if request.method == "OPTIONS":
@@ -107,7 +122,7 @@ def create_benefit_application():
         users = _supabase(
             "GET",
             "users",
-            params={"select": "id,dob", "id": f"eq.{user_id}", "limit": "1"},
+            params={"select": "*", "id": f"eq.{user_id}", "limit": "1"},
         )
     except Exception as exc:
         return jsonify({"success": False, "error": str(exc)}), 500
@@ -115,7 +130,8 @@ def create_benefit_application():
     if not isinstance(users, list) or not users:
         return jsonify({"success": False, "error": "Applicant was not found."}), 404
 
-    applicant_dob = str(users[0].get("dob") or "").strip()
+    profile = users[0]
+    applicant_dob = str(profile.get("dob") or "").strip()
     try:
         try:
             applicant_birth_date = datetime.strptime(applicant_dob, "%Y-%m-%d").date()
@@ -158,6 +174,23 @@ def create_benefit_application():
     payload["user_id"] = user_id
     payload["osca_id_number"] = f"SA-{user_id:04d}"
     payload["benefit_type"] = benefit_type
+    profile_birth_certificate = (
+        profile.get("birth_certificate")
+        or profile.get("birthcert")
+        or profile.get("birthCertificate")
+    )
+    profile_id_picture = profile.get("avatar_url") or profile.get("profile_photo")
+    # A registered users.id is the digital ID source for this application.
+    has_digital_id = profile.get("id") is not None
+    has_birth_certificate = bool(
+        profile.get("birth_certificate")
+        or profile.get("birthcert")
+        or profile.get("birthCertificate")
+    )
+    has_id_picture = bool(profile_id_picture)
+    payload["birth_certificate_submitted"] = has_birth_certificate
+    payload["valid_id_submitted"] = has_digital_id
+    payload["id_picture_submitted"] = has_id_picture
     payload["full_body_picture_submitted"] = True
     payload["endorsed_list_submitted"] = bool(endorsed_list)
 
@@ -181,9 +214,41 @@ def create_benefit_application():
             payload=payload,
         )
     except Exception as exc:
-        return jsonify({"success": False, "error": str(exc)}), 500
+        missing_column = missing_schema_column(exc)
+        if missing_column not in payload:
+            return jsonify({"success": False, "error": str(exc)}), 500
+
+        # Older Supabase deployments may not have refreshed the migration/schema
+        # cache yet. Retry without only the column Supabase reported as missing.
+        compatibility_payload = {
+            key: value for key, value in payload.items() if key != missing_column
+        }
+        try:
+            created = _supabase(
+                "POST",
+                "octogenarian_benefit_applications",
+                payload=compatibility_payload,
+            )
+        except Exception as retry_exc:
+            second_missing_column = missing_schema_column(retry_exc)
+            if second_missing_column not in compatibility_payload:
+                return jsonify({"success": False, "error": str(retry_exc)}), 500
+            try:
+                created = _supabase(
+                    "POST",
+                    "octogenarian_benefit_applications",
+                    payload={
+                        key: value
+                        for key, value in compatibility_payload.items()
+                        if key != second_missing_column
+                    },
+                )
+            except Exception as final_exc:
+                return jsonify({"success": False, "error": str(final_exc)}), 500
 
     application = created[0] if isinstance(created, list) and created else created
+    if isinstance(application, dict) and "date_of_birth" not in application:
+        application["date_of_birth"] = date_of_birth
     return jsonify({"success": True, "application": application}), 201
 
 
@@ -201,7 +266,7 @@ def list_admin_benefit_applications():
         users = _supabase(
             "GET",
             "users",
-            params={"select": "id,first_name,middle_name,last_name,email,contact,avatar_url,birth_certificate", "limit": "10000"},
+            params={"select": "*", "limit": "10000"},
         )
     except Exception as exc:
         return jsonify({"success": False, "error": str(exc)}), 500
@@ -210,27 +275,87 @@ def list_admin_benefit_applications():
     result = []
     for application in applications:
         user = user_map.get(str(application.get("user_id")), {})
-        birth_cert_url = user.get("birth_certificate") or user.get("birthcert") or None
-        has_digital_id = user.get("id") is not None
-        has_account_picture = bool(user.get("avatar_url"))
+        birth_cert_url = (
+            user.get("birth_certificate")
+            or user.get("birthcert")
+            or user.get("birthCertificate")
+            or None
+        )
+        valid_id_url = (
+            user.get("valid_id")
+            or user.get("valid_id_url")
+            or user.get("validId")
+            or user.get("validIdUrl")
+            or None
+        )
+        id_picture_url = (
+            user.get("id_picture")
+            or user.get("id_picture_url")
+            or user.get("idPicture")
+            or user.get("idPictureUrl")
+            or user.get("avatar_url")
+            or user.get("profile_photo")
+            or None
+        )
         has_birth_certificate = bool(birth_cert_url)
+        has_valid_id = bool(user.get("valid_id_submitted") or valid_id_url)
+        has_id_picture = bool(id_picture_url)
         result.append({
             **application,
+            "validated_by_name": (
+                " ".join(
+                    part for part in (
+                        user_map.get(str(application.get("validated_by")), {}).get("first_name"),
+                        user_map.get(str(application.get("validated_by")), {}).get("middle_name"),
+                        user_map.get(str(application.get("validated_by")), {}).get("last_name"),
+                    )
+                    if part
+                )
+                or None
+            ),
+            "date_of_birth": application.get("date_of_birth") or user.get("dob"),
             "birth_certificate_submitted": bool(application.get("birth_certificate_submitted") or has_birth_certificate),
             "birth_certificate_url": birth_cert_url,
-            "valid_id_submitted": bool(application.get("valid_id_submitted") or has_digital_id),
-            "id_picture_submitted": bool(application.get("id_picture_submitted") or has_account_picture),
-            "id_picture_url": user.get("avatar_url") or None,
+            "valid_id_submitted": bool(application.get("valid_id_submitted") or has_valid_id),
+            "valid_id_url": valid_id_url,
+            "id_picture_submitted": bool(application.get("id_picture_submitted") or has_id_picture),
+            "id_picture_url": id_picture_url,
             "applicant": {
                 "firstName": user.get("first_name") or "",
                 "middleName": user.get("middle_name") or "",
                 "lastName": user.get("last_name") or "",
                 "email": user.get("email") or application.get("email_address") or "",
                 "contact": user.get("contact") or application.get("contact_number") or "",
+                "gender": user.get("gender") or "",
+                "civilStatus": user.get("civil_status") or user.get("civilStatus") or "",
+                "address": user.get("address") or "",
+                "children": user.get("children") or [],
+                "avatarUrl": id_picture_url,
+                "oscaIdNumber": user.get("osca_id_number") or "",
             },
         })
 
     return jsonify({"success": True, "applications": result}), 200
+
+
+@benefit_applications_bp.route("/user/<int:user_id>", methods=["GET", "OPTIONS"])
+def get_user_benefit_applications(user_id: int):
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    try:
+        applications = _supabase(
+            "GET",
+            "octogenarian_benefit_applications",
+            params={
+                "select": "*",
+                "user_id": f"eq.{user_id}",
+                "order": "created_at.desc",
+            },
+        )
+        return jsonify({"success": True, "applications": applications or []}), 200
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
 
 
 @benefit_applications_bp.route("/admin/<application_id>", methods=["PATCH", "OPTIONS"])
@@ -239,7 +364,28 @@ def update_admin_benefit_application(application_id: str):
         return ("", 204)
 
     data = request.get_json(silent=True) or {}
-    allowed = {"validation_status", "benefit_status", "findings_concerns_recommendations", "benefit_amount"}
+    try:
+        current_rows = _supabase(
+            "GET",
+            "octogenarian_benefit_applications",
+            params={
+                "select": "benefit_status,benefit_amount,date_released",
+                "id": f"eq.{application_id}",
+                "limit": "1",
+            },
+        )
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+    current = current_rows[0] if isinstance(current_rows, list) and current_rows else {}
+    allowed = {
+        "validation_status",
+        "benefit_status",
+        "findings_concerns_recommendations",
+        "benefit_amount",
+        "validated_by",
+        "date_validated",
+        "date_released",
+    }
     payload = {key: data[key] for key in allowed if key in data}
     if not payload:
         return jsonify({"success": False, "error": "No review fields to update."}), 400
@@ -248,6 +394,35 @@ def update_admin_benefit_application(application_id: str):
         return jsonify({"success": False, "error": "Invalid validation status."}), 400
     if "benefit_status" in payload and payload["benefit_status"] not in {"Pending", "For Processing", "Approved", "Released", "Cancelled"}:
         return jsonify({"success": False, "error": "Invalid benefit status."}), 400
+    if "benefit_amount" in payload:
+        try:
+            payload["benefit_amount"] = float(payload["benefit_amount"])
+        except (TypeError, ValueError):
+            return jsonify({"success": False, "error": "Benefit amount must be a valid number."}), 400
+        if payload["benefit_amount"] < 0:
+            return jsonify({"success": False, "error": "Benefit amount cannot be negative."}), 400
+    effective_status = payload.get("benefit_status", current.get("benefit_status"))
+    effective_amount = payload.get("benefit_amount", current.get("benefit_amount"))
+    if effective_status in {"Approved", "Released"} and (
+        effective_amount is None or float(effective_amount) <= 0
+    ):
+        return jsonify({"success": False, "error": "Enter a benefit amount before approving this application."}), 400
+    if effective_status == "Released":
+        payload["date_released"] = (
+            current.get("date_released") or date.today().isoformat()
+        )
+    elif "benefit_status" in payload:
+        payload["date_released"] = None
+    if "validation_status" in payload:
+        if payload["validation_status"] == "Pending":
+            payload["validated_by"] = None
+            payload["date_validated"] = None
+        else:
+            try:
+                payload["validated_by"] = int(payload["validated_by"])
+            except (KeyError, TypeError, ValueError):
+                return jsonify({"success": False, "error": "validated_by is required when validating an application."}), 400
+            payload["date_validated"] = date.today().isoformat()
 
     try:
         updated = _supabase(

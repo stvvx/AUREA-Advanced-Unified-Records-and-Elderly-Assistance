@@ -17,6 +17,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { API_BASE_URL } from '../services/loloApi';
 import { useAuth } from '../context/AuthContext';
+import { exportBirthdayBenefitsFormPdf, openBirthdayBenefitsFormPreview } from '../services/birthdayBenefitsPdf';
 
 const C = {
   bg: '#F6F8F2',
@@ -36,18 +37,31 @@ const C = {
 type Application = {
   id: string;
   user_id: number;
+  ncsc_registration_reference_number?: string;
   benefit_type: 'Octogenarian' | 'Nonagenarian' | 'Centenarian';
   date_of_birth: string;
   osca_id_number?: string;
   contact_number?: string;
   email_address?: string;
+  residential_address?: string;
   permanent_address_philippines?: string;
   spouse_name?: string;
+  spouse_citizenship?: string;
   representative_name?: string;
+  representative_relationship?: string;
+  citizenship?: string;
+  is_dual_citizen?: boolean;
+  dual_citizenship_details?: string;
+  applicant_signature?: string;
+  applicant_signature_date?: string;
   validation_status: string;
   benefit_status: string;
   benefit_amount?: number | null;
+  date_released?: string | null;
   findings_concerns_recommendations?: string | null;
+  validated_by?: number | null;
+  validated_by_name?: string | null;
+  date_validated?: string | null;
   birth_certificate_submitted?: boolean;
   valid_id_submitted?: boolean;
   id_picture_submitted?: boolean;
@@ -55,6 +69,7 @@ type Application = {
   endorsed_list_submitted?: boolean;
   full_body_picture_url?: string | null;
   endorsed_list_url?: string | null;
+  valid_id_url?: string | null;
   id_picture_url?: string | null;
   birth_certificate_url?: string | null;
   created_at: string;
@@ -64,6 +79,12 @@ type Application = {
     lastName: string;
     email: string;
     contact: string;
+    gender?: string;
+    civilStatus?: string;
+    address?: string;
+    children?: Array<{ id?: string; name: string; dob?: string }>;
+    avatarUrl?: string;
+    oscaIdNumber?: string;
   };
 };
 
@@ -76,6 +97,8 @@ function statusColor(status: string) {
   if (status === 'Under Review' || status === 'For Processing') return C.gold;
   return C.inkFaint;
 }
+
+
 
 async function fetchApplications(): Promise<Application[]> {
   const response = await fetch(`${API_BASE_URL}/api/benefit-applications/admin`);
@@ -103,6 +126,7 @@ export default function AdminBenefitsScreen() {
   const [loading, setLoading] = useState(true);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [findings, setFindings] = useState<Record<string, string>>({});
+  const [amounts, setAmounts] = useState<Record<string, string>>({});
 
   const filteredApplications = useMemo(() => {
     if (filter === 'All') return applications;
@@ -118,13 +142,31 @@ export default function AdminBenefitsScreen() {
   };
 
   useEffect(() => {
-    loadApplications();
+    const timer = setTimeout(loadApplications, 0);
+    return () => clearTimeout(timer);
   }, []);
 
   const changeStatus = async (application: Application, key: 'validation_status' | 'benefit_status', value: string) => {
+    const amountText = amounts[application.id] ?? (
+      application.benefit_amount == null ? '' : String(application.benefit_amount)
+    );
+    if (
+      key === 'benefit_status' &&
+      (value === 'Approved' || value === 'Released') &&
+      (!amountText.trim() || Number(amountText) <= 0)
+    ) {
+      Alert.alert('Benefit amount required', 'Enter the approved benefit amount before setting this status.');
+      return;
+    }
     setUpdatingId(application.id);
     try {
-      const updated = await updateApplication(application.id, { [key]: value });
+      const updated = await updateApplication(application.id, {
+        [key]: value,
+        ...(key === 'benefit_status' ? { benefit_amount: Number(amountText) } : {}),
+        ...(key === 'validation_status' && value !== 'Pending' && user?.id
+          ? { validated_by: user.id }
+          : {}),
+      });
       setApplications((current) => current.map((item) => item.id === application.id ? { ...item, ...updated } : item));
     } catch (error) {
       Alert.alert('Update failed', error instanceof Error ? error.message : 'Could not update application.');
@@ -144,6 +186,22 @@ export default function AdminBenefitsScreen() {
       Alert.alert('Update failed', error instanceof Error ? error.message : 'Could not save validation findings.');
     } finally {
       setUpdatingId(null);
+    }
+  };
+
+  const exportApplication = async (application: Application) => {
+    try {
+      await exportBirthdayBenefitsFormPdf(application);
+    } catch (error) {
+      Alert.alert('Export failed', error instanceof Error ? error.message : 'Could not export this application.');
+    }
+  };
+
+  const previewApplicationInTab = (application: Application) => {
+    try {
+      openBirthdayBenefitsFormPreview(application);
+    } catch (error) {
+      Alert.alert('Preview failed', error instanceof Error ? error.message : 'Could not open form preview.');
     }
   };
 
@@ -214,6 +272,10 @@ export default function AdminBenefitsScreen() {
                 <Detail label="Age category" value={application.benefit_type} />
                 <Detail label="Contact" value={application.contact_number || application.applicant?.contact || '—'} />
                 <Detail label="Address" value={application.permanent_address_philippines || '—'} />
+                <Detail label="Validated by" value={application.validated_by_name || 'Pending review'} />
+                <Detail label="Date validated" value={application.date_validated || 'Pending review'} />
+                <Detail label="Benefit amount" value={application.benefit_amount == null ? 'Not set' : `₱${Number(application.benefit_amount).toFixed(2)}`} />
+                <Detail label="Date released" value={application.date_released || 'Not released'} />
               </View>
 
               <View style={styles.requirementsSection}>
@@ -225,6 +287,7 @@ export default function AdminBenefitsScreen() {
                 <Requirement label="Endorsed list" submitted={application.endorsed_list_submitted} />
                 <View style={styles.documentLinks}>
                   {application.birth_certificate_url && <DocumentLink label="Open birth certificate" url={application.birth_certificate_url} />}
+                  {application.valid_id_url && <DocumentLink label="Open valid ID" url={application.valid_id_url} />}
                   {application.id_picture_url && <DocumentLink label="Open account 2x2 picture" url={application.id_picture_url} />}
                   {application.full_body_picture_url && <DocumentLink label="Open full-body picture" url={application.full_body_picture_url} />}
                   {application.endorsed_list_url && <DocumentLink label="Open endorsement document" url={application.endorsed_list_url} />}
@@ -232,6 +295,16 @@ export default function AdminBenefitsScreen() {
               </View>
 
               <View style={styles.statusSection}>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8 }}>
+                  <TouchableOpacity style={styles.exportButton} onPress={() => exportApplication(application)} disabled={updatingId === application.id}>
+                    <Ionicons name="print-outline" size={16} color={C.primaryDark} />
+                    <Text style={styles.exportButtonText}>Print / Export PDF</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={[styles.exportButton, { backgroundColor: '#E7EDE8' }]} onPress={() => previewApplicationInTab(application)} disabled={updatingId === application.id}>
+                    <Ionicons name="open-outline" size={16} color={C.inkSoft} />
+                    <Text style={[styles.exportButtonText, { color: C.inkSoft }]}>Open Form in Tab</Text>
+                  </TouchableOpacity>
+                </View>
                 <Text style={styles.statusLabel}>VALIDATION DECISION</Text>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.statusOptions}>
                   {VALIDATION_STATUSES.map((status) => (
@@ -248,6 +321,15 @@ export default function AdminBenefitsScreen() {
                     </TouchableOpacity>
                   ))}
                 </ScrollView>
+                <Text style={styles.statusLabel}>APPROVED BENEFIT AMOUNT</Text>
+                <TextInput
+                  style={styles.amountInput}
+                  value={amounts[application.id] ?? (application.benefit_amount == null ? '' : String(application.benefit_amount))}
+                  onChangeText={(value) => setAmounts((current) => ({ ...current, [application.id]: value.replace(/[^0-9.]/g, '') }))}
+                  placeholder="Enter amount, e.g. 1000"
+                  placeholderTextColor={C.inkFaint}
+                  keyboardType="decimal-pad"
+                />
                 <Text style={styles.statusLabel}>FINDINGS / CONCERNS / RECOMMENDATIONS</Text>
                 <TextInput
                   style={styles.findingsInput}
@@ -334,6 +416,8 @@ const styles = StyleSheet.create({
   detailLabel: { fontFamily: 'InterBody', fontSize: 10, fontWeight: '700', color: C.inkFaint, textTransform: 'uppercase' },
   detailValue: { fontFamily: 'InterBody', fontSize: 12, color: C.inkSoft, marginTop: 3 },
   statusSection: { borderTopWidth: 1, borderTopColor: C.line, marginTop: 14, paddingTop: 13 },
+  exportButton: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 7, borderRadius: 10, backgroundColor: C.primarySoft, paddingHorizontal: 11, paddingVertical: 8, marginBottom: 8 },
+  exportButtonText: { fontFamily: 'InterBody', fontSize: 11, fontWeight: '700', color: C.primaryDark },
   requirementsSection: { borderTopWidth: 1, borderTopColor: C.line, marginTop: 14, paddingTop: 5 },
   requirementRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 5 },
   requirementText: { flex: 1, fontFamily: 'InterBody', fontSize: 12, color: C.inkSoft },
@@ -346,6 +430,7 @@ const styles = StyleSheet.create({
   statusOptions: { gap: 7 },
   statusOption: { borderWidth: 1, borderColor: C.line, borderRadius: 10, paddingHorizontal: 9, paddingVertical: 7, backgroundColor: C.bg },
   statusOptionText: { fontFamily: 'InterBody', fontSize: 11, fontWeight: '700' },
+  amountInput: { borderWidth: 1, borderColor: C.line, borderRadius: 12, backgroundColor: C.bg, padding: 10, fontFamily: 'InterBody', fontSize: 13, color: C.ink, ...Platform.select({ web: { outlineStyle: 'none' } as any }) },
   findingsInput: { minHeight: 72, borderWidth: 1, borderColor: C.line, borderRadius: 12, backgroundColor: C.bg, padding: 10, fontFamily: 'InterBody', fontSize: 12, color: C.ink, ...Platform.select({ web: { outlineStyle: 'none' } as any }) },
   saveFindingsButton: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 10, backgroundColor: C.primarySoft, paddingHorizontal: 10, paddingVertical: 8, marginTop: 8 },
   saveFindingsText: { fontFamily: 'InterBody', fontSize: 11, fontWeight: '700', color: C.primaryDark },

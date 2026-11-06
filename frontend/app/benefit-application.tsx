@@ -20,6 +20,7 @@ import Toast from '../components/Toast';
 import { getBenefitById } from '../data/benefits';
 import { getUser } from '../lib/authApi';
 import { submitOctogenarianBenefitApplication } from '../services/benefitApi';
+import { exportBirthdayBenefitsFormPdf, openBirthdayBenefitsFormPreview } from '../services/birthdayBenefitsPdf';
 
 type HealthCenter = {
   id: string;
@@ -429,6 +430,102 @@ export default function BenefitApplicationScreen() {
   const oscaIdNumber = formatDigitalIdNumber(user?.id);
   const fullBodyPictureSubmitted = Boolean(fullBodyPicture);
   const endorsedListSubmitted = Boolean(endorsedListFile);
+
+  const handleExportAnnexAPdf = async () => {
+    try {
+      await exportBirthdayBenefitsFormPdf({
+        user_id: user?.id,
+        osca_id_number: oscaIdNumber,
+        benefit_type: displayedBenefitType || 'Octogenarian',
+        date_of_birth: financialAidForm.dateOfBirth,
+        residential_address: financialAidForm.residentialAddress,
+        permanent_address_philippines: financialAidForm.permanentAddressPhilippines,
+        spouse_name: financialAidForm.spouseName,
+        spouse_citizenship: financialAidForm.spouseCitizenship,
+        representative_name: financialAidForm.representativeName,
+        representative_relationship: financialAidForm.representativeRelationship,
+        contact_number: financialAidForm.contactNumber,
+        email_address: financialAidForm.emailAddress,
+        citizenship: financialAidForm.citizenship,
+        is_dual_citizen: financialAidForm.isDualCitizen,
+        dual_citizenship_details: financialAidForm.dualCitizenshipDetails,
+        birth_certificate_submitted: Boolean(user?.birthcert || user?.birthCertificate),
+        valid_id_submitted: Boolean(user?.id),
+        id_picture_submitted: Boolean(user?.avatarUrl),
+        full_body_picture_submitted: fullBodyPictureSubmitted,
+        endorsed_list_submitted: endorsedListSubmitted,
+        applicant_signature: financialAidForm.applicantSignature,
+        applicant_signature_date: new Date().toISOString().slice(0, 10),
+        applicant: {
+          firstName: financialAidForm.givenName,
+          middleName: financialAidForm.middleName,
+          lastName: financialAidForm.lastName,
+          contact: financialAidForm.contactNumber,
+          email: financialAidForm.emailAddress,
+          gender: financialAidForm.sex,
+          civilStatus: financialAidForm.civilStatus,
+          address: financialAidForm.permanentAddressPhilippines,
+          children: profileChildren,
+          avatarUrl: user?.avatarUrl,
+          oscaIdNumber,
+        },
+      });
+    } catch (err) {
+      setToast({
+        visible: true,
+        message: err instanceof Error ? err.message : 'Could not export Annex A PDF.',
+        type: 'error',
+      });
+    }
+  };
+
+  const handlePreviewAnnexAPdf = () => {
+    try {
+      openBirthdayBenefitsFormPreview({
+        user_id: user?.id,
+        osca_id_number: oscaIdNumber,
+        benefit_type: displayedBenefitType || 'Octogenarian',
+        date_of_birth: financialAidForm.dateOfBirth,
+        residential_address: financialAidForm.residentialAddress,
+        permanent_address_philippines: financialAidForm.permanentAddressPhilippines,
+        spouse_name: financialAidForm.spouseName,
+        spouse_citizenship: financialAidForm.spouseCitizenship,
+        representative_name: financialAidForm.representativeName,
+        representative_relationship: financialAidForm.representativeRelationship,
+        contact_number: financialAidForm.contactNumber,
+        email_address: financialAidForm.emailAddress,
+        citizenship: financialAidForm.citizenship,
+        is_dual_citizen: financialAidForm.isDualCitizen,
+        dual_citizenship_details: financialAidForm.dualCitizenshipDetails,
+        birth_certificate_submitted: Boolean(user?.birthcert || user?.birthCertificate),
+        valid_id_submitted: Boolean(user?.id),
+        id_picture_submitted: Boolean(user?.avatarUrl),
+        full_body_picture_submitted: fullBodyPictureSubmitted,
+        endorsed_list_submitted: endorsedListSubmitted,
+        applicant_signature: financialAidForm.applicantSignature,
+        applicant_signature_date: new Date().toISOString().slice(0, 10),
+        applicant: {
+          firstName: financialAidForm.givenName,
+          middleName: financialAidForm.middleName,
+          lastName: financialAidForm.lastName,
+          contact: financialAidForm.contactNumber,
+          email: financialAidForm.emailAddress,
+          gender: financialAidForm.sex,
+          civilStatus: financialAidForm.civilStatus,
+          address: financialAidForm.permanentAddressPhilippines,
+          children: profileChildren,
+          avatarUrl: user?.avatarUrl,
+          oscaIdNumber,
+        },
+      });
+    } catch (err) {
+      setToast({
+        visible: true,
+        message: err instanceof Error ? err.message : 'Could not open Annex A preview.',
+        type: 'error',
+      });
+    }
+  };
 
   const handleSubmit = async () => {
     if (isFinancialAid) {
@@ -1116,6 +1213,17 @@ export default function BenefitApplicationScreen() {
               <Text style={s.submitText}>Submit application</Text>
             )}
           </TouchableOpacity>
+
+          {isFinancialAid && (
+            <TouchableOpacity
+              style={s.exportPdfButton}
+              onPress={handleExportAnnexAPdf}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="document-text-outline" size={18} color="#1F5C3E" />
+              <Text style={s.exportPdfButtonText}>Download / Print Annex "A" Form (PDF)</Text>
+            </TouchableOpacity>
+          )}
         </View>
         )}
       </ScrollView>
@@ -1484,5 +1592,23 @@ const s = StyleSheet.create({
     fontFamily: 'InterBody',
     fontWeight: '700',
     fontSize: 16,
+  },
+  exportPdfButton: {
+    marginTop: 10,
+    backgroundColor: '#DCEFE3',
+    borderRadius: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 14,
+    borderWidth: 1,
+    borderColor: '#B7DEC7',
+  },
+  exportPdfButtonText: {
+    fontFamily: 'InterBody',
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0F3323',
   },
 });
