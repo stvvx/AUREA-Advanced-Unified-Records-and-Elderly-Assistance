@@ -44,3 +44,8 @@ def register_lolo_routes(app: Flask) -> None:
     app.register_blueprint(osca_chat_bp)
     print("[AUREA] Registered blueprint: /api/chat")
 
+        # ── Movie Center ────────────────────────────────────────────────────────
+        
+    from routes.movie_center import movie_center_bp
+    app.register_blueprint(movie_center_bp)
+    print("[AUREA] Registered blueprint: /api/movie-center")

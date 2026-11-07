@@ -1,4 +1,5 @@
-import React, { useMemo, useState } from 'react';
+
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -8,154 +9,260 @@ import {
   StatusBar,
   Alert,
   useWindowDimensions,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 
+import { useAuth } from '../context/AuthContext';
+import { API_BASE_URL } from '../services/loloApi';
+
 type Movie = {
-  id: string;
+  id: string | number;
   title: string;
-  genre: string;
-  duration: string;
-  description: string;
-  rating: string;
-  color: string;
+  description?: string;
+  poster_url?: string;
+  age_rating?: string;
+  is_active?: boolean;
 };
 
 type Showtime = {
-  id: string;
-  time: string;
-  fillRate: number; // 0 to 1, share of seats already taken (demo data)
+  id: string | number;
+  movie_id: string | number;
+  screening_date: string;
+  screening_time: string;
+  available_slots: number;
+  capacity: number;
+  is_active?: boolean;
 };
 
-const MOVIES: Movie[] = [
-  {
-    id: '1',
-    title: 'A Journey Home',
-    genre: 'Drama',
-    duration: '1 hr 45 min',
-    description:
-      'A heartwarming story about family, memories, and the meaning of home.',
-    rating: 'PG',
-    color: '#496C80',
-  },
-  {
-    id: '2',
-    title: 'The Great Adventure',
-    genre: 'Adventure',
-    duration: '1 hr 50 min',
-    description:
-      'An exciting journey filled with friendship, discovery, and unforgettable moments.',
-    rating: 'G',
-    color: '#987044',
-  },
-  {
-    id: '3',
-    title: 'Ocean Wonders',
-    genre: 'Documentary',
-    duration: '1 hr 20 min',
-    description:
-      'Explore the beauty of marine life and discover the wonders beneath the sea.',
-    rating: 'G',
-    color: '#397D83',
-  },
-];
+type DateOption = {
+  id: string;
+  day: string;
+  number: number;
+  month: string;
+};
 
-const SHOWTIMES: Showtime[] = [
-  { id: '1', time: '9:00 AM', fillRate: 0.1 },
-  { id: '2', time: '1:00 PM', fillRate: 0.4 },
-  { id: '3', time: '4:00 PM', fillRate: 1 },
-];
-
-// Seat layout
 const ROWS = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
 const COLS = 10;
-const AISLE_AFTER = 5; // aisle between seat 5 and 6
-const TOTAL_SEATS = ROWS.length * COLS;
+const AISLE_AFTER = 5;
 const MAX_SEATS = 5;
 
-// Deterministic pseudo-random taken seats, so the same show always looks the same.
-// Replace with data from your server when you have one.
-function getTakenSeats(key: string, fillRate: number): Set<string> {
-  const taken = new Set<string>();
-  if (fillRate >= 1) {
-    ROWS.forEach((r) => {
-      for (let c = 1; c <= COLS; c++) taken.add(`${r}${c}`);
-    });
-    return taken;
-  }
+const API_BASE = API_BASE_URL.replace(/\/$/, '');
 
-  let seed = 0;
-  for (let i = 0; i < key.length; i++) {
-    seed = (seed * 31 + key.charCodeAt(i)) % 2147483647;
-  }
-  const next = () => {
-    seed = (seed * 48271) % 2147483647;
-    return seed / 2147483647;
+function formatDate(dateString: string): DateOption {
+  const [year, month, day] = dateString.split('-').map(Number);
+  const date = new Date(year, month - 1, day);
+
+  return {
+    id: dateString,
+    day: date.toLocaleDateString('en-US', { weekday: 'short' }),
+    number: date.getDate(),
+    month: date.toLocaleDateString('en-US', { month: 'short' }),
   };
-
-  ROWS.forEach((r) => {
-    for (let c = 1; c <= COLS; c++) {
-      if (next() < fillRate) taken.add(`${r}${c}`);
-    }
-  });
-  return taken;
 }
 
-function getUpcomingDates() {
-  return Array.from({ length: 7 }, (_, index) => {
-    const date = new Date();
-    date.setDate(date.getDate() + index + 1);
+function formatTime(time: string): string {
+  if (!time) return '';
 
-    return {
-      id: date.toISOString().split('T')[0],
-      day: date.toLocaleDateString('en-US', { weekday: 'short' }),
-      number: date.getDate(),
-      month: date.toLocaleDateString('en-US', { month: 'short' }),
-    };
+  const [hours, minutes] = time.split(':');
+  const date = new Date();
+  date.setHours(Number(hours), Number(minutes), 0, 0);
+
+  return date.toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
   });
+}
+
+async function parseResponse(response: Response) {
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok || data.success === false) {
+    throw new Error(
+      data.error || data.message || `Request failed (${response.status})`
+    );
+  }
+
+  return data;
 }
 
 export default function MovieBookScreen() {
   const router = useRouter();
+  const { user } = useAuth();
   const { width } = useWindowDimensions();
 
-  const dates = useMemo(() => getUpcomingDates(), []);
+  const userId = user?.id;
 
-  const [selectedMovie, setSelectedMovie] = useState(MOVIES[0]);
-  const [selectedDate, setSelectedDate] = useState(dates[0].id);
-  const [selectedShowtime, setSelectedShowtime] = useState<Showtime | null>(null);
+  const [movies, setMovies] = useState<Movie[]>([]);
+  const [screenings, setScreenings] = useState<Showtime[]>([]);
+
+  const [selectedMovie, setSelectedMovie] = useState<Movie | null>(null);
+  const [selectedDate, setSelectedDate] = useState('');
+  const [selectedShowtime, setSelectedShowtime] = useState<Showtime | null>(
+    null
+  );
   const [selectedSeats, setSelectedSeats] = useState<string[]>([]);
+
   const [showConfirmation, setShowConfirmation] = useState(false);
   const [reservationCode, setReservationCode] = useState('');
 
+  const [loadingMovies, setLoadingMovies] = useState(true);
+  const [loadingScreenings, setLoadingScreenings] = useState(false);
+  const [reserving, setReserving] = useState(false);
+  const [error, setError] = useState('');
+
+  const clearSeats = () => setSelectedSeats([]);
+
+  // Load movies created by the admin.
+  useEffect(() => {
+    if (!userId) return;
+
+    let mounted = true;
+
+    const loadMovies = async () => {
+      try {
+        setLoadingMovies(true);
+        setError('');
+
+        const response = await fetch(
+          `${API_BASE}/api/movie-center/movies?user_id=${encodeURIComponent(
+            String(userId)
+          )}`
+        );
+
+        const data = await parseResponse(response);
+
+        if (!mounted) return;
+
+        const fetchedMovies: Movie[] = data.movies || [];
+
+        setMovies(fetchedMovies);
+        setSelectedMovie((current) => {
+          if (current && fetchedMovies.some((m) => m.id === current.id)) {
+            return current;
+          }
+          return fetchedMovies[0] || null;
+        });
+      } catch (err: any) {
+        if (mounted) {
+          setError(err.message || 'Unable to load movies.');
+        }
+      } finally {
+        if (mounted) setLoadingMovies(false);
+      }
+    };
+
+    loadMovies();
+
+    return () => {
+      mounted = false;
+    };
+  }, [userId]);
+
+  // Load screenings for the selected movie.
+  useEffect(() => {
+    if (!userId || !selectedMovie) {
+      setScreenings([]);
+      setSelectedDate('');
+      setSelectedShowtime(null);
+      clearSeats();
+      return;
+    }
+
+    let mounted = true;
+
+    const loadScreenings = async () => {
+      try {
+        setLoadingScreenings(true);
+        setSelectedShowtime(null);
+        setSelectedDate('');
+        clearSeats();
+
+        const response = await fetch(
+          `${API_BASE}/api/movie-center/screenings?user_id=${encodeURIComponent(
+            String(userId)
+          )}&movie_id=${encodeURIComponent(String(selectedMovie.id))}`
+        );
+
+        const data = await parseResponse(response);
+
+        if (!mounted) return;
+
+        const fetchedScreenings: Showtime[] = data.screenings || [];
+
+        setScreenings(fetchedScreenings);
+
+        const firstDate = fetchedScreenings
+          .map((screening) => screening.screening_date?.slice(0, 10))
+          .filter(Boolean)
+          .sort()[0];
+
+        setSelectedDate(firstDate || '');
+      } catch (err: any) {
+        if (mounted) {
+          setScreenings([]);
+          setError(err.message || 'Unable to load screenings.');
+        }
+      } finally {
+        if (mounted) setLoadingScreenings(false);
+      }
+    };
+
+    loadScreenings();
+
+    return () => {
+      mounted = false;
+    };
+  }, [userId, selectedMovie?.id]);
+
+  // Dates are based on actual admin-created screenings.
+  const dates = useMemo(() => {
+    const uniqueDates = [
+      ...new Set(
+        screenings
+          .map((screening) => screening.screening_date?.slice(0, 10))
+          .filter(Boolean)
+      ),
+    ];
+
+    return uniqueDates.sort().map(formatDate);
+  }, [screenings]);
+
   const selectedDateInfo = dates.find((date) => date.id === selectedDate);
 
-  // Seat size adapts to screen width: screen padding (40) + card padding (32)
-  // + row label (22) + aisle (22) + gaps between seats
+  // Showtimes are filtered using the selected date.
+  const showtimes = useMemo(() => {
+    return screenings.filter(
+      (screening) =>
+        screening.screening_date?.slice(0, 10) === selectedDate
+    );
+  }, [screenings, selectedDate]);
+
   const seatSize = Math.min(
     34,
     Math.floor((width - 40 - 32 - 22 - 22 - COLS * 6) / COLS)
   );
 
-  // Taken seats for every showtime on the chosen movie + date
-  const takenByShowtime = useMemo(() => {
-    const map: Record<string, Set<string>> = {};
-    SHOWTIMES.forEach((s) => {
-      map[s.id] = getTakenSeats(
-        `${selectedMovie.id}-${selectedDate}-${s.id}`,
-        s.fillRate
-      );
-    });
-    return map;
-  }, [selectedMovie.id, selectedDate]);
+  const sortedSeats = useMemo(
+    () =>
+      [...selectedSeats].sort((a, b) => {
+        if (a[0] !== b[0]) return a[0].localeCompare(b[0]);
+        return Number(a.slice(1)) - Number(b.slice(1));
+      }),
+    [selectedSeats]
+  );
 
-  const takenSeats = selectedShowtime
-    ? takenByShowtime[selectedShowtime.id]
-    : new Set<string>();
+  const handleMovieSelect = (movie: Movie) => {
+    if (selectedMovie?.id === movie.id) return;
 
-  const clearSeats = () => setSelectedSeats([]);
+    setSelectedMovie(movie);
+    setSelectedShowtime(null);
+    setSelectedDate('');
+    clearSeats();
+    setError('');
+  };
 
   const handleDateSelect = (dateId: string) => {
     setSelectedDate(dateId);
@@ -163,90 +270,150 @@ export default function MovieBookScreen() {
     clearSeats();
   };
 
-  const handleMovieSelect = (movie: Movie) => {
-    setSelectedMovie(movie);
-    setSelectedShowtime(null);
-    clearSeats();
-  };
-
   const handleShowtimeSelect = (showtime: Showtime) => {
-    if (selectedShowtime?.id !== showtime.id) clearSeats();
+    if (Number(showtime.available_slots) <= 0) return;
+
+    if (selectedShowtime?.id !== showtime.id) {
+      clearSeats();
+    }
+
     setSelectedShowtime(showtime);
   };
 
+  // The backend stores attendee_count, not actual seat numbers.
+  // Seat labels are used only to let the user choose the attendee count.
   const handleSeatPress = (seatId: string) => {
-    if (takenSeats.has(seatId)) return;
+    if (!selectedShowtime) return;
+
+    const availableSlots = Number(selectedShowtime.available_slots) || 0;
+    const maxSelectable = Math.min(MAX_SEATS, availableSlots);
 
     if (selectedSeats.includes(seatId)) {
-      setSelectedSeats((prev) => prev.filter((s) => s !== seatId));
-      return;
-    }
-
-    if (selectedSeats.length >= MAX_SEATS) {
-      Alert.alert(
-        'Seat limit reached',
-        `You can reserve up to ${MAX_SEATS} seats per reservation.`
+      setSelectedSeats((previous) =>
+        previous.filter((seat) => seat !== seatId)
       );
       return;
     }
 
-    setSelectedSeats((prev) => [...prev, seatId]);
+    if (selectedSeats.length >= maxSelectable) {
+      Alert.alert(
+        'Reservation limit',
+        `You can select up to ${maxSelectable} attendee(s) for this screening.`
+      );
+      return;
+    }
+
+    setSelectedSeats((previous) => [...previous, seatId]);
   };
 
-  const sortedSeats = useMemo(
-    () =>
-      [...selectedSeats].sort((a, b) => {
-        if (a[0] !== b[0]) return a[0].localeCompare(b[0]);
-        return parseInt(a.slice(1), 10) - parseInt(b.slice(1), 10);
-      }),
-    [selectedSeats]
-  );
+  const handleReserve = async () => {
+    if (!userId) {
+      Alert.alert('Login required', 'Please log in again to make a reservation.');
+      return;
+    }
 
-  const handleReserve = () => {
+    if (!selectedMovie) {
+      Alert.alert('Select a movie', 'Please select a movie first.');
+      return;
+    }
+
     if (!selectedShowtime) {
-      Alert.alert('Select a Showtime', 'Please choose your preferred screening time.');
+      Alert.alert('Select a showtime', 'Please choose your preferred screening time.');
       return;
     }
 
     if (selectedSeats.length === 0) {
-      Alert.alert('Select your seats', 'Tap at least one seat on the seat map.');
+      Alert.alert('Select attendees', 'Please select at least one attendee.');
       return;
     }
 
-    const code = `AUR-${Date.now().toString().slice(-6)}`;
-    setReservationCode(code);
-    setShowConfirmation(true);
+    if (selectedSeats.length > Number(selectedShowtime.available_slots)) {
+      Alert.alert(
+        'Not enough available slots',
+        'Please select fewer attendees.'
+      );
+      return;
+    }
+
+    try {
+      setReserving(true);
+
+      const response = await fetch(
+        `${API_BASE}/api/movie-center/reservations`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            user_id: userId,
+            screening_id: selectedShowtime.id,
+            attendee_count: selectedSeats.length,
+          }),
+        }
+      );
+
+      const data = await parseResponse(response);
+      const reservation = data.reservation;
+
+      const code =
+        reservation?.confirmation_code ||
+        reservation?.reservation?.confirmation_code ||
+        reservation?.id ||
+        reservation?.reservation_id ||
+        'Submitted';
+
+      setReservationCode(String(code));
+      setShowConfirmation(true);
+
+      // Refresh availability after a successful reservation.
+      const refreshResponse = await fetch(
+        `${API_BASE}/api/movie-center/screenings?user_id=${encodeURIComponent(
+          String(userId)
+        )}&movie_id=${encodeURIComponent(String(selectedMovie.id))}`
+      );
+
+      const refreshData = await parseResponse(refreshResponse);
+      setScreenings(refreshData.screenings || []);
+    } catch (err: any) {
+      Alert.alert(
+        'Reservation failed',
+        err.message || 'Something went wrong. Please try again.'
+      );
+    } finally {
+      setReserving(false);
+    }
   };
 
-  const canReserve = !!selectedShowtime && selectedSeats.length > 0;
+  const canReserve =
+    !!selectedMovie &&
+    !!selectedShowtime &&
+    selectedSeats.length > 0 &&
+    !reserving &&
+    selectedSeats.length <= Number(selectedShowtime?.available_slots || 0);
 
   const renderSeat = (row: string, col: number) => {
     const id = `${row}${col}`;
-    const isTaken = takenSeats.has(id);
     const isSelected = selectedSeats.includes(id);
 
     return (
       <TouchableOpacity
         key={id}
-        disabled={isTaken}
         activeOpacity={0.7}
         onPress={() => handleSeatPress(id)}
         accessibilityRole="button"
-        accessibilityLabel={`Seat ${id}, ${
-          isTaken ? 'taken' : isSelected ? 'selected' : 'available'
+        accessibilityLabel={`Attendee ${id}, ${
+          isSelected ? 'selected' : 'not selected'
         }`}
         style={[
           styles.seat,
           { width: seatSize, height: seatSize },
-          isTaken && styles.seatTaken,
           isSelected && styles.seatSelected,
         ]}
       >
-        {isSelected ? (
+        {isSelected && (
           <Text style={styles.seatSelectedText}>{col}</Text>
-        ) : isTaken ? (
-          <Ionicons name="close" size={Math.max(12, seatSize * 0.5)} color="#B9B4C0" />
-        ) : null}
+        )}
       </TouchableOpacity>
     );
   };
@@ -257,13 +424,18 @@ export default function MovieBookScreen() {
 
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={() => router.back()}
+        >
           <Ionicons name="arrow-back" size={25} color="#252525" />
         </TouchableOpacity>
 
         <View style={styles.headerText}>
           <Text style={styles.headerTitle}>Movie Center</Text>
-          <Text style={styles.headerSubtitle}>Reserve your movie screening</Text>
+          <Text style={styles.headerSubtitle}>
+            Reserve your movie screening
+          </Text>
         </View>
 
         <View style={styles.headerIcon}>
@@ -280,7 +452,7 @@ export default function MovieBookScreen() {
           <View style={styles.bannerTextContainer}>
             <Text style={styles.bannerTitle}>Enjoy a movie day!</Text>
             <Text style={styles.bannerDescription}>
-              Choose a movie, pick a showtime, and select your seats.
+              Choose a movie, pick a showtime, and select your attendees.
             </Text>
           </View>
           <Ionicons name="ticket-outline" size={54} color="#FFFFFF" />
@@ -289,150 +461,280 @@ export default function MovieBookScreen() {
         {/* Movie Selection */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Now Showing</Text>
-          <Text style={styles.sectionDescription}>Select a movie you want to watch.</Text>
+          <Text style={styles.sectionDescription}>
+            Select a movie you want to watch.
+          </Text>
 
-          {MOVIES.map((movie) => {
-            const isSelected = selectedMovie.id === movie.id;
+          {loadingMovies ? (
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator size="large" color="#7652A5" />
+              <Text style={styles.loadingText}>Loading movies...</Text>
+            </View>
+          ) : movies.length === 0 ? (
+            <View style={styles.emptyCard}>
+              <Ionicons name="film-outline" size={34} color="#A99BC0" />
+              <Text style={styles.emptyTitle}>No movies available</Text>
+              <Text style={styles.emptyDescription}>
+                There are currently no active movies available for reservation.
+              </Text>
+            </View>
+          ) : (
+            movies.map((movie, index) => {
+              const isSelected = selectedMovie?.id === movie.id;
+              const posterColors = ['#496C80', '#987044', '#397D83'];
+              const posterColor = posterColors[index % posterColors.length];
 
-            return (
-              <TouchableOpacity
-                key={movie.id}
-                style={[styles.movieCard, isSelected && styles.selectedMovieCard]}
-                onPress={() => handleMovieSelect(movie)}
-                activeOpacity={0.8}
-              >
-                <View style={[styles.moviePoster, { backgroundColor: movie.color }]}>
-                  <Ionicons name="film" size={40} color="#FFFFFF" />
-                  <Text style={styles.posterLabel}>MOVIE</Text>
-                </View>
+              return (
+                <TouchableOpacity
+                  key={String(movie.id)}
+                  style={[
+                    styles.movieCard,
+                    isSelected && styles.selectedMovieCard,
+                  ]}
+                  onPress={() => handleMovieSelect(movie)}
+                  activeOpacity={0.8}
+                >
+                  <View
+                    style={[
+                      styles.moviePoster,
+                      { backgroundColor: posterColor },
+                    ]}
+                  >
+                    {movie.poster_url ? (
+                      <View style={styles.posterFallback}>
+                        <Ionicons name="film" size={40} color="#FFFFFF" />
+                        <Text style={styles.posterLabel}>MOVIE</Text>
+                      </View>
+                    ) : (
+                      <>
+                        <Ionicons name="film" size={40} color="#FFFFFF" />
+                        <Text style={styles.posterLabel}>MOVIE</Text>
+                      </>
+                    )}
+                  </View>
 
-                <View style={styles.movieInfo}>
-                  <Text style={styles.movieTitle}>{movie.title}</Text>
-                  <Text style={styles.movieMeta}>
-                    {movie.genre} · {movie.duration}
-                  </Text>
-                  <Text style={styles.movieDescription}>{movie.description}</Text>
-                  <Text style={styles.rating}>Rated {movie.rating}</Text>
-                </View>
+                  <View style={styles.movieInfo}>
+                    <Text style={styles.movieTitle}>{movie.title}</Text>
+                    <Text style={styles.movieMeta}>
+                      {movie.age_rating || 'Not rated'}
+                    </Text>
+                    {!!movie.description && (
+                      <Text style={styles.movieDescription}>
+                        {movie.description}
+                      </Text>
+                    )}
+                    <Text style={styles.rating}>
+                      Rated {movie.age_rating || 'Not specified'}
+                    </Text>
+                  </View>
 
-                <Ionicons
-                  name={isSelected ? 'radio-button-on' : 'radio-button-off'}
-                  size={24}
-                  color={isSelected ? '#7652A5' : '#A7A7A7'}
-                />
-              </TouchableOpacity>
-            );
-          })}
+                  <Ionicons
+                    name={
+                      isSelected ? 'radio-button-on' : 'radio-button-off'
+                    }
+                    size={24}
+                    color={isSelected ? '#7652A5' : '#A7A7A7'}
+                  />
+                </TouchableOpacity>
+              );
+            })
+          )}
         </View>
 
-        {/* Date Selection */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Select a Date</Text>
-          <Text style={styles.sectionDescription}>Choose your preferred screening date.</Text>
+        {/* Error */}
+        {!!error && (
+          <View style={styles.errorCard}>
+            <Ionicons name="alert-circle-outline" size={20} color="#B04444" />
+            <Text style={styles.errorText}>{error}</Text>
+          </View>
+        )}
 
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            <View style={styles.dateList}>
-              {dates.map((date) => {
-                const isSelected = selectedDate === date.id;
+        {/* Date Selection */}
+        {!!selectedMovie && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Select a Date</Text>
+            <Text style={styles.sectionDescription}>
+              Choose your preferred screening date.
+            </Text>
+
+            {loadingScreenings ? (
+              <View style={styles.loadingContainer}>
+                <ActivityIndicator size="small" color="#7652A5" />
+                <Text style={styles.loadingText}>
+                  Loading screening dates...
+                </Text>
+              </View>
+            ) : dates.length === 0 ? (
+              <View style={styles.emptyCard}>
+                <Ionicons
+                  name="calendar-outline"
+                  size={30}
+                  color="#A99BC0"
+                />
+                <Text style={styles.emptyTitle}>No screenings scheduled</Text>
+                <Text style={styles.emptyDescription}>
+                  There are no available screening schedules for this movie yet.
+                </Text>
+              </View>
+            ) : (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+              >
+                <View style={styles.dateList}>
+                  {dates.map((date) => {
+                    const isSelected = selectedDate === date.id;
+
+                    return (
+                      <TouchableOpacity
+                        key={date.id}
+                        style={[
+                          styles.dateCard,
+                          isSelected && styles.selectedDateCard,
+                        ]}
+                        onPress={() => handleDateSelect(date.id)}
+                      >
+                        <Text
+                          style={[
+                            styles.dateDay,
+                            isSelected && styles.selectedDateText,
+                          ]}
+                        >
+                          {date.day}
+                        </Text>
+                        <Text
+                          style={[
+                            styles.dateNumber,
+                            isSelected && styles.selectedDateText,
+                          ]}
+                        >
+                          {date.number}
+                        </Text>
+                        <Text
+                          style={[
+                            styles.dateMonth,
+                            isSelected && styles.selectedDateText,
+                          ]}
+                        >
+                          {date.month}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </ScrollView>
+            )}
+          </View>
+        )}
+
+        {/* Showtime Selection */}
+        {!!selectedMovie && !loadingScreenings && dates.length > 0 && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Available Showtimes</Text>
+            <Text style={styles.sectionDescription}>
+              Select your preferred screening time.
+            </Text>
+
+            {showtimes.length === 0 ? (
+              <View style={styles.emptyCard}>
+                <Ionicons name="time-outline" size={30} color="#A99BC0" />
+                <Text style={styles.emptyTitle}>No showtimes for this date</Text>
+                <Text style={styles.emptyDescription}>
+                  Please select another screening date.
+                </Text>
+              </View>
+            ) : (
+              showtimes.map((showtime) => {
+                const isSelected = selectedShowtime?.id === showtime.id;
+                const available = Math.max(
+                  0,
+                  Number(showtime.available_slots) || 0
+                );
+                const isFull = available <= 0;
 
                 return (
                   <TouchableOpacity
-                    key={date.id}
-                    style={[styles.dateCard, isSelected && styles.selectedDateCard]}
-                    onPress={() => handleDateSelect(date.id)}
+                    key={String(showtime.id)}
+                    disabled={isFull}
+                    style={[
+                      styles.showtimeCard,
+                      isSelected && styles.selectedShowtimeCard,
+                      isFull && styles.fullShowtimeCard,
+                    ]}
+                    onPress={() => handleShowtimeSelect(showtime)}
                   >
-                    <Text style={[styles.dateDay, isSelected && styles.selectedDateText]}>
-                      {date.day}
-                    </Text>
-                    <Text style={[styles.dateNumber, isSelected && styles.selectedDateText]}>
-                      {date.number}
-                    </Text>
-                    <Text style={[styles.dateMonth, isSelected && styles.selectedDateText]}>
-                      {date.month}
-                    </Text>
+                    <View style={styles.showtimeLeft}>
+                      <Ionicons
+                        name="time-outline"
+                        size={25}
+                        color={isFull ? '#999999' : '#7652A5'}
+                      />
+                      <View>
+                        <Text style={styles.showtimeTime}>
+                          {formatTime(showtime.screening_time)}
+                        </Text>
+                        <Text style={styles.showtimeAvailability}>
+                          {isFull
+                            ? 'No slots available'
+                            : `${available} slots available`}
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View
+                      style={[
+                        styles.statusBadge,
+                        isFull
+                          ? styles.fullBadge
+                          : styles.availableBadge,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.statusText,
+                          isFull && styles.fullStatusText,
+                        ]}
+                      >
+                        {isFull ? 'FULL' : 'AVAILABLE'}
+                      </Text>
+                    </View>
                   </TouchableOpacity>
                 );
-              })}
-            </View>
-          </ScrollView>
-        </View>
+              })
+            )}
+          </View>
+        )}
 
-        {/* Showtime Selection */}
+        {/* Attendee Selection */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Available Showtimes</Text>
-          <Text style={styles.sectionDescription}>Select your preferred screening time.</Text>
-
-          {SHOWTIMES.map((showtime) => {
-            const isSelected = selectedShowtime?.id === showtime.id;
-            const available = TOTAL_SEATS - takenByShowtime[showtime.id].size;
-            const isFull = available === 0;
-
-            return (
-              <TouchableOpacity
-                key={showtime.id}
-                disabled={isFull}
-                style={[
-                  styles.showtimeCard,
-                  isSelected && styles.selectedShowtimeCard,
-                  isFull && styles.fullShowtimeCard,
-                ]}
-                onPress={() => handleShowtimeSelect(showtime)}
-              >
-                <View style={styles.showtimeLeft}>
-                  <Ionicons
-                    name="time-outline"
-                    size={25}
-                    color={isFull ? '#999999' : '#7652A5'}
-                  />
-                  <View>
-                    <Text style={styles.showtimeTime}>{showtime.time}</Text>
-                    <Text style={styles.showtimeAvailability}>
-                      {isFull ? 'No seats available' : `${available} seats available`}
-                    </Text>
-                  </View>
-                </View>
-
-                <View
-                  style={[
-                    styles.statusBadge,
-                    isFull ? styles.fullBadge : styles.availableBadge,
-                  ]}
-                >
-                  <Text style={[styles.statusText, isFull && styles.fullStatusText]}>
-                    {isFull ? 'FULL' : 'AVAILABLE'}
-                  </Text>
-                </View>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-
-        {/* Seat Selection */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Choose Your Seats</Text>
+          <Text style={styles.sectionTitle}>Select Attendees</Text>
           <Text style={styles.sectionDescription}>
-            Tap seats to select them. Up to {MAX_SEATS} seats per reservation.
+            Select one marker for each attendee. Up to {MAX_SEATS} attendees
+            per reservation.
           </Text>
 
           {selectedShowtime ? (
             <View style={styles.seatCard}>
-              {/* Screen */}
               <View style={styles.screenWrap}>
                 <View style={styles.screenCurve} />
                 <Text style={styles.screenLabel}>SCREEN</Text>
               </View>
 
-              {/* Seat grid */}
               <View style={styles.seatGrid}>
                 {ROWS.map((row) => (
                   <View key={row} style={styles.seatRow}>
                     <Text style={styles.rowLabel}>{row}</Text>
 
                     <View style={styles.seatsContainer}>
-                      {Array.from({ length: COLS }, (_, i) => i + 1).map((col) => (
+                      {Array.from(
+                        { length: COLS },
+                        (_, index) => index + 1
+                      ).map((col) => (
                         <React.Fragment key={`${row}${col}`}>
                           {renderSeat(row, col)}
-                          {col === AISLE_AFTER && <View style={styles.aisle} />}
+                          {col === AISLE_AFTER && (
+                            <View style={styles.aisle} />
+                          )}
                         </React.Fragment>
                       ))}
                     </View>
@@ -442,29 +744,32 @@ export default function MovieBookScreen() {
                 ))}
               </View>
 
-              {/* Legend */}
               <View style={styles.legend}>
                 <View style={styles.legendItem}>
                   <View style={[styles.legendSwatch, styles.seat]} />
-                  <Text style={styles.legendText}>Available</Text>
+                  <Text style={styles.legendText}>Not selected</Text>
                 </View>
                 <View style={styles.legendItem}>
-                  <View style={[styles.legendSwatch, styles.seat, styles.seatSelected]} />
+                  <View
+                    style={[
+                      styles.legendSwatch,
+                      styles.seat,
+                      styles.seatSelected,
+                    ]}
+                  />
                   <Text style={styles.legendText}>Selected</Text>
-                </View>
-                <View style={styles.legendItem}>
-                  <View style={[styles.legendSwatch, styles.seat, styles.seatTaken]} />
-                  <Text style={styles.legendText}>Taken</Text>
                 </View>
               </View>
 
-              {/* Selected seats chip row */}
               <View style={styles.selectedSeatsBar}>
                 <Text style={styles.selectedSeatsLabel}>
                   {selectedSeats.length === 0
-                    ? 'No seats selected'
-                    : `${selectedSeats.length} seat${selectedSeats.length > 1 ? 's' : ''} selected`}
+                    ? 'No attendees selected'
+                    : `${selectedSeats.length} attendee${
+                        selectedSeats.length > 1 ? 's' : ''
+                      } selected`}
                 </Text>
+
                 {sortedSeats.length > 0 && (
                   <View style={styles.chipRow}>
                     {sortedSeats.map((seat) => (
@@ -474,7 +779,11 @@ export default function MovieBookScreen() {
                         onPress={() => handleSeatPress(seat)}
                       >
                         <Text style={styles.chipText}>{seat}</Text>
-                        <Ionicons name="close" size={13} color="#7652A5" />
+                        <Ionicons
+                          name="close"
+                          size={13}
+                          color="#7652A5"
+                        />
                       </TouchableOpacity>
                     ))}
                   </View>
@@ -483,9 +792,13 @@ export default function MovieBookScreen() {
             </View>
           ) : (
             <View style={styles.seatPlaceholder}>
-              <Ionicons name="grid-outline" size={30} color="#A99BC0" />
+              <Ionicons
+                name="grid-outline"
+                size={30}
+                color="#A99BC0"
+              />
               <Text style={styles.seatPlaceholderText}>
-                Select a showtime to see available seats.
+                Select a showtime to choose your attendees.
               </Text>
             </View>
           )}
@@ -497,7 +810,9 @@ export default function MovieBookScreen() {
 
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>Movie</Text>
-            <Text style={styles.summaryValue}>{selectedMovie.title}</Text>
+            <Text style={styles.summaryValue}>
+              {selectedMovie?.title || 'Not selected'}
+            </Text>
           </View>
 
           <View style={styles.summaryRow}>
@@ -511,29 +826,55 @@ export default function MovieBookScreen() {
 
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>Showtime</Text>
-            <Text style={styles.summaryValue}>{selectedShowtime?.time || 'Not selected'}</Text>
+            <Text style={styles.summaryValue}>
+              {selectedShowtime
+                ? formatTime(selectedShowtime.screening_time)
+                : 'Not selected'}
+            </Text>
           </View>
 
           <View style={styles.summaryRow}>
-            <Text style={styles.summaryLabel}>Seats</Text>
+            <Text style={styles.summaryLabel}>Attendees</Text>
             <Text style={styles.summaryValue}>
-              {sortedSeats.length > 0 ? sortedSeats.join(', ') : 'Not selected'}
+              {selectedSeats.length > 0
+                ? `${selectedSeats.length} attendee(s)`
+                : 'Not selected'}
             </Text>
           </View>
 
           <View style={styles.noPaymentNotice}>
-            <Ionicons name="information-circle-outline" size={20} color="#7652A5" />
+            <Ionicons
+              name="information-circle-outline"
+              size={20}
+              color="#7652A5"
+            />
             <Text style={styles.noPaymentText}>
               This is a free reservation. No payment is required.
             </Text>
           </View>
 
           <TouchableOpacity
-            style={[styles.reserveButton, !canReserve && styles.disabledButton]}
+            style={[
+              styles.reserveButton,
+              !canReserve && styles.disabledButton,
+            ]}
             onPress={handleReserve}
+            disabled={!canReserve}
           >
-            <Text style={styles.reserveButtonText}>Reserve Seats</Text>
-            <Ionicons name="arrow-forward" size={21} color="#FFFFFF" />
+            {reserving ? (
+              <ActivityIndicator color="#FFFFFF" />
+            ) : (
+              <>
+                <Text style={styles.reserveButtonText}>
+                  Reserve Now
+                </Text>
+                <Ionicons
+                  name="arrow-forward"
+                  size={21}
+                  color="#FFFFFF"
+                />
+              </>
+            )}
           </TouchableOpacity>
         </View>
 
@@ -550,30 +891,47 @@ export default function MovieBookScreen() {
               <Ionicons name="checkmark" size={42} color="#FFFFFF" />
             </View>
 
-            <Text style={styles.confirmationTitle}>Reservation Submitted!</Text>
+            <Text style={styles.confirmationTitle}>
+              Reservation Submitted!
+            </Text>
 
             <Text style={styles.confirmationDescription}>
-              Your movie screening reservation has been prepared.
+              Your movie screening reservation has been successfully submitted.
             </Text>
 
             <View style={styles.confirmationDetails}>
-              <Text style={styles.confirmationLabel}>Reservation Code</Text>
-              <Text style={styles.confirmationCode}>{reservationCode}</Text>
+              <Text style={styles.confirmationLabel}>
+                Confirmation Code
+              </Text>
+              <Text style={styles.confirmationCode}>
+                {reservationCode}
+              </Text>
 
               <Text style={styles.confirmationLabel}>Movie</Text>
-              <Text style={styles.confirmationValue}>{selectedMovie.title}</Text>
+              <Text style={styles.confirmationValue}>
+                {selectedMovie?.title || '—'}
+              </Text>
 
               <Text style={styles.confirmationLabel}>Schedule</Text>
               <Text style={styles.confirmationValue}>
-                {selectedDateInfo?.month} {selectedDateInfo?.number} · {selectedShowtime?.time}
+                {selectedDateInfo
+                  ? `${selectedDateInfo.month} ${selectedDateInfo.number}`
+                  : '—'}{' '}
+                ·{' '}
+                {selectedShowtime
+                  ? formatTime(selectedShowtime.screening_time)
+                  : '—'}
               </Text>
 
-              <Text style={styles.confirmationLabel}>Seats</Text>
-              <Text style={styles.confirmationValue}>{sortedSeats.join(', ')}</Text>
+              <Text style={styles.confirmationLabel}>Attendees</Text>
+              <Text style={styles.confirmationValue}>
+                {selectedSeats.length}
+              </Text>
             </View>
 
             <Text style={styles.pendingNote}>
-              Demo only: this confirmation is not yet saved to the server.
+              Your reservation has been recorded in the system. Please check
+              your reservation status for updates.
             </Text>
 
             <TouchableOpacity
@@ -632,12 +990,63 @@ const styles = StyleSheet.create({
     marginBottom: 28,
   },
   bannerTextContainer: { flex: 1, paddingRight: 10 },
-  bannerTitle: { color: '#FFFFFF', fontSize: 23, fontWeight: '800', marginBottom: 8 },
-  bannerDescription: { color: '#F0EAF8', fontSize: 14, lineHeight: 21 },
+  bannerTitle: {
+    color: '#FFFFFF',
+    fontSize: 23,
+    fontWeight: '800',
+    marginBottom: 8,
+  },
+  bannerDescription: {
+    color: '#F0EAF8',
+    fontSize: 14,
+    lineHeight: 21,
+  },
   section: { marginBottom: 28 },
   sectionTitle: { fontSize: 21, fontWeight: '800', color: '#29252E' },
-  sectionDescription: { fontSize: 14, color: '#77717E', marginTop: 5, marginBottom: 15 },
-
+  sectionDescription: {
+    fontSize: 14,
+    color: '#77717E',
+    marginTop: 5,
+    marginBottom: 15,
+  },
+  loadingContainer: {
+    padding: 25,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+  },
+  loadingText: { color: '#77717E', fontSize: 13 },
+  emptyCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 17,
+    padding: 24,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#E9E5ED',
+  },
+  emptyTitle: {
+    color: '#29252E',
+    fontSize: 15,
+    fontWeight: '800',
+    marginTop: 10,
+  },
+  emptyDescription: {
+    color: '#77717E',
+    fontSize: 13,
+    textAlign: 'center',
+    lineHeight: 19,
+    marginTop: 5,
+  },
+  errorCard: {
+    backgroundColor: '#FCE8E8',
+    borderRadius: 12,
+    padding: 13,
+    marginBottom: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+  },
+  errorText: { color: '#9E3939', fontSize: 13, flex: 1 },
   movieCard: {
     backgroundColor: '#FFFFFF',
     borderRadius: 17,
@@ -648,14 +1057,19 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: 'transparent',
   },
-  selectedMovieCard: { borderColor: '#7652A5', backgroundColor: '#FCFAFF' },
+  selectedMovieCard: {
+    borderColor: '#7652A5',
+    backgroundColor: '#FCFAFF',
+  },
   moviePoster: {
     width: 76,
     height: 105,
     borderRadius: 11,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
   },
+  posterFallback: { alignItems: 'center', justifyContent: 'center' },
   posterLabel: {
     color: '#FFFFFF',
     fontSize: 10,
@@ -665,10 +1079,24 @@ const styles = StyleSheet.create({
   },
   movieInfo: { flex: 1, paddingHorizontal: 12 },
   movieTitle: { color: '#29252E', fontSize: 16, fontWeight: '800' },
-  movieMeta: { color: '#7652A5', fontSize: 12, fontWeight: '700', marginTop: 5 },
-  movieDescription: { color: '#77717E', fontSize: 12, lineHeight: 17, marginTop: 6 },
-  rating: { color: '#55505B', fontSize: 11, fontWeight: '700', marginTop: 7 },
-
+  movieMeta: {
+    color: '#7652A5',
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 5,
+  },
+  movieDescription: {
+    color: '#77717E',
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 6,
+  },
+  rating: {
+    color: '#55505B',
+    fontSize: 11,
+    fontWeight: '700',
+    marginTop: 7,
+  },
   dateList: { flexDirection: 'row', gap: 10 },
   dateCard: {
     width: 66,
@@ -680,12 +1108,19 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E9E5ED',
   },
-  selectedDateCard: { backgroundColor: '#7652A5', borderColor: '#7652A5' },
+  selectedDateCard: {
+    backgroundColor: '#7652A5',
+    borderColor: '#7652A5',
+  },
   dateDay: { color: '#77717E', fontSize: 12, fontWeight: '600' },
-  dateNumber: { color: '#29252E', fontSize: 25, fontWeight: '800', marginVertical: 2 },
+  dateNumber: {
+    color: '#29252E',
+    fontSize: 25,
+    fontWeight: '800',
+    marginVertical: 2,
+  },
   dateMonth: { color: '#77717E', fontSize: 11 },
   selectedDateText: { color: '#FFFFFF' },
-
   showtimeCard: {
     backgroundColor: '#FFFFFF',
     borderRadius: 15,
@@ -697,18 +1132,31 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: 'transparent',
   },
-  selectedShowtimeCard: { borderColor: '#7652A5', backgroundColor: '#FCFAFF' },
+  selectedShowtimeCard: {
+    borderColor: '#7652A5',
+    backgroundColor: '#FCFAFF',
+  },
   fullShowtimeCard: { opacity: 0.6 },
-  showtimeLeft: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  showtimeLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
   showtimeTime: { color: '#29252E', fontSize: 16, fontWeight: '800' },
-  showtimeAvailability: { color: '#77717E', fontSize: 12, marginTop: 4 },
-  statusBadge: { paddingHorizontal: 10, paddingVertical: 7, borderRadius: 8 },
+  showtimeAvailability: {
+    color: '#77717E',
+    fontSize: 12,
+    marginTop: 4,
+  },
+  statusBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 8,
+  },
   availableBadge: { backgroundColor: '#E4F4E9' },
   fullBadge: { backgroundColor: '#FCE8E8' },
   statusText: { color: '#287B48', fontSize: 10, fontWeight: '800' },
   fullStatusText: { color: '#B04444' },
-
-  // Seat map
   seatCard: {
     backgroundColor: '#FFFFFF',
     borderRadius: 20,
@@ -741,7 +1189,11 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
   },
-  seatsContainer: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  seatsContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
   aisle: { width: 16 },
   seat: {
     borderRadius: 8,
@@ -753,9 +1205,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  seatTaken: { backgroundColor: '#ECE9F0', borderColor: '#ECE9F0' },
   seatSelected: { backgroundColor: '#7652A5', borderColor: '#7652A5' },
-  seatSelectedText: { color: '#FFFFFF', fontSize: 11, fontWeight: '800' },
+  seatSelectedText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '800',
+  },
   legend: {
     flexDirection: 'row',
     justifyContent: 'center',
@@ -808,15 +1263,18 @@ const styles = StyleSheet.create({
     marginTop: 10,
     textAlign: 'center',
   },
-
-  // Summary
   summaryCard: {
     backgroundColor: '#FFFFFF',
     borderRadius: 20,
     padding: 19,
     marginBottom: 20,
   },
-  summaryTitle: { color: '#29252E', fontSize: 19, fontWeight: '800', marginBottom: 18 },
+  summaryTitle: {
+    color: '#29252E',
+    fontSize: 19,
+    fontWeight: '800',
+    marginBottom: 18,
+  },
   summaryRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -855,7 +1313,11 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   disabledButton: { opacity: 0.55 },
-  reserveButtonText: { color: '#FFFFFF', fontSize: 16, fontWeight: '800' },
+  reserveButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '800',
+  },
   footerNote: {
     textAlign: 'center',
     color: '#88828E',
@@ -863,8 +1325,6 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     paddingHorizontal: 15,
   },
-
-  // Confirmation
   modalOverlay: {
     ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(0,0,0,0.55)',
@@ -910,11 +1370,21 @@ const styles = StyleSheet.create({
     marginTop: 20,
   },
   confirmationLabel: { color: '#77717E', fontSize: 12, marginTop: 9 },
-  confirmationCode: { color: '#7652A5', fontSize: 21, fontWeight: '800', marginTop: 4 },
-  confirmationValue: { color: '#29252E', fontSize: 15, fontWeight: '700', marginTop: 3 },
+  confirmationCode: {
+    color: '#7652A5',
+    fontSize: 21,
+    fontWeight: '800',
+    marginTop: 4,
+  },
+  confirmationValue: {
+    color: '#29252E',
+    fontSize: 15,
+    fontWeight: '700',
+    marginTop: 3,
+  },
   pendingNote: {
-    color: '#9A6A30',
-    backgroundColor: '#FFF3E2',
+    color: '#287B48',
+    backgroundColor: '#E4F4E9',
     padding: 10,
     borderRadius: 9,
     fontSize: 11,
@@ -930,5 +1400,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 18,
   },
-  doneButtonText: { color: '#FFFFFF', fontSize: 16, fontWeight: '800' },
+  doneButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '800',
+  },
 });

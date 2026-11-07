@@ -121,7 +121,7 @@ def _supabase(
             headers=headers,
             params=params,
             json=payload,
-            timeout=10,
+            timeout=(3, 5),
         )
     except requests.RequestException as exc:
         raise RuntimeError(f"Cannot reach Supabase: {exc}") from exc

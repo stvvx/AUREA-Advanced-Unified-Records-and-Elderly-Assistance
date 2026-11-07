@@ -60,6 +60,7 @@ const OSCA_ACTIONS = [
   { icon: 'gift',            label: 'Benefits',            desc: 'Manage benefit distributions' },
   { icon: 'card',            label: 'ID Requests',         desc: 'Process digital ID requests'  },
   { icon: 'document-text',   label: 'Records',             desc: 'Access unified records'       },
+  { icon: 'film',            label: 'Movie Center',        desc: 'Manage movies, screenings & reservations' },
 ];
 
 const BARANGAYS = [
@@ -408,6 +409,7 @@ export default function AdminDashboard() {
               onPress={() => {
                 if (a.label === 'Benefits') router.push('/admin-benefits');
                 if (a.label === 'Senior Support Chat') router.push('/chat');
+                if (a.label === 'Movie Center') {router.push('/admin-movie-center');}
               }}
             >
               <View style={s.actionIconWrap}>
