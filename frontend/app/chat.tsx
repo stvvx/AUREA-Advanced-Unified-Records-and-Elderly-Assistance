@@ -53,7 +53,7 @@ const webPointer = Platform.OS === 'web' ? ({ cursor: 'pointer' } as any) : {};
 
 const QUICK_PROMPTS = [
   'Kailan po ang distribution ng Birthday Cash Gift?',
-  'Paano po mag-apply ng bagong OSCA ID?',
+  'Paano po mag-apply ng bagong OSCA PhysicalID?',
   'Ano po ang requirements para sa Centenarian Benefit?',
   'Saan po ang opisina ng OSCA at anong oras bukas?',
   'May available po bang medical assistance ngayon?',

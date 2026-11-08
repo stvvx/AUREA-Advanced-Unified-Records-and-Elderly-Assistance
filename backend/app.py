@@ -18,6 +18,7 @@ import assistant_service
 from routes import register_lolo_routes
 from services.senior_categories import SENIOR_CATEGORIES
 from services.senior_profiles import with_senior_fields, income_source_patch
+from services.service_records import service_records
 
 
 # ---------------------------------------------------------------------------
@@ -1230,16 +1231,40 @@ def save_digital_signature(user_id):
 ADMIN_ROLES = {"osca admin", "med admin", "super admin"}
 
 
+@app.route("/api/admin/service-records", methods=["GET", "OPTIONS"])
+def admin_service_records():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    try:
+        session, status = current_session()
+        if status != 200:
+            return session, status
+        role = str(session.get_json()["user"].get("role") or "").strip().lower()
+        if role not in {"osca admin", "super admin"}:
+            return jsonify({"message": "Administrator access is required."}), 403
+        return jsonify({"records": service_records(supabase_rest, SUPABASE_USERS_TABLE)}), 200
+    except RuntimeError as exc:
+        return jsonify({"message": str(exc)}), 500
+
+
 @app.route("/api/admin/users", methods=["GET", "OPTIONS"])
 def admin_users():
     if request.method == "OPTIONS":
         return ("", 204)
     try:
         ensure_users_table()
-        result = supabase_rest(
-            "GET", SUPABASE_USERS_TABLE,
-            params={"select": SELECT_FIELDS, "order": "created_at.desc"},
-        )
+        # Fetch every page and serialize only public profile fields. Selecting all
+        # columns includes income/category fields omitted by the login projection.
+        result = []
+        while True:
+            page = supabase_rest(
+                "GET", SUPABASE_USERS_TABLE,
+                params={"select": "*", "order": "created_at.desc,id.desc",
+                        "limit": "100", "offset": str(len(result))},
+            )
+            result.extend(page)
+            if len(page) < 100:
+                break
         return jsonify({"users": [_serialize_user(u) for u in result]}), 200
     except RuntimeError as exc:
         return jsonify({"message": str(exc)}), 500

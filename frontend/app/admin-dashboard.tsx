@@ -70,11 +70,11 @@ const ROLE_BADGE: Record<string, { bg: string; fg: string }> = {
 type Action = { icon: string; label: string; desc: string; route?: string };
 
 const OSCA_ACTIONS: Action[] = [
-  { icon: 'people',        label: 'Senior Citizens',     desc: 'View and manage registrants' },
+  { icon: 'people',        label: 'Senior Citizens',     desc: 'View all senior citizen details', route: '/admin-senior-citizens' },
   { icon: 'chatbubbles',   label: 'Senior Support Chat', desc: 'Chat with seniors in real time', route: '/chat' },
   { icon: 'gift',          label: 'Benefits',            desc: 'Manage benefit distributions',   route: '/admin-benefits' },
   { icon: 'card',          label: 'ID Requests',         desc: 'Process digital ID requests' },
-  { icon: 'document-text', label: 'Records',             desc: 'Open unified records' },
+  { icon: 'document-text', label: 'Records',             desc: 'View services availed by seniors', route: '/admin-records' },
   { icon: 'film',          label: 'Movie Center',        desc: 'Movies, screenings, reservations', route: '/admin-movie-center' },
 ];
 
@@ -671,7 +671,7 @@ export default function AdminDashboard() {
                   <Pressable
                     key={tab.key}
                     style={[s.segmentItem, active && s.segmentItemActive]}
-                    onPress={() => setActiveTab(tab.key)}
+                    onPress={() => tab.key === 'seniors' ? router.push('/admin-senior-citizens' as any) : setActiveTab(tab.key)}
                     accessibilityRole="tab"
                     accessibilityState={{ selected: active }}
                   >
@@ -918,7 +918,7 @@ const s = StyleSheet.create({
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: sp(3), marginBottom: sp(8) },
   actionCard: {
     backgroundColor: C.card, borderRadius: 20,
-    padding: sp(4), width: '47.8%',
+    padding: sp(4), flexBasis: '45%', flexGrow: 1,
     borderWidth: 1, borderColor: C.line,
     ...shadow(C.ink, 0.05, 8, 2),
   },

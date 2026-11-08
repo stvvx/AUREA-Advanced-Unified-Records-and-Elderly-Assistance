@@ -13,7 +13,7 @@ class SeniorProfileCompatibilityTests(unittest.TestCase):
     def setUp(self):
         tree = ast.parse(Path(__file__).with_name("app.py").read_text(encoding="utf-8"))
         functions = [node for node in tree.body if isinstance(node, ast.FunctionDef)
-                     and node.name in {"_serialize_user", "user_profile", "normalize_address"}]
+                     and node.name in {"_serialize_user", "user_profile", "normalize_address", "admin_users"}]
         for node in functions:
             node.decorator_list = []
         self.patch = Mock(return_value=SimpleNamespace(ok=True, json=lambda: [{"id": 7}]))
@@ -27,6 +27,21 @@ class SeniorProfileCompatibilityTests(unittest.TestCase):
             "SUPABASE_URL": "https://example.invalid", "SUPABASE_USERS_TABLE": "users",
         }
         exec(compile(ast.Module(body=functions, type_ignores=[]), "app-profile-contract", "exec"), self.context)
+
+    def test_admin_users_returns_all_pages_and_profile_details_without_credentials(self):
+        self.request.method = "GET"
+        first_page = [{"id": index, "monthly_income": 5000, "category": "PWD",
+                       "password_hash": "secret"} for index in range(100)]
+        self.context["supabase_rest"].side_effect = [first_page, [{"id": 100}]]
+        body, status = self.context["admin_users"]()
+        self.assertEqual(status, 200)
+        self.assertEqual(len(body["users"]), 101)
+        self.assertEqual(body["users"][0]["monthlyIncome"], 5000)
+        self.assertEqual(body["users"][0]["category"], "PWD")
+        self.assertNotIn("password_hash", body["users"][0])
+        calls = self.context["supabase_rest"].call_args_list
+        self.assertEqual(calls[0].kwargs["params"]["select"], "*")
+        self.assertEqual(calls[1].kwargs["params"]["offset"], "100")
 
     def test_profile_preserves_legacy_fields_and_excludes_credentials(self):
         profile = self.context["_serialize_user"]({

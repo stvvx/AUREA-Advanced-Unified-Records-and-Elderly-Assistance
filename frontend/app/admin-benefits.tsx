@@ -20,7 +20,7 @@ import { useAuth } from '../context/AuthContext';
 import { exportBirthdayBenefitsFormPdf, openBirthdayBenefitsFormPreview } from '../services/birthdayBenefitsPdf';
 
 const C = {
-  bg: '#F6F8F2',
+  bg: '#F3F6EF',
   card: '#FFFFFF',
   ink: '#132018',
   inkSoft: '#3E5246',
@@ -30,8 +30,11 @@ const C = {
   primarySoft: '#DCEFE3',
   gold: '#C4892E',
   goldSoft: '#FBF0DA',
-  line: '#DCE7D8',
+  line: '#E0E9DC',
   danger: '#B3432E',
+  dangerSoft: '#FBE7E2',
+  good: '#2E7A50',
+  goodSoft: '#E1F2E7',
 };
 
 type Application = {
@@ -82,7 +85,7 @@ type Application = {
     gender?: string;
     civilStatus?: string;
     address?: string;
-    children?: Array<{ id?: string; name: string; dob?: string }>;
+    children?: { id?: string; name: string; dob?: string }[];
     avatarUrl?: string;
     oscaIdNumber?: string;
   };
@@ -92,13 +95,18 @@ const VALIDATION_STATUSES = ['Pending', 'Eligible', 'Ineligible', 'Rejected'];
 const BENEFIT_STATUSES = ['Pending', 'For Processing', 'Approved', 'Released', 'Cancelled'];
 
 function statusColor(status: string) {
-  if (status === 'Approved' || status === 'Eligible' || status === 'Released') return '#2E7A50';
+  if (status === 'Approved' || status === 'Eligible' || status === 'Released') return C.good;
   if (status === 'Rejected' || status === 'Ineligible' || status === 'Cancelled') return C.danger;
   if (status === 'Under Review' || status === 'For Processing') return C.gold;
   return C.inkFaint;
 }
 
-
+function statusIcon(status: string): keyof typeof Ionicons.glyphMap {
+  if (status === 'Approved' || status === 'Eligible' || status === 'Released') return 'checkmark-circle';
+  if (status === 'Rejected' || status === 'Ineligible' || status === 'Cancelled') return 'close-circle';
+  if (status === 'Under Review' || status === 'For Processing') return 'time';
+  return 'ellipse-outline';
+}
 
 async function fetchApplications(signal: AbortSignal): Promise<Application[]> {
   const response = await fetch(`${API_BASE_URL}/api/benefit-applications/admin`, { signal });
@@ -118,6 +126,16 @@ async function updateApplication(id: string, payload: Record<string, unknown>) {
   return data.application as Application;
 }
 
+function requirementList(a: Application) {
+  return [
+    { label: 'Birth certificate', submitted: a.birth_certificate_submitted },
+    { label: 'Valid ID', submitted: a.valid_id_submitted },
+    { label: '2x2 ID picture', submitted: a.id_picture_submitted },
+    { label: 'Full-body picture', submitted: a.full_body_picture_submitted },
+    { label: 'Endorsed list', submitted: a.endorsed_list_submitted },
+  ];
+}
+
 export default function AdminBenefitsScreen() {
   const router = useRouter();
   const { user } = useAuth();
@@ -129,6 +147,15 @@ export default function AdminBenefitsScreen() {
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [findings, setFindings] = useState<Record<string, string>>({});
   const [amounts, setAmounts] = useState<Record<string, string>>({});
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+
+  const counts = useMemo(() => {
+    const result: Record<string, number> = { All: applications.length };
+    VALIDATION_STATUSES.forEach((status) => {
+      result[status] = applications.filter((item) => item.validation_status === status).length;
+    });
+    return result;
+  }, [applications]);
 
   const filteredApplications = useMemo(() => {
     if (filter === 'All') return applications;
@@ -228,6 +255,8 @@ export default function AdminBenefitsScreen() {
     }
   };
 
+  const toggle = (id: string) => setExpanded((current) => ({ ...current, [id]: !current[id] }));
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <StatusBar barStyle="dark-content" />
@@ -237,147 +266,211 @@ export default function AdminBenefitsScreen() {
             <Ionicons name="arrow-back" size={19} color={C.ink} />
           </TouchableOpacity>
           <View style={styles.headerCopy}>
-            <Text style={styles.eyebrow}>OSCA ADMIN</Text>
-            <Text style={styles.title}>Benefit Validation</Text>
-            <Text style={styles.subtitle}>Validate Birthday Benefits eligibility and requirements</Text>
+            <Text style={styles.title}>Benefit validation</Text>
+            <Text style={styles.subtitle}>Review Birthday Benefits eligibility and requirements</Text>
           </View>
-          <TouchableOpacity style={styles.refreshButton} onPress={loadApplications} accessibilityLabel="Refresh applications">
-            <Ionicons name="refresh" size={18} color={C.primaryDark} />
+          <TouchableOpacity style={styles.refreshButton} onPress={loadApplications} disabled={loading} accessibilityLabel="Refresh applications">
+            {loading ? <ActivityIndicator size="small" color={C.primaryDark} /> : <Ionicons name="refresh" size={18} color={C.primaryDark} />}
           </TouchableOpacity>
         </View>
 
         <View style={styles.summaryCard}>
-          <View>
-            <Text style={styles.summaryLabel}>VALIDATION QUEUE</Text>
-            <Text style={styles.summaryValue}>{applications.length}</Text>
+          <View style={styles.summaryItem}>
+            <Text style={styles.summaryValue}>{counts.All}</Text>
+            <Text style={styles.summaryLabel}>In queue</Text>
           </View>
           <View style={styles.summaryDivider} />
-          <View>
-            <Text style={styles.summaryLabel}>WAITING FOR DECISION</Text>
-            <Text style={styles.summaryValue}>{applications.filter((item) => item.validation_status === 'Pending').length}</Text>
+          <View style={styles.summaryItem}>
+            <Text style={[styles.summaryValue, { color: '#F2C879' }]}>{counts.Pending}</Text>
+            <Text style={styles.summaryLabel}>Need a decision</Text>
           </View>
-          <Ionicons name="gift-outline" size={34} color={C.gold} style={styles.summaryIcon} />
+          <View style={styles.summaryDivider} />
+          <View style={styles.summaryItem}>
+            <Text style={styles.summaryValue}>{counts.Eligible}</Text>
+            <Text style={styles.summaryLabel}>Eligible</Text>
+          </View>
+          <Ionicons name="gift-outline" size={30} color="rgba(242,200,121,0.9)" style={styles.summaryIcon} />
         </View>
 
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filters}>
-          {['All', ...VALIDATION_STATUSES].map((item) => (
-            <TouchableOpacity key={item} style={[styles.filter, filter === item && styles.filterActive]} onPress={() => setFilter(item)}>
-              <Text style={[styles.filterText, filter === item && styles.filterTextActive]}>{item}</Text>
-            </TouchableOpacity>
-          ))}
+          {['All', ...VALIDATION_STATUSES].map((item) => {
+            const active = filter === item;
+            return (
+              <TouchableOpacity key={item} style={[styles.filter, active && styles.filterActive]} onPress={() => setFilter(item)} accessibilityRole="button" accessibilityState={{ selected: active }}>
+                <Text style={[styles.filterText, active && styles.filterTextActive]}>{item}</Text>
+                <View style={[styles.filterCount, active && styles.filterCountActive]}>
+                  <Text style={[styles.filterCountText, active && { color: C.primaryDark }]}>{counts[item] ?? 0}</Text>
+                </View>
+              </TouchableOpacity>
+            );
+          })}
         </ScrollView>
 
         {loadError && (
-          <View style={styles.emptyCard}>
-            <Text style={styles.emptyText}>{loadError}</Text>
-            <TouchableOpacity onPress={loadApplications} accessibilityRole="button">
-              <Text style={styles.emptyTitle}>Try again</Text>
+          <View style={styles.errorCard}>
+            <Ionicons name="cloud-offline-outline" size={26} color={C.danger} />
+            <Text style={styles.errorText}>{loadError}</Text>
+            <TouchableOpacity style={styles.retryButton} onPress={loadApplications} accessibilityRole="button">
+              <Text style={styles.retryText}>Try again</Text>
             </TouchableOpacity>
           </View>
         )}
 
         {loading ? <ActivityIndicator color={C.primary} style={styles.loader} /> : loadError ? null : filteredApplications.length === 0 ? (
           <View style={styles.emptyCard}>
-            <Ionicons name="gift-outline" size={34} color={C.inkFaint} />
-            <Text style={styles.emptyTitle}>No applications to validate</Text>
-            <Text style={styles.emptyText}>Birthday Benefits submissions will appear here for eligibility review.</Text>
+            <View style={styles.emptyIcon}><Ionicons name="gift-outline" size={28} color={C.primary} /></View>
+            <Text style={styles.emptyTitle}>{filter === 'All' ? 'No applications to validate' : `No ${filter.toLowerCase()} applications`}</Text>
+            <Text style={styles.emptyText}>
+              {filter === 'All' ? 'Birthday Benefits submissions will appear here for eligibility review.' : 'Choose another filter to see the rest of the queue.'}
+            </Text>
           </View>
         ) : filteredApplications.map((application) => {
           const name = [application.applicant?.firstName, application.applicant?.middleName, application.applicant?.lastName].filter(Boolean).join(' ') || `User #${application.user_id}`;
+          const initials = name.split(' ').filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase();
+          const requirements = requirementList(application);
+          const submittedCount = requirements.filter((item) => item.submitted).length;
+          const complete = submittedCount === requirements.length;
+          const isOpen = !!expanded[application.id];
+          const busy = updatingId === application.id;
+          const accent = statusColor(application.validation_status);
+          const hasDocs = application.birth_certificate_url || application.valid_id_url || application.id_picture_url || application.full_body_picture_url || application.endorsed_list_url;
+
           return (
-            <View key={application.id} style={styles.applicationCard}>
-              <View style={styles.applicationHeader}>
+            <View key={application.id} style={[styles.applicationCard, { borderLeftColor: accent }]}>
+              <TouchableOpacity style={styles.applicationHeader} onPress={() => toggle(application.id)} accessibilityRole="button" accessibilityState={{ expanded: isOpen }} accessibilityLabel={`${name}, ${application.validation_status}. ${isOpen ? 'Collapse' : 'Expand'} details`}>
                 <View style={styles.avatar}>
-                  <Ionicons name="person" size={19} color={C.primaryDark} />
+                  <Text style={styles.avatarText}>{initials || '?'}</Text>
                 </View>
                 <View style={styles.applicantCopy}>
-                  <Text style={styles.applicantName}>{name}</Text>
-                  <Text style={styles.applicantMeta}>{application.osca_id_number || `User ID: ${application.user_id}`}</Text>
+                  <Text style={styles.applicantName} numberOfLines={1}>{name}</Text>
+                  <Text style={styles.applicantMeta} numberOfLines={1}>{application.osca_id_number || `User ID: ${application.user_id}`}</Text>
                 </View>
-                <View style={[styles.categoryBadge, { backgroundColor: C.primarySoft }]}>
-                  <Text style={styles.categoryText}>{application.benefit_type}</Text>
+                <View style={styles.headerRight}>
+                  <View style={[styles.statusPill, { backgroundColor: `${accent}1A` }]}>
+                    <Ionicons name={statusIcon(application.validation_status)} size={12} color={accent} />
+                    <Text style={[styles.statusPillText, { color: accent }]}>{application.validation_status}</Text>
+                  </View>
+                  <Ionicons name={isOpen ? 'chevron-up' : 'chevron-down'} size={18} color={C.inkFaint} />
+                </View>
+              </TouchableOpacity>
+
+              <View style={styles.chipRow}>
+                <View style={styles.categoryBadge}><Text style={styles.categoryText}>{application.benefit_type}</Text></View>
+                <View style={[styles.categoryBadge, { backgroundColor: complete ? C.goodSoft : C.goldSoft }]}>
+                  <Text style={[styles.categoryText, { color: complete ? C.good : '#8A5A12' }]}>{submittedCount}/{requirements.length} requirements</Text>
+                </View>
+                <View style={[styles.categoryBadge, { backgroundColor: '#EEF2EB' }]}>
+                  <Text style={[styles.categoryText, { color: C.inkSoft }]}>{application.benefit_status}</Text>
                 </View>
               </View>
-
-              <View style={styles.detailGrid}>
-                <Detail label="Date of birth" value={application.date_of_birth} />
-                <Detail label="Age category" value={application.benefit_type} />
-                <Detail label="Contact" value={application.contact_number || application.applicant?.contact || '—'} />
-                <Detail label="Address" value={application.permanent_address_philippines || '—'} />
-                <Detail label="Validated by" value={application.validated_by_name || 'Pending review'} />
-                <Detail label="Date validated" value={application.date_validated || 'Pending review'} />
-                <Detail label="Benefit amount" value={application.benefit_amount == null ? 'Not set' : `₱${Number(application.benefit_amount).toFixed(2)}`} />
-                <Detail label="Date released" value={application.date_released || 'Not released'} />
+              <View style={styles.progressTrack}>
+                <View style={[styles.progressFill, { width: `${(submittedCount / requirements.length) * 100}%`, backgroundColor: complete ? C.good : C.gold }]} />
               </View>
 
-              <View style={styles.requirementsSection}>
-                <Text style={styles.statusLabel}>DOCUMENTARY REQUIREMENTS</Text>
-                <Requirement label="Birth certificate" submitted={application.birth_certificate_submitted} />
-                <Requirement label="Valid ID" submitted={application.valid_id_submitted} />
-                <Requirement label="2x2 ID picture" submitted={application.id_picture_submitted} />
-                <Requirement label="Full-body picture" submitted={application.full_body_picture_submitted} />
-                <Requirement label="Endorsed list" submitted={application.endorsed_list_submitted} />
-                <View style={styles.documentLinks}>
-                  {application.birth_certificate_url && <DocumentLink label="Open birth certificate" url={application.birth_certificate_url} />}
-                  {application.valid_id_url && <DocumentLink label="Open valid ID" url={application.valid_id_url} />}
-                  {application.id_picture_url && <DocumentLink label="Open account 2x2 picture" url={application.id_picture_url} />}
-                  {application.full_body_picture_url && <DocumentLink label="Open full-body picture" url={application.full_body_picture_url} />}
-                  {application.endorsed_list_url && <DocumentLink label="Open endorsement document" url={application.endorsed_list_url} />}
-                </View>
-              </View>
+              {isOpen && (
+                <>
+                  <View style={styles.detailGrid}>
+                    <Detail label="Date of birth" value={application.date_of_birth} />
+                    <Detail label="Contact" value={application.contact_number || application.applicant?.contact || '—'} />
+                    <Detail label="Address" value={application.permanent_address_philippines || '—'} wide />
+                    <Detail label="Validated by" value={application.validated_by_name || 'Pending review'} />
+                    <Detail label="Date validated" value={application.date_validated || 'Pending review'} />
+                    <Detail label="Benefit amount" value={application.benefit_amount == null ? 'Not set' : `₱${Number(application.benefit_amount).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`} />
+                    <Detail label="Date released" value={application.date_released || 'Not released'} />
+                  </View>
 
-              <View style={styles.statusSection}>
-                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8 }}>
-                  <TouchableOpacity style={styles.exportButton} onPress={() => exportApplication(application)} disabled={updatingId === application.id}>
-                    <Ionicons name="print-outline" size={16} color={C.primaryDark} />
-                    <Text style={styles.exportButtonText}>Print / Export PDF</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={[styles.exportButton, { backgroundColor: '#E7EDE8' }]} onPress={() => previewApplicationInTab(application)} disabled={updatingId === application.id}>
-                    <Ionicons name="open-outline" size={16} color={C.inkSoft} />
-                    <Text style={[styles.exportButtonText, { color: C.inkSoft }]}>Open Form in Tab</Text>
-                  </TouchableOpacity>
-                </View>
-                <Text style={styles.statusLabel}>VALIDATION DECISION</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.statusOptions}>
-                  {VALIDATION_STATUSES.map((status) => (
-                    <TouchableOpacity key={status} style={[styles.statusOption, application.validation_status === status && { borderColor: statusColor(status), backgroundColor: `${statusColor(status)}18` }]} onPress={() => changeStatus(application, 'validation_status', status)} disabled={updatingId === application.id}>
-                      <Text style={[styles.statusOptionText, { color: statusColor(status) }]}>{status}</Text>
+                  <View style={styles.section}>
+                    <Text style={styles.sectionTitle}>Documentary requirements</Text>
+                    {requirements.map((item) => <Requirement key={item.label} label={item.label} submitted={item.submitted} />)}
+                    {hasDocs ? (
+                      <View style={styles.documentLinks}>
+                        {application.birth_certificate_url && <DocumentLink label="Birth certificate" url={application.birth_certificate_url} />}
+                        {application.valid_id_url && <DocumentLink label="Valid ID" url={application.valid_id_url} />}
+                        {application.id_picture_url && <DocumentLink label="Account 2x2 picture" url={application.id_picture_url} />}
+                        {application.full_body_picture_url && <DocumentLink label="Full-body picture" url={application.full_body_picture_url} />}
+                        {application.endorsed_list_url && <DocumentLink label="Endorsement document" url={application.endorsed_list_url} />}
+                      </View>
+                    ) : null}
+                  </View>
+
+                  <View style={styles.section}>
+                    <Text style={styles.sectionTitle}>Validation decision</Text>
+                    <View style={styles.statusOptions}>
+                      {VALIDATION_STATUSES.map((status) => {
+                        const active = application.validation_status === status;
+                        const color = statusColor(status);
+                        return (
+                          <TouchableOpacity key={status} style={[styles.statusOption, active && { borderColor: color, backgroundColor: `${color}18` }]} onPress={() => changeStatus(application, 'validation_status', status)} disabled={busy} accessibilityRole="button" accessibilityState={{ selected: active }}>
+                            <Ionicons name={statusIcon(status)} size={14} color={color} />
+                            <Text style={[styles.statusOptionText, { color }]}>{status}</Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+
+                    <Text style={[styles.sectionTitle, styles.sectionGap]}>Processing status</Text>
+                    <View style={styles.statusOptions}>
+                      {BENEFIT_STATUSES.map((status) => {
+                        const active = application.benefit_status === status;
+                        const color = statusColor(status);
+                        return (
+                          <TouchableOpacity key={status} style={[styles.statusOption, active && { borderColor: color, backgroundColor: `${color}18` }]} onPress={() => changeStatus(application, 'benefit_status', status)} disabled={busy} accessibilityRole="button" accessibilityState={{ selected: active }}>
+                            <Ionicons name={statusIcon(status)} size={14} color={color} />
+                            <Text style={[styles.statusOptionText, { color }]}>{status}</Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+
+                    <Text style={[styles.sectionTitle, styles.sectionGap]}>Approved benefit amount</Text>
+                    <View style={styles.amountWrap}>
+                      <Text style={styles.currency}>₱</Text>
+                      <TextInput
+                        style={styles.amountInput}
+                        value={amounts[application.id] ?? (application.benefit_amount == null ? '' : String(application.benefit_amount))}
+                        onChangeText={(value) => setAmounts((current) => ({ ...current, [application.id]: value.replace(/[^0-9.]/g, '') }))}
+                        placeholder="e.g. 1000"
+                        placeholderTextColor={C.inkFaint}
+                        keyboardType="decimal-pad"
+                      />
+                    </View>
+                    <Text style={styles.hint}>Required before setting Approved or Released.</Text>
+
+                    <Text style={[styles.sectionTitle, styles.sectionGap]}>Findings, concerns, recommendations</Text>
+                    <TextInput
+                      style={styles.findingsInput}
+                      value={findings[application.id] ?? application.findings_concerns_recommendations ?? ''}
+                      onChangeText={(value) => setFindings((current) => ({ ...current, [application.id]: value }))}
+                      placeholder="Record the validation result or concerns"
+                      placeholderTextColor={C.inkFaint}
+                      multiline
+                      textAlignVertical="top"
+                    />
+                    <TouchableOpacity style={styles.saveFindingsButton} onPress={() => saveFindings(application)} disabled={busy} accessibilityRole="button">
+                      <Ionicons name="save-outline" size={16} color="#FFF" />
+                      <Text style={styles.saveFindingsText}>Save validation notes</Text>
                     </TouchableOpacity>
-                  ))}
-                </ScrollView>
-                <Text style={styles.statusLabel}>PROCESSING STATUS</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.statusOptions}>
-                  {BENEFIT_STATUSES.map((status) => (
-                    <TouchableOpacity key={status} style={[styles.statusOption, application.benefit_status === status && { borderColor: statusColor(status), backgroundColor: `${statusColor(status)}18` }]} onPress={() => changeStatus(application, 'benefit_status', status)} disabled={updatingId === application.id}>
-                      <Text style={[styles.statusOptionText, { color: statusColor(status) }]}>{status}</Text>
+                  </View>
+
+                  <View style={styles.actionsRow}>
+                    <TouchableOpacity style={styles.exportButton} onPress={() => exportApplication(application)} disabled={busy}>
+                      <Ionicons name="print-outline" size={16} color={C.primaryDark} />
+                      <Text style={styles.exportButtonText}>Print / export PDF</Text>
                     </TouchableOpacity>
-                  ))}
-                </ScrollView>
-                <Text style={styles.statusLabel}>APPROVED BENEFIT AMOUNT</Text>
-                <TextInput
-                  style={styles.amountInput}
-                  value={amounts[application.id] ?? (application.benefit_amount == null ? '' : String(application.benefit_amount))}
-                  onChangeText={(value) => setAmounts((current) => ({ ...current, [application.id]: value.replace(/[^0-9.]/g, '') }))}
-                  placeholder="Enter amount, e.g. 1000"
-                  placeholderTextColor={C.inkFaint}
-                  keyboardType="decimal-pad"
-                />
-                <Text style={styles.statusLabel}>FINDINGS / CONCERNS / RECOMMENDATIONS</Text>
-                <TextInput
-                  style={styles.findingsInput}
-                  value={findings[application.id] ?? application.findings_concerns_recommendations ?? ''}
-                  onChangeText={(value) => setFindings((current) => ({ ...current, [application.id]: value }))}
-                  placeholder="Record the validation result or concerns"
-                  placeholderTextColor={C.inkFaint}
-                  multiline
-                  textAlignVertical="top"
-                />
-                <TouchableOpacity style={styles.saveFindingsButton} onPress={() => saveFindings(application)} disabled={updatingId === application.id}>
-                  <Ionicons name="save-outline" size={15} color={C.primaryDark} />
-                  <Text style={styles.saveFindingsText}>Save validation notes</Text>
-                </TouchableOpacity>
-              </View>
-              {updatingId === application.id && <ActivityIndicator color={C.primary} style={styles.cardLoader} />}
+                    <TouchableOpacity style={[styles.exportButton, styles.exportButtonAlt]} onPress={() => previewApplicationInTab(application)} disabled={busy}>
+                      <Ionicons name="open-outline" size={16} color={C.inkSoft} />
+                      <Text style={[styles.exportButtonText, { color: C.inkSoft }]}>Open form in tab</Text>
+                    </TouchableOpacity>
+                  </View>
+                </>
+              )}
+
+              {busy && (
+                <View style={styles.busyOverlay} pointerEvents="auto">
+                  <ActivityIndicator color={C.primary} />
+                  <Text style={styles.busyText}>Saving…</Text>
+                </View>
+              )}
             </View>
           );
         })}
@@ -388,84 +481,132 @@ export default function AdminBenefitsScreen() {
   );
 }
 
-function Detail({ label, value }: { label: string; value: string }) {
-  return <View style={styles.detail}><Text style={styles.detailLabel}>{label}</Text><Text style={styles.detailValue} numberOfLines={2}>{value}</Text></View>;
+function Detail({ label, value, wide }: { label: string; value: string; wide?: boolean }) {
+  return (
+    <View style={[styles.detail, wide && { width: '100%' }]}>
+      <Text style={styles.detailLabel}>{label}</Text>
+      <Text style={styles.detailValue} numberOfLines={3}>{value}</Text>
+    </View>
+  );
 }
 
 function Requirement({ label, submitted }: { label: string; submitted?: boolean }) {
   return (
     <View style={styles.requirementRow}>
-      <Ionicons name={submitted ? 'checkmark-circle' : 'close-circle-outline'} size={17} color={submitted ? '#2E7A50' : C.danger} />
+      <Ionicons name={submitted ? 'checkmark-circle' : 'close-circle-outline'} size={18} color={submitted ? C.good : C.danger} />
       <Text style={[styles.requirementText, !submitted && styles.requirementMissing]}>{label}</Text>
-      <Text style={[styles.requirementState, { color: submitted ? '#2E7A50' : C.danger }]}>{submitted ? 'Submitted' : 'Missing'}</Text>
+      <View style={[styles.reqBadge, { backgroundColor: submitted ? C.goodSoft : C.dangerSoft }]}>
+        <Text style={[styles.requirementState, { color: submitted ? C.good : C.danger }]}>{submitted ? 'Submitted' : 'Missing'}</Text>
+      </View>
     </View>
   );
 }
 
 function DocumentLink({ label, url }: { label: string; url: string }) {
   return (
-    <TouchableOpacity style={styles.documentLink} onPress={() => Linking.openURL(url)}>
-      <Ionicons name="open-outline" size={15} color={C.primaryDark} />
+    <TouchableOpacity style={styles.documentLink} onPress={() => Linking.openURL(url)} accessibilityRole="link" accessibilityLabel={`Open ${label}`}>
+      <Ionicons name="document-text-outline" size={15} color={C.primaryDark} />
       <Text style={styles.documentLinkText}>{label}</Text>
     </TouchableOpacity>
   );
 }
 
+const cardShadow = Platform.select({
+  web: { boxShadow: '0 1px 2px rgba(19,32,26,0.06), 0 6px 16px rgba(19,32,26,0.05)' } as object,
+  default: { shadowColor: '#13201A', shadowOpacity: 0.07, shadowRadius: 10, shadowOffset: { width: 0, height: 3 }, elevation: 2 },
+});
+
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: C.bg },
-  container: { padding: 20, paddingBottom: 44 },
+  container: { padding: 20, paddingBottom: 44, maxWidth: Platform.OS === 'web' ? undefined : 760, width: '100%', alignSelf: 'center' },
+
   header: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 20 },
-  backButton: { width: 40, height: 40, borderRadius: 12, backgroundColor: C.card, alignItems: 'center', justifyContent: 'center' },
-  refreshButton: { width: 40, height: 40, borderRadius: 12, backgroundColor: C.primarySoft, alignItems: 'center', justifyContent: 'center' },
+  backButton: { width: 42, height: 42, borderRadius: 14, backgroundColor: C.card, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: C.line },
+  refreshButton: { width: 42, height: 42, borderRadius: 14, backgroundColor: C.primarySoft, alignItems: 'center', justifyContent: 'center' },
   headerCopy: { flex: 1 },
-  eyebrow: { fontFamily: 'InterBody', fontSize: 10, fontWeight: '700', letterSpacing: 1.2, color: C.gold },
-  title: { fontFamily: 'FraunTitle', fontSize: 25, color: C.ink, marginTop: 2 },
+  title: { fontFamily: 'FraunTitle', fontSize: 26, color: C.ink },
   subtitle: { fontFamily: 'InterBody', fontSize: 12, lineHeight: 17, color: C.inkSoft, marginTop: 2 },
-  summaryCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: C.primaryDark, borderRadius: 20, padding: 20, marginBottom: 18 },
-  summaryLabel: { fontFamily: 'InterBody', fontSize: 10, fontWeight: '700', letterSpacing: 1, color: 'rgba(255,255,255,0.65)' },
-  summaryValue: { fontFamily: 'FraunTitle', fontSize: 28, color: C.card, marginTop: 2 },
-  summaryDivider: { width: 1, height: 40, backgroundColor: 'rgba(255,255,255,0.22)', marginHorizontal: 22 },
+
+  summaryCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: C.primaryDark, borderRadius: 22, paddingVertical: 20, paddingHorizontal: 20, marginBottom: 18, ...cardShadow },
+  summaryItem: { minWidth: 70 },
+  summaryLabel: { fontFamily: 'InterBody', fontSize: 11, color: 'rgba(255,255,255,0.7)', marginTop: 2 },
+  summaryValue: { fontFamily: 'FraunTitle', fontSize: 30, color: C.card },
+  summaryDivider: { width: 1, height: 42, backgroundColor: 'rgba(255,255,255,0.2)', marginHorizontal: 16 },
   summaryIcon: { marginLeft: 'auto' },
+
   filters: { gap: 8, paddingBottom: 14 },
-  filter: { borderWidth: 1, borderColor: C.line, borderRadius: 18, paddingHorizontal: 13, paddingVertical: 8, backgroundColor: C.card },
+  filter: { flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderColor: C.line, borderRadius: 20, paddingLeft: 14, paddingRight: 8, paddingVertical: 7, backgroundColor: C.card },
   filterActive: { backgroundColor: C.primary, borderColor: C.primary },
-  filterText: { fontFamily: 'InterBody', fontSize: 12, color: C.inkSoft },
+  filterText: { fontFamily: 'InterBody', fontSize: 13, color: C.inkSoft },
   filterTextActive: { color: C.card, fontWeight: '700' },
+  filterCount: { minWidth: 22, height: 22, borderRadius: 11, paddingHorizontal: 6, backgroundColor: C.bg, alignItems: 'center', justifyContent: 'center' },
+  filterCountActive: { backgroundColor: C.primarySoft },
+  filterCountText: { fontFamily: 'InterBody', fontSize: 11, fontWeight: '700', color: C.inkSoft },
+
   loader: { padding: 30 },
-  emptyCard: { alignItems: 'center', backgroundColor: C.card, borderRadius: 20, padding: 32, borderWidth: 1, borderColor: C.line },
-  emptyTitle: { fontFamily: 'InterBody', fontWeight: '700', fontSize: 16, color: C.ink, marginTop: 10 },
-  emptyText: { fontFamily: 'InterBody', fontSize: 13, color: C.inkFaint, textAlign: 'center', marginTop: 5 },
-  applicationCard: { backgroundColor: C.card, borderRadius: 20, padding: 16, marginBottom: 14, borderWidth: 1, borderColor: C.line },
-  applicationHeader: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  avatar: { width: 40, height: 40, borderRadius: 20, backgroundColor: C.primarySoft, alignItems: 'center', justifyContent: 'center' },
+  errorCard: { alignItems: 'center', gap: 8, backgroundColor: C.dangerSoft, borderRadius: 18, padding: 22, marginBottom: 14 },
+  errorText: { fontFamily: 'InterBody', fontSize: 13, color: C.danger, textAlign: 'center' },
+  retryButton: { marginTop: 4, backgroundColor: C.danger, borderRadius: 999, paddingHorizontal: 18, paddingVertical: 9 },
+  retryText: { fontFamily: 'InterBody', fontWeight: '700', color: '#FFF', fontSize: 13 },
+  emptyCard: { alignItems: 'center', backgroundColor: C.card, borderRadius: 20, padding: 34, borderWidth: 1, borderColor: C.line },
+  emptyIcon: { width: 58, height: 58, borderRadius: 29, backgroundColor: C.primarySoft, alignItems: 'center', justifyContent: 'center' },
+  emptyTitle: { fontFamily: 'InterBody', fontWeight: '700', fontSize: 16, color: C.ink, marginTop: 12 },
+  emptyText: { fontFamily: 'InterBody', fontSize: 13, lineHeight: 19, color: C.inkFaint, textAlign: 'center', marginTop: 5 },
+
+  applicationCard: { backgroundColor: C.card, borderRadius: 20, padding: 16, marginBottom: 14, borderWidth: 1, borderColor: C.line, borderLeftWidth: 5, overflow: 'hidden', ...cardShadow },
+  applicationHeader: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  avatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: C.primarySoft, alignItems: 'center', justifyContent: 'center' },
+  avatarText: { fontFamily: 'InterBody', fontWeight: '800', fontSize: 14, color: C.primaryDark },
   applicantCopy: { flex: 1 },
-  applicantName: { fontFamily: 'InterBody', fontWeight: '700', fontSize: 15, color: C.ink },
-  applicantMeta: { fontFamily: 'InterBody', fontSize: 11, color: C.inkFaint, marginTop: 2 },
-  categoryBadge: { borderRadius: 10, paddingHorizontal: 8, paddingVertical: 6 },
-  categoryText: { fontFamily: 'InterBody', fontWeight: '700', fontSize: 10, color: C.primaryDark },
-  detailGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, borderTopWidth: 1, borderTopColor: C.line, marginTop: 14, paddingTop: 13 },
+  applicantName: { fontFamily: 'InterBody', fontWeight: '700', fontSize: 16, color: C.ink },
+  applicantMeta: { fontFamily: 'InterBody', fontSize: 12, color: C.inkFaint, marginTop: 2 },
+  headerRight: { alignItems: 'flex-end', gap: 6 },
+  statusPill: { flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 999, paddingHorizontal: 9, paddingVertical: 4 },
+  statusPillText: { fontFamily: 'InterBody', fontSize: 11, fontWeight: '700' },
+
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 12 },
+  categoryBadge: { borderRadius: 8, paddingHorizontal: 9, paddingVertical: 5, backgroundColor: C.primarySoft },
+  categoryText: { fontFamily: 'InterBody', fontWeight: '700', fontSize: 11, color: C.primaryDark },
+  progressTrack: { height: 5, borderRadius: 3, backgroundColor: '#EEF2EB', marginTop: 12, overflow: 'hidden' },
+  progressFill: { height: 5, borderRadius: 3 },
+
+  detailGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 14, backgroundColor: '#F8FAF6', borderRadius: 14, padding: 14, marginTop: 16 },
   detail: { width: '47%' },
-  detailLabel: { fontFamily: 'InterBody', fontSize: 10, fontWeight: '700', color: C.inkFaint, textTransform: 'uppercase' },
-  detailValue: { fontFamily: 'InterBody', fontSize: 12, color: C.inkSoft, marginTop: 3 },
-  statusSection: { borderTopWidth: 1, borderTopColor: C.line, marginTop: 14, paddingTop: 13 },
-  exportButton: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 7, borderRadius: 10, backgroundColor: C.primarySoft, paddingHorizontal: 11, paddingVertical: 8, marginBottom: 8 },
-  exportButtonText: { fontFamily: 'InterBody', fontSize: 11, fontWeight: '700', color: C.primaryDark },
-  requirementsSection: { borderTopWidth: 1, borderTopColor: C.line, marginTop: 14, paddingTop: 5 },
-  requirementRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 5 },
-  requirementText: { flex: 1, fontFamily: 'InterBody', fontSize: 12, color: C.inkSoft },
+  detailLabel: { fontFamily: 'InterBody', fontSize: 11, color: C.inkFaint },
+  detailValue: { fontFamily: 'InterBody', fontSize: 13, fontWeight: '600', color: C.ink, marginTop: 3 },
+
+  section: { borderTopWidth: 1, borderTopColor: C.line, marginTop: 16, paddingTop: 14 },
+  sectionTitle: { fontFamily: 'InterBody', fontSize: 13, fontWeight: '700', color: C.ink, marginBottom: 8 },
+  sectionGap: { marginTop: 16 },
+
+  requirementRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 },
+  requirementText: { flex: 1, fontFamily: 'InterBody', fontSize: 13, color: C.inkSoft },
   requirementMissing: { color: C.danger },
+  reqBadge: { borderRadius: 999, paddingHorizontal: 9, paddingVertical: 3 },
   requirementState: { fontFamily: 'InterBody', fontSize: 11, fontWeight: '700' },
-  documentLinks: { gap: 8, marginTop: 8 },
-  documentLink: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', borderRadius: 9, backgroundColor: C.primarySoft, paddingHorizontal: 9, paddingVertical: 7 },
-  documentLinkText: { fontFamily: 'InterBody', fontSize: 11, fontWeight: '700', color: C.primaryDark },
-  statusLabel: { fontFamily: 'InterBody', fontSize: 10, fontWeight: '700', letterSpacing: 0.8, color: C.inkFaint, marginTop: 8, marginBottom: 7 },
-  statusOptions: { gap: 7 },
-  statusOption: { borderWidth: 1, borderColor: C.line, borderRadius: 10, paddingHorizontal: 9, paddingVertical: 7, backgroundColor: C.bg },
-  statusOptionText: { fontFamily: 'InterBody', fontSize: 11, fontWeight: '700' },
-  amountInput: { borderWidth: 1, borderColor: C.line, borderRadius: 12, backgroundColor: C.bg, padding: 10, fontFamily: 'InterBody', fontSize: 13, color: C.ink, ...Platform.select({ web: { outlineStyle: 'none' } as any }) },
-  findingsInput: { minHeight: 72, borderWidth: 1, borderColor: C.line, borderRadius: 12, backgroundColor: C.bg, padding: 10, fontFamily: 'InterBody', fontSize: 12, color: C.ink, ...Platform.select({ web: { outlineStyle: 'none' } as any }) },
-  saveFindingsButton: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 10, backgroundColor: C.primarySoft, paddingHorizontal: 10, paddingVertical: 8, marginTop: 8 },
-  saveFindingsText: { fontFamily: 'InterBody', fontSize: 11, fontWeight: '700', color: C.primaryDark },
-  cardLoader: { marginTop: 8 },
+  documentLinks: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
+  documentLink: { flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 10, borderWidth: 1, borderColor: C.primary, backgroundColor: C.card, paddingHorizontal: 11, paddingVertical: 8 },
+  documentLinkText: { fontFamily: 'InterBody', fontSize: 12, fontWeight: '700', color: C.primaryDark },
+
+  statusOptions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  statusOption: { flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1.5, borderColor: C.line, borderRadius: 12, paddingHorizontal: 11, paddingVertical: 9, backgroundColor: C.bg },
+  statusOptionText: { fontFamily: 'InterBody', fontSize: 12, fontWeight: '700' },
+
+  amountWrap: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: C.line, borderRadius: 12, backgroundColor: C.bg, paddingHorizontal: 12 },
+  currency: { fontFamily: 'InterBody', fontSize: 16, fontWeight: '700', color: C.inkSoft, marginRight: 6 },
+  amountInput: { flex: 1, paddingVertical: 11, fontFamily: 'InterBody', fontSize: 15, color: C.ink, ...Platform.select({ web: { outlineStyle: 'none' } as any }) },
+  hint: { fontFamily: 'InterBody', fontSize: 11, color: C.inkFaint, marginTop: 5 },
+  findingsInput: { minHeight: 92, borderWidth: 1, borderColor: C.line, borderRadius: 12, backgroundColor: C.bg, padding: 12, fontFamily: 'InterBody', fontSize: 13, lineHeight: 19, color: C.ink, ...Platform.select({ web: { outlineStyle: 'none' } as any }) },
+  saveFindingsButton: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 7, borderRadius: 12, backgroundColor: C.primary, paddingHorizontal: 14, paddingVertical: 10, marginTop: 10 },
+  saveFindingsText: { fontFamily: 'InterBody', fontSize: 12, fontWeight: '700', color: '#FFF' },
+
+  actionsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, borderTopWidth: 1, borderTopColor: C.line, marginTop: 16, paddingTop: 14 },
+  exportButton: { flexDirection: 'row', alignItems: 'center', gap: 7, borderRadius: 12, backgroundColor: C.primarySoft, paddingHorizontal: 12, paddingVertical: 9 },
+  exportButtonAlt: { backgroundColor: '#E7EDE8' },
+  exportButtonText: { fontFamily: 'InterBody', fontSize: 12, fontWeight: '700', color: C.primaryDark },
+
+  busyOverlay: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: 'rgba(255,255,255,0.78)', alignItems: 'center', justifyContent: 'center', gap: 6 },
+  busyText: { fontFamily: 'InterBody', fontSize: 12, fontWeight: '600', color: C.inkSoft },
+
   footer: { textAlign: 'center', fontFamily: 'InterBody', fontSize: 11, color: C.inkFaint, marginTop: 18 },
 });
