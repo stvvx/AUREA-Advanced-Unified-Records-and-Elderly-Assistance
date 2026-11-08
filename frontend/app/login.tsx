@@ -125,12 +125,20 @@ export default function LoginScreen() {
 
           {/* Logo */}
           <View style={styles.logoWrap}>
-            <Image
-              source={require('../assets/images/image copy 2.png')}
-              style={styles.logo}
-              resizeMode="contain"
-              accessibilityLabel="Gobyernong Pateros logo"
-            />
+            <View style={styles.logoRow}>
+              <Image
+                source={require('../assets/images/aurea-pateros-logo.png')}
+                style={styles.aureaLogo}
+                resizeMode="contain"
+                accessibilityLabel="AUREA Municipality of Pateros logo"
+              />
+              <Image
+                source={require('../assets/images/image copy 2.png')}
+                style={styles.logo}
+                resizeMode="contain"
+                accessibilityLabel="Gobyernong Pateros logo"
+              />
+            </View>
             <Text style={styles.eyebrow}>MUNICIPALITY OF PATEROS</Text>
             <Text style={styles.title}>Welcome Back</Text>
             <Text style={styles.subtitle}>Log in to your AUREA account</Text>
@@ -244,10 +252,20 @@ const styles = StyleSheet.create({
     marginTop: space(5),
     marginBottom: space(6),
   },
+  logoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: space(4),
+    marginBottom: space(3),
+  },
+  aureaLogo: {
+    width: 124,
+    height: 88,
+  },
   logo: {
     width: 88,
     height: 88,
-    marginBottom: space(3),
   },
   eyebrow: {
     fontFamily: 'InterBody',

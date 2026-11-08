@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -14,7 +14,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { API_BASE_URL } from '../services/loloApi';
 import { useAuth } from '../context/AuthContext';
 import { exportBirthdayBenefitsFormPdf, openBirthdayBenefitsFormPreview } from '../services/birthdayBenefitsPdf';
@@ -100,8 +100,8 @@ function statusColor(status: string) {
 
 
 
-async function fetchApplications(): Promise<Application[]> {
-  const response = await fetch(`${API_BASE_URL}/api/benefit-applications/admin`);
+async function fetchApplications(signal: AbortSignal): Promise<Application[]> {
+  const response = await fetch(`${API_BASE_URL}/api/benefit-applications/admin`, { signal });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data?.error || 'Could not load benefit applications.');
   return data.applications ?? [];
@@ -124,6 +124,8 @@ export default function AdminBenefitsScreen() {
   const [applications, setApplications] = useState<Application[]>([]);
   const [filter, setFilter] = useState('All');
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const loadRequest = useRef<AbortController | null>(null);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [findings, setFindings] = useState<Record<string, string>>({});
   const [amounts, setAmounts] = useState<Record<string, string>>({});
@@ -133,18 +135,39 @@ export default function AdminBenefitsScreen() {
     return applications.filter((application) => application.validation_status === filter);
   }, [applications, filter]);
 
-  const loadApplications = () => {
+  const loadApplications = useCallback(() => {
+    loadRequest.current?.abort();
+    const controller = new AbortController();
+    loadRequest.current = controller;
     setLoading(true);
-    fetchApplications()
-      .then(setApplications)
-      .catch((error) => Alert.alert('Benefits', error instanceof Error ? error.message : 'Could not load applications.'))
-      .finally(() => setLoading(false));
-  };
-
-  useEffect(() => {
-    const timer = setTimeout(loadApplications, 0);
-    return () => clearTimeout(timer);
+    setLoadError(null);
+    const timeout = setTimeout(() => controller.abort(), 30000);
+    fetchApplications(controller.signal)
+      .then((items) => {
+        if (!controller.signal.aborted) setApplications(items);
+      })
+      .catch(() => {
+        if (loadRequest.current === controller) {
+          setLoadError('Could not connect to the service. Please try again.');
+        }
+      })
+      .finally(() => {
+        clearTimeout(timeout);
+        if (loadRequest.current === controller) {
+          loadRequest.current = null;
+          setLoading(false);
+        }
+      });
   }, []);
+
+  useFocusEffect(useCallback(() => {
+    loadApplications();
+    return () => {
+      const controller = loadRequest.current;
+      loadRequest.current = null;
+      controller?.abort();
+    };
+  }, [loadApplications]));
 
   const changeStatus = async (application: Application, key: 'validation_status' | 'benefit_status', value: string) => {
     const amountText = amounts[application.id] ?? (
@@ -197,9 +220,9 @@ export default function AdminBenefitsScreen() {
     }
   };
 
-  const previewApplicationInTab = (application: Application) => {
+  const previewApplicationInTab = async (application: Application) => {
     try {
-      openBirthdayBenefitsFormPreview(application);
+      await openBirthdayBenefitsFormPreview(application);
     } catch (error) {
       Alert.alert('Preview failed', error instanceof Error ? error.message : 'Could not open form preview.');
     }
@@ -244,7 +267,16 @@ export default function AdminBenefitsScreen() {
           ))}
         </ScrollView>
 
-        {loading ? <ActivityIndicator color={C.primary} style={styles.loader} /> : filteredApplications.length === 0 ? (
+        {loadError && (
+          <View style={styles.emptyCard}>
+            <Text style={styles.emptyText}>{loadError}</Text>
+            <TouchableOpacity onPress={loadApplications} accessibilityRole="button">
+              <Text style={styles.emptyTitle}>Try again</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {loading ? <ActivityIndicator color={C.primary} style={styles.loader} /> : loadError ? null : filteredApplications.length === 0 ? (
           <View style={styles.emptyCard}>
             <Ionicons name="gift-outline" size={34} color={C.inkFaint} />
             <Text style={styles.emptyTitle}>No applications to validate</Text>

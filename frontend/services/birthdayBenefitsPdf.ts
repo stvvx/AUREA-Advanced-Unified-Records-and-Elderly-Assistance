@@ -1,6 +1,7 @@
 import { Platform } from 'react-native';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import { File, Paths } from 'expo-file-system';
 import { BAGONG_PILIPINAS_LOGO_BASE64, NCSC_LOGO_BASE64 } from '../assets/pdfLogos';
 
 export type BirthdayBenefitApplicationPdfData = {
@@ -95,7 +96,21 @@ function formatDate(dateStr?: string | null): string {
 }
 
 function parsePhilippineAddress(raw?: string | null) {
-  if (!raw || !raw.trim()) {
+  const address = parseAddressParts(raw);
+  if (/^pateros(?:\s+city)?$/i.test(address.city.trim())) {
+    const barangay = address.barangay.replace(/^(?:brgy\.?|barangay|bgy\.?)\s+/i, '').trim();
+    return {
+      ...address,
+      province: 'Metro Manila',
+      // Santa Ana has its own postal code; the general Pateros code is 1620.
+      zipCode: /^(?:santa|sta\.?)\s+ana$/i.test(barangay) ? '1621' : '1620',
+    };
+  }
+  return address;
+}
+
+function parseAddressParts(raw?: string | null) {
+  if (!raw || !raw.trim() || /^(?:n\s*\/?\s*a|not applicable|null|undefined)$/i.test(raw.trim())) {
     return {
       houseNumber: 'N/A',
       street: 'N/A',
@@ -107,6 +122,50 @@ function parsePhilippineAddress(raw?: string | null) {
   }
 
   const parts = raw.split(',').map((p) => p.trim()).filter(Boolean);
+
+  // A subdivision is part of the street, not a separate barangay column.
+  // Use an explicit barangay label as the boundary instead of counting commas.
+  const barangayIndex = parts.findIndex((part) => /^(?:brgy\.?|barangay|bgy\.?)\s+/i.test(part));
+  if (barangayIndex >= 0) {
+    const beforeBarangay = parts.slice(0, barangayIndex);
+    const hasHouseNumber = /^(?:#?\d|block\b|blk\.?\s|lot\b)/i.test(beforeBarangay[0] || '');
+    const houseNumber = hasHouseNumber ? beforeBarangay.shift()! : 'N/A';
+    const afterBarangay = parts.slice(barangayIndex + 1);
+    let zipCode = 'N/A';
+    const lastPart = afterBarangay[afterBarangay.length - 1];
+    const zipMatch = lastPart?.match(/(?:^|\s)(\d{4})$/);
+    if (zipMatch) {
+      zipCode = zipMatch[1];
+      const remainder = lastPart.slice(0, zipMatch.index).trim();
+      if (remainder) afterBarangay[afterBarangay.length - 1] = remainder;
+      else afterBarangay.pop();
+    }
+    return {
+      houseNumber,
+      street: beforeBarangay.join(', ') || 'N/A',
+      barangay: parts[barangayIndex],
+      city: afterBarangay[0] || 'N/A',
+      province: afterBarangay.slice(1).join(', ') || 'N/A',
+      zipCode,
+    };
+  }
+
+  // Also accept an unlabelled barangay when an explicit subdivision precedes it.
+  const subdivisionIndex = parts.findIndex((part, index) => index > 0 && /\b(?:homes|subdivision|subd\.?|village)\b/i.test(part));
+  if (subdivisionIndex >= 0 && parts.length > subdivisionIndex + 2) {
+    const hasHouseNumber = /^(?:#?\d|block\b|blk\.?\s|lot\b)/i.test(parts[0]);
+    const streetStart = hasHouseNumber ? 1 : 0;
+    const tail = parts.slice(subdivisionIndex + 2);
+    const zipCode = /^\d{4}$/.test(tail[tail.length - 1] || '') ? tail.pop()! : 'N/A';
+    return {
+      houseNumber: hasHouseNumber ? parts[0] : 'N/A',
+      street: parts.slice(streetStart, subdivisionIndex + 1).join(', '),
+      barangay: parts[subdivisionIndex + 1],
+      city: tail[0] || 'N/A',
+      province: tail.slice(1).join(', ') || 'N/A',
+      zipCode,
+    };
+  }
 
   if (parts.length >= 6) {
     return {
@@ -126,9 +185,9 @@ function parsePhilippineAddress(raw?: string | null) {
       houseNumber: parts[0] || 'N/A',
       street: parts[1] || 'N/A',
       barangay: parts[2] || 'N/A',
-      city: parts[3] || 'Pateros',
-      province: isZip ? 'Metro Manila' : lastPart,
-      zipCode: isZip ? lastPart : '1620',
+      city: parts[3] || 'N/A',
+      province: isZip ? 'N/A' : lastPart,
+      zipCode: isZip ? lastPart : 'N/A',
     };
   }
 
@@ -137,9 +196,9 @@ function parsePhilippineAddress(raw?: string | null) {
       houseNumber: '',
       street: parts[0] || 'N/A',
       barangay: parts[1] || 'N/A',
-      city: parts[2] || 'Pateros',
-      province: parts[3] || 'Metro Manila',
-      zipCode: '1620',
+      city: parts[2] || 'N/A',
+      province: parts[3] || 'N/A',
+      zipCode: 'N/A',
     };
   }
 
@@ -148,9 +207,9 @@ function parsePhilippineAddress(raw?: string | null) {
       houseNumber: '',
       street: parts[0] || 'N/A',
       barangay: parts[1] || 'N/A',
-      city: parts[2] || 'Pateros',
-      province: 'Metro Manila',
-      zipCode: '1620',
+      city: parts[2] || 'N/A',
+      province: 'N/A',
+      zipCode: 'N/A',
     };
   }
 
@@ -159,19 +218,19 @@ function parsePhilippineAddress(raw?: string | null) {
       houseNumber: '',
       street: parts[0] || 'N/A',
       barangay: parts[1] || 'N/A',
-      city: 'Pateros',
-      province: 'Metro Manila',
-      zipCode: '1620',
+      city: 'N/A',
+      province: 'N/A',
+      zipCode: 'N/A',
     };
   }
 
   return {
     houseNumber: '',
     street: raw.trim(),
-    barangay: 'Poblacion',
-    city: 'Pateros',
-    province: 'Metro Manila',
-    zipCode: '1620',
+    barangay: 'N/A',
+    city: 'N/A',
+    province: 'N/A',
+    zipCode: 'N/A',
   };
 }
 
@@ -310,9 +369,8 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
   const rrn = data.ncsc_registration_reference_number || 'N/A';
   const dobFormatted = formatDate(data.date_of_birth || (data.applicant as any)?.dob);
 
-  const resAddrRaw = (data.residential_address && data.residential_address !== 'N/A')
-    ? data.residential_address
-    : (data.permanent_address_philippines || data.applicant?.address);
+  // Residential/address-abroad must not be substituted with a permanent address.
+  const resAddrRaw = data.residential_address;
   const permAddrRaw = data.permanent_address_philippines || data.applicant?.address;
 
   const resAddr = parsePhilippineAddress(resAddrRaw);
@@ -383,8 +441,8 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
   <title>Annex A - NCSC Application Form</title>
   <style>
     @page {
-      size: A4 portrait;
-      margin: 8mm 12mm 8mm 12mm;
+      size: Letter portrait;
+      margin: 8mm 10mm;
     }
 
     * {
@@ -397,7 +455,7 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
       margin: 0;
       padding: 0;
       font-family: Arial, "Helvetica Neue", Helvetica, sans-serif;
-      font-size: 9.5px;
+      font-size: 12.35px;
       line-height: 1.2;
       color: #000;
       background: #FFFFFF;
@@ -405,7 +463,7 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
 
     .page {
       width: 100%;
-      min-height: 100vh;
+      min-height: 262mm;
       page-break-after: always;
       break-after: page;
       position: relative;
@@ -429,7 +487,7 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
 
     .annex-label {
       text-align: right;
-      font-size: 11px;
+      font-size: 14.3px;
       font-weight: bold;
       color: #000;
       margin-bottom: 2px;
@@ -460,13 +518,13 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
 
     .rep-title {
       font-family: "Times New Roman", Times, Georgia, serif;
-      font-size: 11px;
+      font-size: 14.3px;
       color: #000;
     }
 
     .pres-title {
       font-family: "Times New Roman", Times, Georgia, serif;
-      font-size: 14px;
+      font-size: 18.2px;
       font-weight: bold;
       font-style: italic;
       color: #000;
@@ -475,7 +533,7 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
 
     .commission-title {
       font-family: Arial, "Helvetica Neue", sans-serif;
-      font-size: 12.5px;
+      font-size: 16.25px;
       font-weight: 900;
       letter-spacing: 0.3px;
       color: #000;
@@ -483,7 +541,7 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
     }
 
     .address-line, .website-line {
-      font-size: 8.5px;
+      font-size: 11.05px;
       color: #111;
       margin-top: 1px;
     }
@@ -498,13 +556,13 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
     }
 
     .title-banner .main-title {
-      font-size: 12px;
+      font-size: 15.6px;
       font-weight: 900;
       letter-spacing: 0.5px;
     }
 
     .title-banner .sub-title {
-      font-size: 10px;
+      font-size: 13px;
       font-weight: bold;
       letter-spacing: 0.2px;
       margin-top: 1px;
@@ -526,13 +584,13 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
     }
 
     .purpose-text {
-      font-size: 9.5px;
+      font-size: 12.35px;
       font-weight: bold;
       margin-bottom: 6px;
     }
 
     .instructions-heading {
-      font-size: 9.5px;
+      font-size: 12.35px;
       font-weight: bold;
       margin-bottom: 3px;
     }
@@ -540,7 +598,7 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
     .instructions-list {
       margin: 0;
       padding-left: 18px;
-      font-size: 9px;
+      font-size: 11.7px;
       line-height: 1.35;
     }
 
@@ -564,7 +622,7 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
     }
 
     .id-photo-placeholder {
-      font-size: 9.5px;
+      font-size: 12.35px;
       font-style: italic;
       color: #444;
       text-align: center;
@@ -579,7 +637,7 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
 
     /* NOT FOR SALE BANNER */
     .not-for-sale {
-      font-size: 9px;
+      font-size: 11.7px;
       font-weight: bold;
       font-style: italic;
       padding: 3px 0;
@@ -591,7 +649,7 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
       background: #000000;
       color: #FFFFFF;
       font-weight: 900;
-      font-size: 9.5px;
+      font-size: 12.35px;
       padding: 2.5px 6px;
       letter-spacing: 0.3px;
       border: 1px solid #000000;
@@ -610,11 +668,11 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
       border: 1px solid #000000;
       padding: 2.5px 5px;
       vertical-align: top;
-      font-size: 9px;
+      font-size: 11.7px;
     }
 
     .cell-label {
-      font-size: 8px;
+      font-size: 10.4px;
       font-weight: bold;
       color: #000;
       text-transform: uppercase;
@@ -623,7 +681,7 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
     }
 
     .cell-value {
-      font-size: 9.5px;
+      font-size: 12.35px;
       font-weight: bold;
       color: #000;
       min-height: 13px;
@@ -637,20 +695,20 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
 
     .sub-columns-table td {
       border: 1px solid #000;
-      padding: 2px 4px;
-      font-size: 8.5px;
+      padding: 5px 5px;
+      font-size: 11.05px;
       width: 16.66%;
     }
 
     .sub-col-header {
-      font-size: 7.5px;
+      font-size: 9.75px;
       color: #333;
       text-align: center;
       margin-bottom: 1px;
     }
 
     .sub-col-val {
-      font-size: 9px;
+      font-size: 11.7px;
       font-weight: bold;
       text-align: center;
       min-height: 12px;
@@ -663,7 +721,7 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
       align-items: center;
       margin-right: 14px;
       margin-top: 2px;
-      font-size: 9px;
+      font-size: 11.7px;
     }
 
     .box-square {
@@ -674,7 +732,7 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      font-size: 9px;
+      font-size: 11.7px;
       font-weight: bold;
       line-height: 1;
     }
@@ -688,14 +746,14 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      font-size: 8px;
+      font-size: 10.4px;
       font-weight: bold;
       line-height: 1;
     }
 
     /* CERTIFICATION & NOTARY */
     .certification-text {
-      font-size: 8.5px;
+      font-size: 11.05px;
       line-height: 1.25;
       text-align: justify;
       padding: 4px 6px;
@@ -714,7 +772,7 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
       border-top: 1px solid #000;
       width: 70%;
       text-align: center;
-      font-size: 8.5px;
+      font-size: 11.05px;
       font-weight: bold;
       padding-top: 2px;
       margin-top: 2px;
@@ -722,7 +780,7 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
 
     .notary-section {
       padding: 5px 6px;
-      font-size: 8.5px;
+      font-size: 11.05px;
       line-height: 1.35;
     }
 
@@ -735,7 +793,7 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
     }
 
     .notary-docket {
-      font-size: 8.5px;
+      font-size: 11.05px;
       line-height: 1.4;
     }
 
@@ -747,14 +805,14 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
 
     .notary-title {
       border-top: 1px solid #000;
-      font-size: 9px;
+      font-size: 11.7px;
       font-weight: bold;
       padding-top: 3px;
     }
 
     /* DATA PRIVACY */
     .privacy-text {
-      font-size: 8.5px;
+      font-size: 11.05px;
       line-height: 1.25;
       text-align: justify;
       padding: 4px 6px;
@@ -770,7 +828,7 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
       flex-direction: row;
       justify-content: space-between;
       align-items: center;
-      font-size: 8.5px;
+      font-size: 11.05px;
       color: #000;
       padding: 0 4px;
     }
@@ -791,7 +849,7 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
     .req-table th {
       border: 1px solid #000;
       background: #F3F3F3;
-      font-size: 8.5px;
+      font-size: 11.05px;
       font-weight: bold;
       padding: 4px 5px;
       text-align: center;
@@ -801,7 +859,7 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
       border: 1px solid #000;
       padding: 3px 5px;
       vertical-align: top;
-      font-size: 8.5px;
+      font-size: 11.05px;
       line-height: 1.25;
     }
 
@@ -825,7 +883,7 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
 
     .col-remarks {
       width: 22%;
-      font-size: 8px;
+      font-size: 10.4px;
     }
 
     /* FINDINGS BOX */
@@ -833,7 +891,7 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
       border: 1px solid #000;
       min-height: 110px;
       padding: 6px;
-      font-size: 9px;
+      font-size: 11.7px;
       line-height: 1.35;
       background: #FFFFFF;
     }
@@ -850,7 +908,7 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
 
     /* Keep the form readable while retaining the original four-page layout. */
     body {
-      font-size: 10.5px;
+      font-size: 13.65px;
       line-height: 1.18;
     }
 
@@ -859,24 +917,24 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
     }
 
     .annex-label {
-      font-size: 12px;
+      font-size: 15.6px;
     }
 
     .rep-title {
-      font-size: 12px;
+      font-size: 15.6px;
     }
 
     .pres-title {
-      font-size: 15px;
+      font-size: 19.5px;
     }
 
     .commission-title {
-      font-size: 13.5px;
+      font-size: 17.55px;
     }
 
     .address-line,
     .website-line {
-      font-size: 9px;
+      font-size: 11.7px;
     }
 
     .title-banner {
@@ -884,11 +942,11 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
     }
 
     .title-banner .main-title {
-      font-size: 13px;
+      font-size: 16.9px;
     }
 
     .title-banner .sub-title {
-      font-size: 10.5px;
+      font-size: 13.65px;
     }
 
     .purpose-left {
@@ -897,17 +955,17 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
 
     .purpose-text,
     .instructions-heading {
-      font-size: 10.5px;
+      font-size: 13.65px;
     }
 
     .instructions-list {
-      font-size: 10px;
+      font-size: 13px;
       line-height: 1.25;
     }
 
     .not-for-sale,
     .section-banner {
-      font-size: 10.5px;
+      font-size: 13.65px;
     }
 
     .section-banner {
@@ -916,59 +974,68 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
 
     .form-table td,
     .form-table th {
-      padding: 2px 4px;
-      font-size: 10px;
+      padding: 5px 5px;
+      font-size: 13px;
     }
 
     .cell-label {
-      font-size: 8.8px;
+      font-size: 11.44px;
     }
 
     .cell-value {
-      font-size: 10.5px;
+      font-size: 13.65px;
       min-height: 12px;
     }
 
     .sub-columns-table td {
-      padding: 2px 3px;
-      font-size: 9.5px;
+      padding: 4px 3px;
+      font-size: 12.35px;
     }
 
     .sub-col-header {
-      font-size: 8.5px;
+      font-size: 11.05px;
     }
 
     .sub-col-val {
-      font-size: 10px;
+      font-size: 13px;
     }
 
     .checkbox-item {
-      font-size: 10px;
+      font-size: 13px;
     }
 
     .certification-text,
     .notary-section,
     .privacy-text {
-      font-size: 9.5px;
+      font-size: 12.35px;
     }
 
     .signature-line-text,
     .notary-docket {
-      font-size: 9.5px;
+      font-size: 12.35px;
     }
 
     .req-table th,
     .req-table td {
-      font-size: 9.5px;
+      font-size: 12.35px;
     }
 
     .findings-box {
-      font-size: 10px;
+      font-size: 13px;
     }
 
     .page-footer {
-      font-size: 9.5px;
+      font-size: 12.35px;
     }
+
+    /* Physical page dimensions keep native and browser printing consistent. */
+    .page { padding-bottom: 24px; }
+    .cell-value, .sub-col-val { overflow-wrap: anywhere; }
+    .form-table tr, .req-table tr { break-inside: avoid; }
+    .page-1 .cell-value { min-height: 21px; }
+    .page-1 .form-table > tbody > tr > td { padding-top: 7px; padding-bottom: 7px; }
+    .page-2 .certification-text, .page-2 .privacy-text { line-height: 1.45; }
+    .findings-box { min-height: 170px; }
   </style>
 </head>
 <body>
@@ -1111,7 +1178,7 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
               <div style="margin-top: 3px;">
                 <span class="checkbox-item"><span class="box-square">${isFilipino ? '✓' : ''}</span> Filipino</span><br>
                 <span class="checkbox-item" style="margin-top: 2px;"><span class="box-square">${isDual ? '✓' : ''}</span> Dual citizen</span>
-                <div style="font-size: 8px; margin-top: 2px; padding-left: 15px; color: #333;">
+                <div style="font-size: 10.4px; margin-top: 2px; padding-left: 15px; color: #333;">
                   If dual citizen, kindly indicate details: <u>${escapeHtml(dualDetails || 'N/A')}</u>
                 </div>
               </div>
@@ -1137,7 +1204,7 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
     </table>
 
     <div class="page-footer">
-      <div class="page-footer-center">Page 1 of 2</div>
+      <div class="page-footer-center">Page 1 of 4</div>
     </div>
   </div>
 
@@ -1150,7 +1217,7 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
           <div class="cell-label">B.3. NAME OF CHILDREN (LAST NAME, GIVEN NAME, FULL MIDDLE NAME)</div>
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2px 14px; margin-top: 3px;">
             ${childrenRows.map((child, idx) => `
-              <div style="font-size: 8.5px; border-bottom: 0.8px dotted #666; padding: 2px 0;">
+              <div style="font-size: 11.05px; border-bottom: 0.8px dotted #666; padding: 2px 0;">
                 <strong style="display: inline-block; width: 18px;">${idx + 1}.</strong> ${escapeHtml(child)}
               </div>
             `).join('')}
@@ -1164,12 +1231,12 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
           </div>
           <table style="width: 100%; border-collapse: collapse;">
             <tr style="background: #F3F3F3;">
-              <th style="width: 65%; border-right: 1px solid #000; padding: 3px 5px; text-align: left; font-size: 8px;">Name of Representative/s</th>
-              <th style="width: 35%; padding: 3px 5px; text-align: left; font-size: 8px;">Relationship</th>
+              <th style="width: 65%; border-right: 1px solid #000; padding: 3px 5px; text-align: left; font-size: 10.4px;">Name of Representative/s</th>
+              <th style="width: 35%; padding: 3px 5px; text-align: left; font-size: 10.4px;">Relationship</th>
             </tr>
             <tr>
               <td style="border-right: 1px solid #000; border-top: 1px solid #000; padding: 3px 5px;">
-                <span style="font-size: 8px; font-weight: bold; margin-right: 6px;">B.4.1</span>
+                <span style="font-size: 10.4px; font-weight: bold; margin-right: 6px;">B.4.1</span>
                 <strong>${escapeHtml(repName)}</strong>
               </td>
               <td style="border-top: 1px solid #000; padding: 3px 5px;">
@@ -1178,7 +1245,7 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
             </tr>
             <tr>
               <td style="border-right: 1px solid #000; border-top: 1px solid #000; padding: 3px 5px;">
-                <span style="font-size: 8px; font-weight: bold; margin-right: 6px;">B.4.2</span>
+                <span style="font-size: 10.4px; font-weight: bold; margin-right: 6px;">B.4.2</span>
                 <span style="color: #666;">N/A</span>
               </td>
               <td style="border-top: 1px solid #000; padding: 3px 5px;">
@@ -1187,7 +1254,7 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
             </tr>
             <tr>
               <td style="border-right: 1px solid #000; border-top: 1px solid #000; padding: 3px 5px;">
-                <span style="font-size: 8px; font-weight: bold; margin-right: 6px;">B.4.3</span>
+                <span style="font-size: 10.4px; font-weight: bold; margin-right: 6px;">B.4.3</span>
                 <span style="color: #666;">N/A</span>
               </td>
               <td style="border-top: 1px solid #000; padding: 3px 5px;">
@@ -1224,10 +1291,10 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
       </tr>
       <tr>
         <td style="padding: 10px 10px 4px 10px;">
-          <div style="text-align: center; font-size: 11px; font-weight: 900; letter-spacing: 0.5px; border-bottom: 1.5px solid #000; width: 80%; margin: 0 auto 3px auto; padding-bottom: 2px;">
+          <div style="text-align: center; font-size: 14.3px; font-weight: 900; letter-spacing: 0.5px; border-bottom: 1.5px solid #000; width: 80%; margin: 0 auto 3px auto; padding-bottom: 2px;">
             ${escapeHtml(applicantFullName)}
           </div>
-          <div style="text-align: center; font-size: 8.5px; font-weight: bold;">
+          <div style="text-align: center; font-size: 11.05px; font-weight: bold;">
             NAME AND SIGNATURE/THUMBMARK OF APPLICANT
           </div>
         </td>
@@ -1268,7 +1335,7 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
     </table>
 
     <div class="page-footer">
-      <div class="page-footer-center">Page 2 of 2</div>
+      <div class="page-footer-center">Page 2 of 4</div>
     </div>
   </div>
 
@@ -1286,13 +1353,13 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
           <th style="width: 14%;">Applicants</th>
           <th style="width: 48%;">Requirements</th>
           <th colspan="2" style="width: 14%;">Complied</th>
-          <th style="width: 24%;">Remarks<br><span style="font-size: 7px; font-weight: normal; font-style: italic;">In the absence of primary ID, kindly cite secondary documents presented</span></th>
+          <th style="width: 24%;">Remarks<br><span style="font-size: 9.1px; font-weight: normal; font-style: italic;">In the absence of primary ID, kindly cite secondary documents presented</span></th>
         </tr>
         <tr>
           <th></th>
           <th></th>
-          <th style="width: 7%; font-size: 8px;">Yes</th>
-          <th style="width: 7%; font-size: 8px;">No</th>
+          <th style="width: 7%; font-size: 10.4px;">Yes</th>
+          <th style="width: 7%; font-size: 10.4px;">No</th>
           <th></th>
         </tr>
       </thead>
@@ -1314,7 +1381,7 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
               1. Certificate of Live Birth duly issued or authenticated by the Philippine Statistics Authority (PSA);<br>
               2. Photocopy of Philippine Identification System ID card / Philippine ID card / National ID card provided that the original copy must be presented.
             </div>
-            <div style="font-size: 7.5px; font-style: italic; margin-top: 2px; color: #444;">
+            <div style="font-size: 9.75px; font-style: italic; margin-top: 2px; color: #444;">
               ***In the absence of primary ID/documents, any two (2) of the following secondary ID cards/documents shall be submitted as indicated in the Item VI of Implementing Guidelines.
             </div>
           </td>
@@ -1367,7 +1434,7 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
               1. Valid Philippine Passport;<br>
               2. Citizen Retention and Re-acquisition Certificate and Identification Certificate, or Order of Approval, or Oath of Allegiance, or Certificate of Attestation duly issued by the Philippine Embassy (PE) or Philippine Consulate General (PCG) of the Department of Foreign Affairs (DFA) who has jurisdiction in the area where the applicant resides.
             </div>
-            <div style="font-size: 7.5px; font-style: italic; margin-top: 2px; color: #444;">
+            <div style="font-size: 9.75px; font-style: italic; margin-top: 2px; color: #444;">
               ***In the absence of primary ID/documents, any two (2) of the following secondary ID cards/documents shall be submitted as indicated in the Item VI of Implementing Guidelines.
             </div>
           </td>
@@ -1398,8 +1465,8 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
         <tr>
           <th style="width: 14%;">Applicants</th>
           <th style="width: 48%;">Requirements</th>
-          <th style="width: 7%; font-size: 8px;">Yes</th>
-          <th style="width: 7%; font-size: 8px;">No</th>
+          <th style="width: 7%; font-size: 10.4px;">Yes</th>
+          <th style="width: 7%; font-size: 10.4px;">No</th>
           <th style="width: 24%;">Remarks</th>
         </tr>
       </thead>
@@ -1438,7 +1505,7 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
     </div>
 
     <div style="border: 1.5px solid #000; margin-top: -1px;">
-      <div style="background: #FAFAFA; font-weight: bold; font-size: 8.5px; padding: 3px 6px; border-bottom: 1px solid #000;">
+      <div style="background: #FAFAFA; font-weight: bold; font-size: 11.05px; padding: 3px 6px; border-bottom: 1px solid #000;">
         H.1 FINDINGS/CONCERNS/RECOMMENDATIONS
       </div>
       <div class="findings-box">
@@ -1451,11 +1518,11 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
       </div>
 
       <div class="assessment-box">
-        <strong style="font-size: 9px; margin-right: 15px;">H.2 INITIAL ASSESSMENT:</strong>
-        <span class="checkbox-item" style="font-size: 9.5px; font-weight: bold;">
+        <strong style="font-size: 11.7px; margin-right: 15px;">H.2 INITIAL ASSESSMENT:</strong>
+        <span class="checkbox-item" style="font-size: 12.35px; font-weight: bold;">
           <span class="radio-circle">${isEligible ? '●' : ''}</span> Eligible
         </span>
-        <span class="checkbox-item" style="font-size: 9.5px; font-weight: bold;">
+        <span class="checkbox-item" style="font-size: 12.35px; font-weight: bold;">
           <span class="radio-circle">${isIneligible ? '●' : ''}</span> Ineligible
         </span>
       </div>
@@ -1469,11 +1536,11 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
       <tr>
         <td style="width: 50%; padding: 6px;">
           <div class="cell-label">Name</div>
-          <div class="cell-value" style="font-size: 10px;">${escapeHtml(validatedByName)}</div>
+          <div class="cell-value" style="font-size: 13px;">${escapeHtml(validatedByName)}</div>
         </td>
         <td style="width: 50%; padding: 6px; text-align: center; vertical-align: bottom;">
           <div style="border-bottom: 1px solid #000; width: 85%; margin: 0 auto 3px auto; min-height: 20px;"></div>
-          <div style="font-size: 8px; font-style: italic;">(Signature over printed name)</div>
+          <div style="font-size: 10.4px; font-style: italic;">(Signature over printed name)</div>
         </td>
       </tr>
       <tr>
@@ -1489,10 +1556,10 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
     <table class="form-table">
       <tr>
         <td style="padding: 12px 10px 6px 10px; text-align: center;">
-          <div style="font-size: 11px; font-weight: 900; letter-spacing: 0.5px; border-bottom: 1.5px solid #000; width: 75%; margin: 0 auto 3px auto; padding-bottom: 2px;">
+          <div style="font-size: 14.3px; font-weight: 900; letter-spacing: 0.5px; border-bottom: 1.5px solid #000; width: 75%; margin: 0 auto 3px auto; padding-bottom: 2px;">
             ${escapeHtml(applicantFullName)}
           </div>
-          <div style="font-size: 8.5px; font-weight: bold;">
+          <div style="font-size: 11.05px; font-weight: bold;">
             NAME AND SIGNATURE/THUMBMARK OF APPLICANT
           </div>
         </td>
@@ -1520,9 +1587,13 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
 </html>`;
 }
 
-export function openBirthdayBenefitsFormPreview(data: BirthdayBenefitApplicationPdfData): void {
+export async function openBirthdayBenefitsFormPreview(data: BirthdayBenefitApplicationPdfData): Promise<void> {
   const html = generateBirthdayBenefitsFormHtml(data);
-  if (typeof window !== 'undefined') {
+  if (Platform.OS !== 'web') {
+    await Print.printAsync({ html });
+    return;
+  }
+  if (typeof window !== 'undefined' && typeof window.open === 'function') {
     const win = window.open('', '_blank');
     if (win) {
       win.document.open();
@@ -1539,7 +1610,7 @@ export async function exportBirthdayBenefitsFormPdf(
 ): Promise<void> {
   const html = generateBirthdayBenefitsFormHtml(data);
 
-  if (Platform.OS === 'web' || (typeof window !== 'undefined' && typeof document !== 'undefined')) {
+  if (Platform.OS === 'web') {
     if (options?.openInNewTab) {
       const win = window.open('', '_blank');
       if (win) {
@@ -1614,15 +1685,29 @@ export async function exportBirthdayBenefitsFormPdf(
     return;
   }
 
-  // Native iOS / Android
-  const { uri } = await Print.printToFileAsync({ html });
-  if (await Sharing.isAvailableAsync()) {
-    await Sharing.shareAsync(uri, {
+  // Native iOS / Android. The printer can return a path outside Expo Go's
+  // scoped storage. Write the bytes into our own cache before sharing.
+  if (!(await Sharing.isAvailableAsync())) {
+    await Print.printAsync({ html });
+    return;
+  }
+
+  const { base64 } = await Print.printToFileAsync({ html, base64: true });
+  if (!base64) {
+    throw new Error('Could not generate the PDF. Please try exporting again.');
+  }
+
+  const directory = Paths.cache;
+  const pdf = new File(directory, `NCSC-Annex-A-${Date.now()}-${Math.random().toString(36).slice(2)}.pdf`);
+  await pdf.write(base64, { encoding: 'base64' });
+  if (!pdf.exists || pdf.size === 0) {
+    throw new Error('Could not save the PDF. Please try exporting again.');
+  }
+
+  // Keep the cached file available while the receiving app reads it.
+  await Sharing.shareAsync(pdf.uri, {
       mimeType: 'application/pdf',
       dialogTitle: 'Export NCSC Annex A Application Form',
       UTI: 'com.adobe.pdf',
-    });
-  } else {
-    throw new Error(`PDF saved at: ${uri}`);
-  }
+  });
 }

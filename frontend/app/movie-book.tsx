@@ -1,5 +1,5 @@
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 
 import { useAuth } from '../context/AuthContext';
 import { API_BASE_URL } from '../services/loloApi';
@@ -35,6 +35,16 @@ type Showtime = {
   available_slots: number;
   capacity: number;
   is_active?: boolean;
+};
+
+type Reservation = {
+  id: string | number;
+  status: string;
+  confirmation_code?: string;
+  movie_title?: string;
+  screening_date?: string;
+  screening_time?: string;
+  attendee_count?: number;
 };
 
 type DateOption = {
@@ -76,6 +86,12 @@ function formatTime(time: string): string {
   });
 }
 
+function isCurrentReservation(reservation: Reservation, today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' })): boolean {
+  if (reservation.status !== 'Pending' && reservation.status !== 'Confirmed') return false;
+  // Keep today's booking active until the screening date has ended.
+  return !reservation.screening_date || reservation.screening_date.slice(0, 10) >= today;
+}
+
 async function parseResponse(response: Response) {
   const data = await response.json().catch(() => ({}));
 
@@ -112,6 +128,64 @@ export default function MovieBookScreen() {
   const [loadingScreenings, setLoadingScreenings] = useState(false);
   const [reserving, setReserving] = useState(false);
   const [error, setError] = useState('');
+
+  const [existingReservation, setExistingReservation] = useState<Reservation | null>(null);
+  const [checkingReservation, setCheckingReservation] = useState(true);
+  const [reservationError, setReservationError] = useState('');
+  const [cancelling, setCancelling] = useState(false);
+  const reservationBusy = useRef(false);
+
+  const loadExistingReservation = useCallback(async (signal?: AbortSignal) => {
+    if (!userId) return;
+    const response = await fetch(`${API_BASE}/api/movie-center/reservations?user_id=${userId}`, { signal });
+    const data = await parseResponse(response);
+    if (signal?.aborted) return;
+    const active = (data.reservations || []).find((item: Reservation) => isCurrentReservation(item));
+    setExistingReservation(active || null);
+    setReservationError('');
+  }, [userId]);
+
+  useFocusEffect(useCallback(() => {
+    const controller = new AbortController();
+    setCheckingReservation(true);
+    const timeout = setTimeout(() => {
+      setReservationError('Could not check your reservation. Please try again.');
+      setCheckingReservation(false);
+      controller.abort();
+    }, 25000);
+    loadExistingReservation(controller.signal)
+      .catch(() => {
+        if (!controller.signal.aborted) setReservationError('Could not check your reservation. Please try again.');
+      })
+      .finally(() => {
+        clearTimeout(timeout);
+        if (!controller.signal.aborted) setCheckingReservation(false);
+      });
+    return () => { clearTimeout(timeout); controller.abort(); };
+  }, [loadExistingReservation]));
+
+  const handleCancelReservation = async () => {
+    if (!existingReservation || reservationBusy.current) return;
+    reservationBusy.current = true;
+    setCancelling(true);
+    try {
+      const response = await fetch(`${API_BASE}/api/movie-center/reservations/${existingReservation.id}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: userId, status: 'Cancelled' }),
+      });
+      await parseResponse(response);
+      clearSeats();
+      setSelectedShowtime(null);
+      setSelectedMovie(null);
+      // Recheck in case older data contains another active reservation.
+      await loadExistingReservation();
+    } catch (err) {
+      Alert.alert('Cancellation failed', err instanceof Error ? err.message : 'Please try again.');
+    } finally {
+      reservationBusy.current = false;
+      setCancelling(false);
+    }
+  };
 
   const clearSeats = () => setSelectedSeats([]);
 
@@ -307,6 +381,7 @@ export default function MovieBookScreen() {
   };
 
   const handleReserve = async () => {
+    if (reservationBusy.current || existingReservation || checkingReservation || reservationError) return;
     if (!userId) {
       Alert.alert('Login required', 'Please log in again to make a reservation.');
       return;
@@ -335,6 +410,7 @@ export default function MovieBookScreen() {
       return;
     }
 
+    reservationBusy.current = true;
     try {
       setReserving(true);
 
@@ -354,7 +430,7 @@ export default function MovieBookScreen() {
       );
 
       const data = await parseResponse(response);
-      const reservation = data.reservation;
+      const reservation = Array.isArray(data.reservation) ? data.reservation[0] : data.reservation;
 
       const code =
         reservation?.confirmation_code ||
@@ -364,23 +440,29 @@ export default function MovieBookScreen() {
         'Submitted';
 
       setReservationCode(String(code));
-      setShowConfirmation(true);
-
-      // Refresh availability after a successful reservation.
-      const refreshResponse = await fetch(
-        `${API_BASE}/api/movie-center/screenings?user_id=${encodeURIComponent(
-          String(userId)
-        )}&movie_id=${encodeURIComponent(String(selectedMovie.id))}`
-      );
-
-      const refreshData = await parseResponse(refreshResponse);
-      setScreenings(refreshData.screenings || []);
+      const saved = reservation?.reservation || (Array.isArray(reservation) ? reservation[0] : reservation);
+      setExistingReservation({
+        ...saved,
+        id: saved?.id || saved?.reservation_id || code,
+        status: saved?.status || 'Pending',
+        confirmation_code: String(code),
+        movie_title: selectedMovie.title,
+        screening_date: selectedShowtime.screening_date,
+        screening_time: selectedShowtime.screening_time,
+        attendee_count: selectedSeats.length,
+      });
+      setShowConfirmation(false);
+      // The successful booking stays visible even if this follow-up fails.
+      await loadExistingReservation().catch(() => undefined);
     } catch (err: any) {
+      setReservationError('Please check your reservation before trying again.');
+      await loadExistingReservation().catch(() => undefined);
       Alert.alert(
         'Reservation failed',
         err.message || 'Something went wrong. Please try again.'
       );
     } finally {
+      reservationBusy.current = false;
       setReserving(false);
     }
   };
@@ -417,6 +499,50 @@ export default function MovieBookScreen() {
       </TouchableOpacity>
     );
   };
+
+  if (checkingReservation || reservationError || existingReservation) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <StatusBar barStyle="dark-content" />
+        <View style={styles.header}>
+          <TouchableOpacity style={styles.backButton} onPress={() => router.back()} accessibilityLabel="Go back">
+            <Ionicons name="arrow-back" size={25} color="#252525" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>My Movie Reservation</Text>
+        </View>
+        <ScrollView contentContainerStyle={styles.scrollContent}>
+          {checkingReservation ? <ActivityIndicator size="large" color="#7652A5" /> : reservationError ? (
+            <View style={styles.confirmationDetails}>
+              <Text style={styles.confirmationValue}>{reservationError}</Text>
+              <TouchableOpacity style={styles.doneButton} onPress={async () => {
+                setCheckingReservation(true);
+                try { await loadExistingReservation(); }
+                catch { setReservationError('Could not check your reservation. Please try again.'); }
+                finally { setCheckingReservation(false); }
+              }}><Text style={styles.doneButtonText}>Try again</Text></TouchableOpacity>
+            </View>
+          ) : existingReservation && (
+            <View style={styles.confirmationDetails}>
+              <Text style={styles.confirmationTitle}>Your existing reservation</Text>
+              <Text style={styles.confirmationLabel}>Confirmation code</Text>
+              <Text style={styles.confirmationCode}>{existingReservation.confirmation_code || existingReservation.id}</Text>
+              <Text style={styles.confirmationLabel}>Movie</Text>
+              <Text style={styles.confirmationValue}>{existingReservation.movie_title || 'Movie screening'}</Text>
+              <Text style={styles.confirmationLabel}>Schedule</Text>
+              <Text style={styles.confirmationValue}>{existingReservation.screening_date} {formatTime(existingReservation.screening_time || '')}</Text>
+              <Text style={styles.confirmationLabel}>Attendees</Text>
+              <Text style={styles.confirmationValue}>{existingReservation.attendee_count}</Text>
+              <Text style={styles.confirmationLabel}>Status</Text>
+              <Text style={styles.confirmationValue}>{existingReservation.status}</Text>
+              <TouchableOpacity style={[styles.doneButton, { backgroundColor: '#B3432E' }]} disabled={cancelling} onPress={handleCancelReservation} accessibilityRole="button">
+                {cancelling ? <ActivityIndicator color="#fff" /> : <Text style={styles.doneButtonText}>Cancel reservation</Text>}
+              </TouchableOpacity>
+            </View>
+          )}
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container}>

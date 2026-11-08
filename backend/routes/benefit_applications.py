@@ -130,6 +130,15 @@ def create_benefit_application():
     if not isinstance(users, list) or not users:
         return jsonify({"success": False, "error": "Applicant was not found."}), 404
 
+    try:
+        existing = _supabase("GET", "octogenarian_benefit_applications", params={
+            "user_id": f"eq.{user_id}", "select": "id", "limit": "1",
+        }) or []
+        if existing:
+            return jsonify({"error": "You already submitted an application. Please track its status."}), 409
+    except Exception:
+        return jsonify({"error": "Could not check existing applications. Please try again."}), 503
+
     profile = users[0]
     applicant_dob = str(profile.get("dob") or "").strip()
     try:
@@ -440,3 +449,40 @@ def update_admin_benefit_application(application_id: str):
 
     application = updated[0] if isinstance(updated, list) and updated else updated
     return jsonify({"success": True, "application": application}), 200
+
+
+@benefit_applications_bp.route("/<application_id>/feedback", methods=["GET", "POST"])
+def birthday_benefit_feedback(application_id):
+    data = (request.get_json(silent=True) or {}) if request.method == "POST" else request.args
+    try:
+        user_id = int(data.get("user_id"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "user_id is required."}), 400
+    try:
+        applications = _supabase("GET", "octogenarian_benefit_applications", params={
+            "id": f"eq.{application_id}", "user_id": f"eq.{user_id}", "select": "*", "limit": "1",
+        }) or []
+        if not applications:
+            return jsonify({"error": "Application not found."}), 404
+        params = {"user_id": f"eq.{user_id}", "service_key": "eq.birthday_benefits",
+                  "service_record_id": f"eq.{application_id}", "select": "*", "limit": "1"}
+        existing = _supabase("GET", "service_feedback", params=params) or []
+        if request.method == "GET":
+            return jsonify({"feedback": existing[0] if existing else None}), 200
+        if applications[0].get("benefit_status") != "Released":
+            return jsonify({"error": "Feedback is available after your benefit is released."}), 409
+        if existing:
+            return jsonify({"feedback": existing[0]}), 200
+        rating = data.get("rating")
+        comments = data.get("comments")
+        if isinstance(rating, bool) or not isinstance(rating, int) or not 1 <= rating <= 5:
+            return jsonify({"error": "Choose a rating from 1 to 5."}), 400
+        if not isinstance(comments, str) or not 1 <= len(comments.strip()) <= 2000:
+            return jsonify({"error": "Enter feedback between 1 and 2000 characters."}), 400
+        rows = _supabase("POST", "service_feedback", payload={
+            "user_id": user_id, "service_key": "birthday_benefits", "service_record_id": application_id,
+            "rating": rating, "comments": comments.strip(),
+        })
+        return jsonify({"feedback": rows[0] if isinstance(rows, list) and rows else rows}), 201
+    except Exception:
+        return jsonify({"error": "Could not load or save feedback. Please try again."}), 503

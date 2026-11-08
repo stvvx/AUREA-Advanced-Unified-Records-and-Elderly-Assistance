@@ -11,6 +11,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  TextInputProps,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -25,7 +26,18 @@ import * as FileSystem from 'expo-file-system/legacy';
 import QRCode from 'react-native-qrcode-svg';
 import { WebView } from 'react-native-webview';
 import { useAuth } from '../context/AuthContext';
+import {
+  getUser,
+  updateUser,
+  uploadAvatar,
+  uploadBirthCertificate,
+  deleteBirthCertificate,
+  type ChildProfile,
+} from '../lib/authApi';
 
+// ---------------------------------------------------------------------------
+// Date helpers
+// ---------------------------------------------------------------------------
 function getAge(dob?: string): number | null {
   if (!dob) return null;
   const value = dob.trim();
@@ -70,21 +82,16 @@ function parseDobString(value?: string): Date | null {
     ? date
     : null;
 }
-import {
-  getUser,
-  updateUser,
-  uploadAvatar,
-  uploadBirthCertificate,
-  deleteBirthCertificate,
-  type ChildProfile,
-} from '../lib/authApi';
 
+// ---------------------------------------------------------------------------
+// Design tokens
+// ---------------------------------------------------------------------------
 const C = {
-  bg: '#F4F6F0',
+  bg: '#F4F7F0',
   card: '#FFFFFF',
   ink: '#14201A',
   inkSoft: '#4A5C50',
-  inkFaint: '#8A9A8E',
+  inkFaint: '#7C8D80',
   primary: '#2B6B4A',
   primaryDark: '#173C29',
   primaryMid: '#2E7A50',
@@ -94,10 +101,13 @@ const C = {
   goldSoft: '#F6EAD4',
   white: '#FFFFFF',
   line: '#D8E4D4',
+  lineSoft: '#EBF1E8',
   error: '#B42318',
+  errorSoft: '#FCE8E6',
 };
 
 const sp = (n: number) => n * 4;
+const isWeb = Platform.OS === 'web';
 
 function hexToRgba(hex: string, alpha: number) {
   const clean = hex.replace('#', '');
@@ -116,9 +126,24 @@ function shadow(color: string, opacity: number, radius = 14, height = 6) {
   });
 }
 
-const webPointer = Platform.OS === 'web' ? ({ cursor: 'pointer' } as any) : {};
-const webNoOutline = Platform.OS === 'web' ? ({ outlineStyle: 'none' } as any) : {};
+const webPointer = isWeb ? ({ cursor: 'pointer' } as any) : {};
+const webNoOutline = isWeb ? ({ outlineStyle: 'none' } as any) : {};
 
+const webDateStyle = {
+  backgroundColor: C.white,
+  border: `1px solid ${C.line}`,
+  borderRadius: 14,
+  padding: '12px 14px',
+  fontFamily: 'InterBody, sans-serif',
+  fontSize: 14,
+  color: C.ink,
+  width: '100%',
+  boxSizing: 'border-box',
+} as any;
+
+// ---------------------------------------------------------------------------
+// File helper
+// ---------------------------------------------------------------------------
 async function readFileAsBase64(uri: string): Promise<string> {
   if (Platform.OS === 'web') {
     const res = await fetch(uri);
@@ -157,13 +182,140 @@ async function readFileAsBase64(uri: string): Promise<string> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// UI building blocks
+// ---------------------------------------------------------------------------
+function Section({
+  icon, title, subtitle, right, children,
+}: {
+  icon: string; title: string; subtitle?: string; right?: React.ReactNode; children: React.ReactNode;
+}) {
+  return (
+    <View style={[styles.section, shadow(C.ink, 0.06, 14, 3)]}>
+      <View style={styles.sectionHead}>
+        <View style={styles.sectionIcon}>
+          <Ionicons name={icon as any} size={17} color={C.primaryDark} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.sectionTitle}>{title}</Text>
+          {subtitle ? <Text style={styles.sectionSubtitle}>{subtitle}</Text> : null}
+        </View>
+        {right}
+      </View>
+      {children}
+    </View>
+  );
+}
+
+function FieldLabel({ label, required }: { label: string; required?: boolean }) {
+  return (
+    <Text style={styles.label}>
+      {label}
+      {required ? <Text style={{ color: C.error }}> *</Text> : null}
+    </Text>
+  );
+}
+
+function TextField({
+  label, required, style, ...inputProps
+}: TextInputProps & { label: string; required?: boolean }) {
+  const [focused, setFocused] = useState(false);
+  return (
+    <View style={styles.field}>
+      <FieldLabel label={label} required={required} />
+      <TextInput
+        {...inputProps}
+        onFocus={(e) => { setFocused(true); inputProps.onFocus?.(e); }}
+        onBlur={(e) => { setFocused(false); inputProps.onBlur?.(e); }}
+        placeholderTextColor={C.inkFaint}
+        style={[styles.input, focused && styles.inputFocused, style]}
+      />
+    </View>
+  );
+}
+
+function SelectField({
+  label, value, placeholder, onPress,
+}: { label: string; value: string; placeholder: string; onPress: () => void }) {
+  return (
+    <View style={styles.field}>
+      <FieldLabel label={label} />
+      <TouchableOpacity
+        style={[styles.input, styles.selectInput, webPointer]}
+        onPress={onPress}
+        activeOpacity={0.8}
+        accessibilityRole="button"
+        accessibilityLabel={`${label}: ${value || placeholder}`}
+      >
+        <Text style={value ? styles.valueText : styles.placeholderText}>{value || placeholder}</Text>
+        <Ionicons name="chevron-down" size={16} color={C.inkFaint} />
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+function ReadOnlyField({ label, value, icon }: { label: string; value: string; icon?: string }) {
+  return (
+    <View style={styles.field}>
+      <FieldLabel label={label} />
+      <View style={[styles.input, styles.readOnly]}>
+        {icon ? <Ionicons name={icon as any} size={15} color={C.inkFaint} /> : null}
+        <Text style={[styles.valueText, { flex: 1 }]} numberOfLines={1}>{value || '—'}</Text>
+        <Ionicons name="lock-closed" size={13} color={C.inkFaint} />
+      </View>
+    </View>
+  );
+}
+
+function PickerModal({
+  visible, title, options, value, onSelect, onClose,
+}: {
+  visible: boolean; title: string; options: string[]; value: string;
+  onSelect: (v: string) => void; onClose: () => void;
+}) {
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={onClose}>
+        <View style={styles.modalSheet}>
+          {!isWeb && <View style={styles.modalHandle} />}
+          <Text style={styles.modalTitle}>{title}</Text>
+          {options.map((item) => {
+            const active = item === value;
+            return (
+              <TouchableOpacity
+                key={item}
+                style={[styles.modalItem, webPointer, active && styles.modalItemActive]}
+                onPress={() => { onSelect(item); onClose(); }}
+                accessibilityRole="button"
+                accessibilityState={{ selected: active }}
+              >
+                <Text style={[styles.modalItemText, active && styles.modalItemTextActive]}>{item}</Text>
+                {active && <Ionicons name="checkmark-circle" size={22} color={C.primaryDark} />}
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      </TouchableOpacity>
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Screen
+// ---------------------------------------------------------------------------
+const snapshotOf = (f: Record<string, any>, kids: ChildProfile[]) =>
+  JSON.stringify([f.firstName, f.middleName, f.lastName, f.email, f.dob, f.gender, f.civilStatus, f.contact, f.address, kids]);
+
 export default function ProfileScreen() {
   const router = useRouter();
   const { user, updateProfile, logout } = useAuth();
   const [loading, setLoading] = useState(false);
+  const [profileOscaId, setProfileOscaId] = useState<{ userId: number; value: string } | null>(null);
+  const oscaIdNumber = (profileOscaId?.userId === user?.id ? profileOscaId?.value : '')
+    || user?.oscaIdNumber?.trim()
+    || (user?.id ? `SA-${String(user.id).padStart(4, '0')}` : '');
   const [avatarUri, setAvatarUri] = useState<string | null>(user?.profilePhoto ?? user?.avatarUrl ?? null);
   const [avatarUploading, setAvatarUploading] = useState(false);
-  const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [genderOpen, setGenderOpen] = useState(false);
   const [civilStatusOpen, setCivilStatusOpen] = useState(false);
 
@@ -188,6 +340,9 @@ export default function ProfileScreen() {
     profilePhoto: user?.profilePhoto ?? user?.avatarUrl ?? null,
   });
 
+  const [baseline, setBaseline] = useState(() => snapshotOf(form, children));
+  const dirty = snapshotOf(form, children) !== baseline;
+
   const ready = useMemo(() => !!user, [user]);
 
   useEffect(() => {
@@ -208,8 +363,9 @@ export default function ProfileScreen() {
 
     getUser(user.id)
       .then(({ user: profile }) => {
+        setProfileOscaId({ userId: user.id, value: profile.oscaIdNumber?.trim() || '' });
         const nextProfilePhoto = profile.profilePhoto ?? profile.avatarUrl ?? sessionFallback.profilePhoto ?? null;
-        setForm({
+        const nextForm = {
           firstName: profile.firstName || sessionFallback.firstName,
           lastName: profile.lastName || sessionFallback.lastName,
           email: profile.email || sessionFallback.email,
@@ -220,17 +376,23 @@ export default function ProfileScreen() {
           contact: profile.contact ?? sessionFallback.contact,
           address: profile.address ?? sessionFallback.address,
           profilePhoto: nextProfilePhoto,
-        });
-        setChildren(profile.children ?? user.children ?? []);
+        };
+        const nextChildren = profile.children ?? user.children ?? [];
+        setForm(nextForm);
+        setChildren(nextChildren);
+        setBaseline(snapshotOf(nextForm, nextChildren));
         setBirthcert(profile.birthcert ?? user.birthcert ?? null);
         if (nextProfilePhoto) setAvatarUri(nextProfilePhoto);
       })
       .catch((err) => {
         console.warn('[Profile] getUser failed:', err?.message);
         setForm(sessionFallback);
+        setBaseline(snapshotOf(sessionFallback, children));
       });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id, user?.firstName, user?.lastName, user?.email, user?.middleName, user?.dob, user?.gender, user?.civilStatus, user?.contact, user?.address, user?.birthcert]);
 
+  // ── Birth certificate ──
   const handleBirthCertificatePick = async () => {
     if (!user?.id) return;
 
@@ -275,7 +437,7 @@ export default function ProfileScreen() {
     if (!user?.id || !birthcert) return;
 
     Alert.alert(
-      'Delete Birth Certificate',
+      'Delete birth certificate',
       'Are you sure you want to remove your birth certificate from your profile?',
       [
         { text: 'Cancel', style: 'cancel' },
@@ -301,6 +463,7 @@ export default function ProfileScreen() {
     );
   };
 
+  // ── Children ──
   const addChild = () => {
     setChildren((prev) => [...prev, { id: Date.now().toString(), name: '', dob: '' }]);
   };
@@ -322,6 +485,7 @@ export default function ProfileScreen() {
     if (childDobPickerId) updateChild(childDobPickerId, 'dob', toDobString(date));
   };
 
+  // ── Avatar ──
   const handlePickAvatar = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
@@ -345,7 +509,6 @@ export default function ProfileScreen() {
     // Instantly show selected photo locally so user sees feedback right away
     setAvatarUri(asset.uri);
     setAvatarUploading(true);
-    setUploadingPhoto(true);
     try {
       let b64 = asset.base64;
       if (!b64 && asset.uri) {
@@ -371,7 +534,6 @@ export default function ProfileScreen() {
       Alert.alert('Upload failed', err instanceof Error ? err.message : 'Please try again.');
     } finally {
       setAvatarUploading(false);
-      setUploadingPhoto(false);
     }
   };
 
@@ -405,6 +567,7 @@ export default function ProfileScreen() {
         children,
       });
       await updateProfile(updated);
+      setBaseline(snapshotOf(form, children));
       Alert.alert('Profile updated', 'Your changes have been saved.');
     } catch (error) {
       Alert.alert('Update failed', error instanceof Error ? error.message : 'Please try again.');
@@ -413,24 +576,22 @@ export default function ProfileScreen() {
     }
   };
 
-  const handlePhotoPick = () => {
-    handlePickAvatar();
-  };
-
   const handleLogout = async () => {
     await logout();
     router.replace('/(tabs)');
   };
 
-  if (!ready) {
+  if (!ready || !user) {
     return (
       <SafeAreaView style={styles.safe}>
         <StatusBar barStyle="dark-content" />
         <View style={styles.emptyState}>
-          <Ionicons name="person-circle-outline" size={48} color={C.primaryDark} />
-          <Text style={styles.emptyTitle}>Profile unavailable</Text>
-          <Text style={styles.emptyText}>Please log in to manage your profile.</Text>
-          <TouchableOpacity style={styles.primaryBtn} onPress={() => router.push('/login')}>
+          <View style={styles.emptyIcon}>
+            <Ionicons name="person-outline" size={30} color={C.primaryDark} />
+          </View>
+          <Text style={styles.emptyTitle}>Log in to see your profile</Text>
+          <Text style={styles.emptyText}>Your details, Digital ID, and documents are saved to your account.</Text>
+          <TouchableOpacity style={[styles.primaryBtn, { flex: 0, paddingHorizontal: 28 }]} onPress={() => router.push('/login')}>
             <Text style={styles.primaryBtnText}>Go to login</Text>
           </TouchableOpacity>
         </View>
@@ -438,74 +599,92 @@ export default function ProfileScreen() {
     );
   }
 
+  // ── Derived ──
   const fullName = [form.firstName, form.middleName, form.lastName].filter(Boolean).join(' ') || 'Senior Citizen';
+  const initials = `${form.firstName?.[0] ?? ''}${form.lastName?.[0] ?? ''}`.toUpperCase() || '?';
   const profileAge = getAge(user?.dob);
   const canHaveSeniorQr = profileAge !== null && profileAge >= 60;
+  const birthcertIsPdf = !!birthcert && birthcert.toLowerCase().includes('.pdf');
+
+  const completion = [
+    { done: !!form.firstName.trim(), hint: 'Add your first name' },
+    { done: !!form.lastName.trim(), hint: 'Add your last name' },
+    { done: !!form.email.trim(), hint: 'Add your email' },
+    { done: !!form.dob, hint: 'Add your date of birth' },
+    { done: !!form.gender, hint: 'Choose your gender' },
+    { done: !!form.civilStatus, hint: 'Choose your civil status' },
+    { done: !!form.contact.trim(), hint: 'Add a contact number' },
+    { done: !!form.address.trim(), hint: 'Add your address' },
+    { done: !!birthcert, hint: 'Upload your birth certificate' },
+  ];
+  const completeCount = completion.filter((c) => c.done).length;
+  const completePct = Math.round((completeCount / completion.length) * 100);
+  const nextHint = completion.find((c) => !c.done)?.hint;
 
   return (
     <SafeAreaView style={styles.safe}>
       <StatusBar barStyle="dark-content" />
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
-        <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+        <ScrollView
+          contentContainerStyle={styles.container}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
           {/* Header */}
           <View style={styles.header}>
-            <TouchableOpacity style={[styles.backBtn, webPointer]} onPress={() => router.back()} activeOpacity={0.8}>
+            <TouchableOpacity
+              style={[styles.backBtn, webPointer]}
+              onPress={() => router.back()}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel="Go back"
+            >
               <Ionicons name="chevron-back" size={20} color={C.ink} />
             </TouchableOpacity>
             <View style={styles.headerTitleWrap}>
-              <Text style={styles.title}>My Profile</Text>
-              <Text style={styles.subtitle}>Manage your account information</Text>
+              <Text style={styles.title}>My profile</Text>
+              <Text style={styles.subtitle}>Your details and documents</Text>
             </View>
             <View style={styles.placeholder} />
           </View>
 
-          {/* Body */}
           <View style={styles.bodyLayout}>
-            {/* Left Column: Avatar Card + QR Card */}
+            {/* ───────── Left column ───────── */}
             <View style={styles.leftCol}>
               <View style={[styles.profileCard, shadow(C.ink, 0.08, 16, 4)]}>
-                <LinearGradient colors={[C.primaryMid, C.primaryDark]} style={styles.banner} />
-                <TouchableOpacity
-                  style={[styles.avatarWrap, webPointer]}
-                  onPress={handlePickAvatar}
-                  disabled={avatarUploading}
-                  activeOpacity={0.85}
-                >
-                  {avatarUri ? (
-                    <Image key={avatarUri} source={{ uri: avatarUri }} style={styles.avatarImage} />
-                  ) : (
-                    <Ionicons name="person" size={46} color={C.primary} />
-                  )}
-                  <View style={styles.avatarBadge}>
-                    {avatarUploading ? (
-                      <ActivityIndicator size="small" color={C.white} />
+                <LinearGradient
+                  colors={[C.primaryMid, C.primaryDark]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.banner}
+                />
+                <View style={styles.avatarOuter}>
+                  <TouchableOpacity
+                    style={[styles.avatarWrap, webPointer]}
+                    onPress={handlePickAvatar}
+                    disabled={avatarUploading}
+                    activeOpacity={0.85}
+                    accessibilityRole="button"
+                    accessibilityLabel="Change profile photo"
+                  >
+                    {avatarUri ? (
+                      <Image key={avatarUri} source={{ uri: avatarUri }} style={styles.avatarImage} />
                     ) : (
-                      <Ionicons name="camera" size={13} color={C.white} />
+                      <Text style={styles.avatarInitials}>{initials}</Text>
                     )}
+                    {avatarUploading && (
+                      <View style={styles.avatarOverlay}>
+                        <ActivityIndicator color={C.white} />
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                  <View style={styles.avatarBadge} pointerEvents="none">
+                    <Ionicons name="camera" size={13} color={C.white} />
                   </View>
-                </TouchableOpacity>
-
-                <Text style={styles.nameText}>{fullName}</Text>
-                <View style={styles.emailRow}>
-                  <Ionicons name="mail-outline" size={13} color={C.inkFaint} />
-                  <Text style={styles.emailText}>{form.email || 'No email'}</Text>
                 </View>
 
-                <TouchableOpacity
-                  style={[styles.changePhotoBtn, webPointer]}
-                  onPress={handlePhotoPick}
-                  disabled={uploadingPhoto}
-                  activeOpacity={0.85}
-                >
-                  {uploadingPhoto ? (
-                    <ActivityIndicator color={C.primaryDark} size="small" />
-                  ) : (
-                    <>
-                      <Ionicons name="image-outline" size={15} color={C.primaryDark} />
-                      <Text style={styles.changePhotoBtnText}>Choose from gallery</Text>
-                    </>
-                  )}
-                </TouchableOpacity>
+                <Text style={styles.nameText} numberOfLines={2}>{fullName}</Text>
+                <Text style={styles.emailText} numberOfLines={1}>{form.email || 'No email saved'}</Text>
 
                 <View style={styles.metaRow}>
                   <View style={styles.metaPill}>
@@ -514,19 +693,36 @@ export default function ProfileScreen() {
                   </View>
                   <View style={styles.metaPill}>
                     <Text style={styles.metaLabel}>Status</Text>
-                    <Text style={[styles.metaVal, { color: C.primary }]}>Active</Text>
+                    <View style={styles.statusRow}>
+                      <View style={styles.statusDot} />
+                      <Text style={[styles.metaVal, { color: C.primary, marginTop: 0 }]}>Active</Text>
+                    </View>
                   </View>
+                </View>
+
+                {/* Completion */}
+                <View style={styles.completion}>
+                  <View style={styles.completionTop}>
+                    <Text style={styles.completionTitle}>Profile completion</Text>
+                    <Text style={styles.completionPct}>{completePct}%</Text>
+                  </View>
+                  <View style={styles.completionTrack}>
+                    <View style={[styles.completionFill, { width: `${completePct}%` }]} />
+                  </View>
+                  <Text style={styles.completionHint}>
+                    {nextHint ? `Next: ${nextHint}.` : 'Everything is filled in.'}
+                  </Text>
                 </View>
               </View>
 
-              {/* Digital ID QR */}
-              {user && canHaveSeniorQr ? (
+              {/* Digital ID */}
+              {canHaveSeniorQr ? (
                 <View style={[styles.qrCard, shadow(C.ink, 0.08, 16, 4)]}>
                   <View style={styles.qrHeader}>
                     <Ionicons name="qr-code-outline" size={18} color={C.primaryDark} />
                     <Text style={styles.qrTitle}>Digital ID</Text>
                   </View>
-                  <Text style={styles.qrDesc}>Present this code to verify your Senior Citizen status</Text>
+                  <Text style={styles.qrDesc}>Show this code to confirm your Senior Citizen status.</Text>
                   <View style={styles.qrWrap}>
                     <QRCode
                       value={JSON.stringify({
@@ -535,14 +731,14 @@ export default function ProfileScreen() {
                         dob: user.dob,
                         role: user.role,
                       })}
-                      size={140}
+                      size={148}
                       color={C.ink}
                       backgroundColor={C.white}
                     />
                   </View>
-                  <View style={styles.qrLabelRow}>
+                  <View style={styles.verifiedPill}>
                     <Ionicons name="shield-checkmark" size={14} color={C.primary} />
-                    <Text style={styles.qrLabel}>OSCA Verified</Text>
+                    <Text style={styles.verifiedText}>OSCA verified</Text>
                   </View>
                   <TouchableOpacity
                     style={[styles.viewIdBtn, webPointer]}
@@ -550,312 +746,256 @@ export default function ProfileScreen() {
                     activeOpacity={0.85}
                   >
                     <Ionicons name="card-outline" size={16} color={C.white} />
-                    <Text style={styles.viewIdBtnTxt}>View Full ID Card</Text>
+                    <Text style={styles.viewIdBtnTxt}>View full ID card</Text>
                   </TouchableOpacity>
                 </View>
-              ) : user ? (
+              ) : (
                 <View style={[styles.qrCard, shadow(C.ink, 0.08, 16, 4)]}>
-                  <View style={styles.qrHeader}>
-                    <Ionicons name="lock-closed-outline" size={18} color={C.primaryDark} />
-                    <Text style={styles.qrTitle}>Digital ID unavailable</Text>
+                  <View style={styles.lockedIcon}>
+                    <Ionicons name="lock-closed-outline" size={20} color={C.inkSoft} />
                   </View>
-                  <Text style={styles.qrDesc}>A Senior Citizen QR code is available only to users aged 60 and above.</Text>
+                  <Text style={styles.qrTitle}>Digital ID not available</Text>
+                  <Text style={[styles.qrDesc, { marginTop: 4, marginBottom: 0 }]}>
+                    The Senior Citizen Digital ID is for users aged 60 and above.
+                  </Text>
                 </View>
-              ) : null}
+              )}
             </View>
 
-            {/* Right Column: Information Form */}
+            {/* ───────── Right column ───────── */}
             <View style={styles.rightCol}>
-              <View style={[styles.formCard, shadow(C.ink, 0.08, 16, 4)]}>
-                <View style={styles.sectionHeader}>
-                  <Text style={styles.sectionTitle}>Personal Information</Text>
-                  <Text style={styles.sectionSubtitle}>Update your personal details below</Text>
-                </View>
-
+              {/* Name */}
+              <Section icon="person-outline" title="Name">
                 <View style={styles.fieldRow}>
-                  <View style={styles.fieldThird}>
-                    <Text style={styles.label}>First Name *</Text>
-                    <TextInput
-                      style={styles.input}
-                      value={form.firstName}
-                      onChangeText={(value) => updateField('firstName', value)}
-                      placeholder="First name"
-                      placeholderTextColor={C.inkFaint}
-                    />
-                  </View>
-                  <View style={styles.fieldThird}>
-                    <Text style={styles.label}>Middle Name</Text>
-                    <TextInput
-                      style={styles.input}
-                      value={form.middleName}
-                      onChangeText={(value) => updateField('middleName', value)}
-                      placeholder="Middle"
-                      placeholderTextColor={C.inkFaint}
-                    />
-                  </View>
-                  <View style={styles.fieldThird}>
-                    <Text style={styles.label}>Last Name *</Text>
-                    <TextInput
-                      style={styles.input}
-                      value={form.lastName}
-                      onChangeText={(value) => updateField('lastName', value)}
-                      placeholder="Last name"
-                      placeholderTextColor={C.inkFaint}
-                    />
-                  </View>
+                  <TextField
+                    label="First name"
+                    required
+                    value={form.firstName}
+                    onChangeText={(v) => updateField('firstName', v)}
+                    placeholder="First name"
+                    autoCapitalize="words"
+                  />
+                  <TextField
+                    label="Last name"
+                    required
+                    value={form.lastName}
+                    onChangeText={(v) => updateField('lastName', v)}
+                    placeholder="Last name"
+                    autoCapitalize="words"
+                  />
                 </View>
-
                 <View style={styles.fieldRow}>
-                  <View style={styles.fieldHalf}>
-                    <Text style={styles.label}>OSCA ID Number</Text>
-                    <TextInput
-                      style={[styles.input, styles.readOnly]}
-                      value={user?.oscaIdNumber || '—'}
-                      editable={false}
-                      placeholder="OSCA ID"
-                      placeholderTextColor={C.inkFaint}
-                    />
-                  </View>
-
-                  <View style={styles.fieldHalf}>
-                    <Text style={styles.label}>Date of Birth</Text>
-                    <View style={[styles.input, styles.readOnly]}>
-                      <Ionicons name="calendar-outline" size={14} color={C.inkFaint} style={{ marginRight: 6 }} />
-                      <Text style={styles.readOnlyText}>{form.dob || '—'}</Text>
-                    </View>
-                  </View>
+                  <TextField
+                    label="Middle name"
+                    value={form.middleName}
+                    onChangeText={(v) => updateField('middleName', v)}
+                    placeholder="Middle name"
+                    autoCapitalize="words"
+                  />
                 </View>
+              </Section>
 
+              {/* Identity (read only) */}
+              <Section icon="id-card-outline" title="Identity" subtitle="These details can't be edited here.">
                 <View style={styles.fieldRow}>
-                  <View style={styles.fieldHalf}>
-                    <Text style={styles.label}>Gender</Text>
-                    <TouchableOpacity
-                      style={[styles.input, styles.readOnly, webPointer, { justifyContent: 'space-between' }]}
-                      onPress={() => setGenderOpen(true)}
-                      activeOpacity={0.8}
-                    >
-                      <Text style={form.gender ? styles.readOnlyText : styles.placeholderText}>
-                        {form.gender || 'Select gender'}
-                      </Text>
-                      <Ionicons name="chevron-down" size={14} color={C.inkFaint} />
-                    </TouchableOpacity>
-                  </View>
-
-                  <View style={styles.fieldHalf}>
-                    <Text style={styles.label}>Civil Status</Text>
-                    <TouchableOpacity
-                      style={[styles.input, styles.readOnly, webPointer, { justifyContent: 'space-between' }]}
-                      onPress={() => setCivilStatusOpen(true)}
-                      activeOpacity={0.8}
-                    >
-                      <Text style={form.civilStatus ? styles.readOnlyText : styles.placeholderText}>
-                        {form.civilStatus || 'Select civil status'}
-                      </Text>
-                      <Ionicons name="chevron-down" size={14} color={C.inkFaint} />
-                    </TouchableOpacity>
-                  </View>
+                  <ReadOnlyField label="OSCA ID number" value={oscaIdNumber} />
+                  <ReadOnlyField label="Date of birth" value={form.dob} icon="calendar-outline" />
                 </View>
+              </Section>
 
+              {/* Personal + contact */}
+              <Section icon="create-outline" title="Personal and contact details">
                 <View style={styles.fieldRow}>
-                  <View style={styles.fieldHalf}>
-                    <Text style={styles.label}>Contact</Text>
-                    <TextInput
-                      style={styles.input}
-                      value={form.contact}
-                      onChangeText={(value) => updateField('contact', value)}
-                      placeholder="09XXXXXXXXX"
-                      keyboardType="phone-pad"
-                      placeholderTextColor={C.inkFaint}
-                    />
-                  </View>
+                  <SelectField
+                    label="Gender"
+                    value={form.gender}
+                    placeholder="Select gender"
+                    onPress={() => setGenderOpen(true)}
+                  />
+                  <SelectField
+                    label="Civil status"
+                    value={form.civilStatus}
+                    placeholder="Select status"
+                    onPress={() => setCivilStatusOpen(true)}
+                  />
                 </View>
-
-                <View style={styles.divider} />
-
                 <View style={styles.fieldRow}>
-                  <View style={styles.fieldFull}>
-                    <Text style={styles.label}>Email</Text>
-                    <TextInput
-                      style={styles.input}
-                      value={form.email}
-                      onChangeText={(value) => updateField('email', value)}
-                      placeholder="you@example.com"
-                      keyboardType="email-address"
-                      autoCapitalize="none"
-                      placeholderTextColor={C.inkFaint}
-                    />
-                  </View>
+                  <TextField
+                    label="Contact number"
+                    value={form.contact}
+                    onChangeText={(v) => updateField('contact', v)}
+                    placeholder="09XXXXXXXXX"
+                    keyboardType="phone-pad"
+                  />
+                  <TextField
+                    label="Email"
+                    required
+                    value={form.email}
+                    onChangeText={(v) => updateField('email', v)}
+                    placeholder="you@example.com"
+                    keyboardType="email-address"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
                 </View>
-
-                <Text style={styles.label}>Address</Text>
-                <TextInput
-                  style={[styles.input, styles.textArea]}
+                <TextField
+                  label="Address"
                   value={form.address}
-                  onChangeText={(value) => updateField('address', value)}
-                  placeholder="Barangay, Pateros"
+                  onChangeText={(v) => updateField('address', v)}
+                  placeholder="House no., street, barangay, Pateros"
                   multiline
-                  placeholderTextColor={C.inkFaint}
+                  style={styles.textArea}
                 />
+              </Section>
 
-                {/* Birth Certificate Section */}
-                <View style={styles.birthcertSection}>
-                  <View style={styles.birthcertHeader}>
-                    <View style={styles.sectionHeaderInline}>
-                      <View style={styles.sectionIconWrap}>
-                        <Ionicons name="document-text-outline" size={15} color={C.primaryDark} />
-                      </View>
-                      <View>
-                        <Text style={styles.sectionTitle}>Birth Certificate</Text>
-                        <Text style={styles.childrenHint}>PDF, PNG, or JPG</Text>
-                      </View>
-                    </View>
-                    {!birthcert ? (
-                      <TouchableOpacity
-                        style={[styles.addChildBtn, webPointer]}
-                        onPress={handleBirthCertificatePick}
-                        disabled={birthcertUploading}
-                        activeOpacity={0.85}
-                      >
-                        {birthcertUploading ? (
-                          <ActivityIndicator color={C.white} size="small" />
-                        ) : (
-                          <Ionicons name="cloud-upload-outline" size={17} color={C.white} />
-                        )}
-                        <Text style={styles.addChildBtnText}>Upload</Text>
-                      </TouchableOpacity>
-                    ) : null}
-                  </View>
-
-                  {birthcert ? (
-                    <View style={styles.birthcertCard}>
-                      <TouchableOpacity
-                        style={[styles.birthcertCardMain, webPointer]}
-                        onPress={() => setViewerVisible(true)}
-                        activeOpacity={0.8}
-                      >
-                        <View style={styles.birthcertBadge}>
-                          <Ionicons name="checkmark-circle" size={20} color={C.primary} />
-                        </View>
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.birthcertCardTitle}>Birth Certificate</Text>
-                          <Text style={styles.birthcertCardSubtitle}>
-                            {birthcert.toLowerCase().includes('.pdf') ? 'PDF Document • Tap to view in-app' : 'Image File • Tap to view in-app'}
-                          </Text>
-                        </View>
-                        <View style={styles.birthcertViewPill}>
-                          <Ionicons name="eye-outline" size={15} color={C.primary} />
-                          <Text style={styles.birthcertViewPillText}>View</Text>
-                        </View>
-                      </TouchableOpacity>
-
-                      <View style={styles.birthcertActionsRow}>
-                        <TouchableOpacity
-                          style={[styles.birthcertActionBtn, styles.birthcertReplaceBtn, webPointer]}
-                          onPress={handleBirthCertificatePick}
-                          disabled={birthcertUploading || birthcertDeleting}
-                          activeOpacity={0.8}
-                        >
-                          {birthcertUploading ? (
-                            <ActivityIndicator size="small" color={C.primaryDark} />
-                          ) : (
-                            <Ionicons name="swap-horizontal-outline" size={16} color={C.primaryDark} />
-                          )}
-                          <Text style={styles.birthcertReplaceBtnText}>Replace</Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity
-                          style={[styles.birthcertActionBtn, styles.birthcertDeleteBtn, webPointer]}
-                          onPress={handleDeleteBirthCertificate}
-                          disabled={birthcertUploading || birthcertDeleting}
-                          activeOpacity={0.8}
-                        >
-                          {birthcertDeleting ? (
-                            <ActivityIndicator size="small" color={C.error} />
-                          ) : (
-                            <Ionicons name="trash-outline" size={16} color={C.error} />
-                          )}
-                          <Text style={styles.birthcertDeleteBtnText}>Delete</Text>
-                        </TouchableOpacity>
-                      </View>
-                    </View>
-                  ) : (
+              {/* Birth certificate */}
+              <Section
+                icon="document-text-outline"
+                title="Birth certificate"
+                subtitle="PDF, PNG, or JPG"
+                right={
+                  !birthcert ? (
                     <TouchableOpacity
-                      style={[styles.birthcertStatus, styles.birthcertMissing, webPointer]}
+                      style={[styles.smallBtn, webPointer]}
                       onPress={handleBirthCertificatePick}
                       disabled={birthcertUploading}
-                      activeOpacity={0.8}
+                      activeOpacity={0.85}
                     >
-                      <Ionicons name="alert-circle-outline" size={18} color={C.goldDark} />
-                      <Text style={[styles.birthcertStatusText, styles.birthcertMissingText]}>
-                        Missing - upload your birth certificate
-                      </Text>
+                      {birthcertUploading ? (
+                        <ActivityIndicator color={C.white} size="small" />
+                      ) : (
+                        <Ionicons name="cloud-upload-outline" size={16} color={C.white} />
+                      )}
+                      <Text style={styles.smallBtnText}>Upload</Text>
                     </TouchableOpacity>
-                  )}
-                </View>
+                  ) : null
+                }
+              >
+                {birthcert ? (
+                  <View style={styles.docCard}>
+                    <TouchableOpacity
+                      style={[styles.docMain, webPointer]}
+                      onPress={() => setViewerVisible(true)}
+                      activeOpacity={0.8}
+                      accessibilityRole="button"
+                      accessibilityLabel="View birth certificate"
+                    >
+                      <View style={styles.docIcon}>
+                        <Ionicons name={birthcertIsPdf ? 'document-text' : 'image'} size={20} color={C.primary} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.docTitle}>Birth certificate on file</Text>
+                        <Text style={styles.docSub}>{birthcertIsPdf ? 'PDF document' : 'Image file'} · Tap to preview</Text>
+                      </View>
+                      <Ionicons name="chevron-forward" size={18} color={C.inkFaint} />
+                    </TouchableOpacity>
 
-                <View style={styles.divider} />
-
-                {/* Children Section */}
-                <View style={styles.childrenHeader}>
-                  <View style={styles.sectionHeaderInline}>
-                    <View style={styles.sectionIconWrap}>
-                      <Ionicons name="people-outline" size={15} color={C.primaryDark} />
-                    </View>
-                    <View>
-                      <Text style={styles.sectionTitle}>Children</Text>
-                      <Text style={styles.childrenHint}>Add as many children as needed.</Text>
+                    <View style={styles.docActions}>
+                      <TouchableOpacity
+                        style={[styles.docActionBtn, styles.docActionDivider, webPointer]}
+                        onPress={handleBirthCertificatePick}
+                        disabled={birthcertUploading || birthcertDeleting}
+                        activeOpacity={0.8}
+                      >
+                        {birthcertUploading ? (
+                          <ActivityIndicator size="small" color={C.primaryDark} />
+                        ) : (
+                          <Ionicons name="swap-horizontal-outline" size={16} color={C.primaryDark} />
+                        )}
+                        <Text style={[styles.docActionText, { color: C.primaryDark }]}>Replace</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[styles.docActionBtn, webPointer]}
+                        onPress={handleDeleteBirthCertificate}
+                        disabled={birthcertUploading || birthcertDeleting}
+                        activeOpacity={0.8}
+                      >
+                        {birthcertDeleting ? (
+                          <ActivityIndicator size="small" color={C.error} />
+                        ) : (
+                          <Ionicons name="trash-outline" size={16} color={C.error} />
+                        )}
+                        <Text style={[styles.docActionText, { color: C.error }]}>Delete</Text>
+                      </TouchableOpacity>
                     </View>
                   </View>
-                  <TouchableOpacity style={[styles.addChildBtn, webPointer]} onPress={addChild} activeOpacity={0.85}>
-                    <Ionicons name="add" size={18} color={C.white} />
-                    <Text style={styles.addChildBtnText}>Add child</Text>
-                  </TouchableOpacity>
-                </View>
-
-                {children.length === 0 ? (
-                  <Text style={styles.noChildrenText}>No children added yet.</Text>
                 ) : (
-                  children.map((child, index) => (
+                  <TouchableOpacity
+                    style={[styles.docMissing, webPointer]}
+                    onPress={handleBirthCertificatePick}
+                    disabled={birthcertUploading}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="alert-circle-outline" size={20} color={C.goldDark} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.docMissingTitle}>No birth certificate yet</Text>
+                      <Text style={styles.docMissingSub}>Tap here to upload one from your device.</Text>
+                    </View>
+                  </TouchableOpacity>
+                )}
+              </Section>
+
+              {/* Children */}
+              <Section
+                icon="people-outline"
+                title="Children"
+                subtitle={children.length ? `${children.length} added` : 'Add as many as you need.'}
+                right={
+                  <TouchableOpacity style={[styles.smallBtn, webPointer]} onPress={addChild} activeOpacity={0.85}>
+                    <Ionicons name="add" size={17} color={C.white} />
+                    <Text style={styles.smallBtnText}>Add child</Text>
+                  </TouchableOpacity>
+                }
+              >
+                {children.length === 0 ? (
+                  <TouchableOpacity style={[styles.childEmpty, webPointer]} onPress={addChild} activeOpacity={0.8}>
+                    <Ionicons name="happy-outline" size={22} color={C.inkFaint} />
+                    <Text style={styles.childEmptyText}>No children added yet. Tap to add one.</Text>
+                  </TouchableOpacity>
+                ) : (
+                  children.map((child) => (
                     <View key={child.id} style={styles.childRow}>
-                      <View style={styles.childNumber}>
-                        <Text style={styles.childNumberText}>{index + 1}</Text>
+                      <View style={styles.childIcon}>
+                        <Ionicons name="person-outline" size={16} color={C.primaryDark} />
                       </View>
                       <View style={styles.childFields}>
-                        <Text style={styles.label}>Child name</Text>
-                        <TextInput
-                          style={styles.input}
+                        <TextField
+                          label="Child's name"
                           value={child.name}
-                          onChangeText={(value) => updateChild(child.id, 'name', value)}
+                          onChangeText={(v) => updateChild(child.id, 'name', v)}
                           placeholder="Full name"
-                          placeholderTextColor={C.inkFaint}
+                          autoCapitalize="words"
                         />
-                        <Text style={styles.label}>Date of birth</Text>
-                        {Platform.OS === 'web' ? (
-                          <input
-                            type="date"
-                            value={parseDobString(child.dob)?.toISOString().split('T')[0] ?? ''}
-                            onChange={(event) => {
-                              const value = event.target.value;
-                              if (value) {
-                                const [year, month, day] = value.split('-').map(Number);
-                                updateChild(child.id, 'dob', toDobString(new Date(year, month - 1, day)));
-                              }
-                            }}
-                            max={new Date().toISOString().split('T')[0]}
-                            style={styles.input as any}
-                          />
-                        ) : (
-                          <TouchableOpacity
-                            style={[styles.input, webPointer, { justifyContent: 'space-between' }]}
-                            onPress={() => openChildDobPicker(child)}
-                            activeOpacity={0.8}
-                          >
-                            <Text style={child.dob ? styles.readOnlyText : styles.placeholderText}>
-                              {child.dob || 'Select date of birth'}
-                            </Text>
-                            <Ionicons name="calendar-outline" size={16} color={C.inkFaint} />
-                          </TouchableOpacity>
-                        )}
+                        <View style={styles.field}>
+                          <FieldLabel label="Date of birth" />
+                          {isWeb ? (
+                            <input
+                              type="date"
+                              value={parseDobString(child.dob)?.toISOString().split('T')[0] ?? ''}
+                              onChange={(event) => {
+                                const value = event.target.value;
+                                if (value) {
+                                  const [year, month, day] = value.split('-').map(Number);
+                                  updateChild(child.id, 'dob', toDobString(new Date(year, month - 1, day)));
+                                }
+                              }}
+                              max={new Date().toISOString().split('T')[0]}
+                              style={webDateStyle}
+                            />
+                          ) : (
+                            <TouchableOpacity
+                              style={[styles.input, styles.selectInput]}
+                              onPress={() => openChildDobPicker(child)}
+                              activeOpacity={0.8}
+                            >
+                              <Text style={child.dob ? styles.valueText : styles.placeholderText}>
+                                {child.dob || 'Select date of birth'}
+                              </Text>
+                              <Ionicons name="calendar-outline" size={16} color={C.inkFaint} />
+                            </TouchableOpacity>
+                          )}
+                        </View>
+
                         {Platform.OS === 'android' && childDobPickerId === child.id && (
                           <DateTimePicker
                             value={childDobDraft}
@@ -882,7 +1022,8 @@ export default function ProfileScreen() {
                               onPress={() => setChildDobPickerId(null)}
                             >
                               <View style={styles.modalSheet}>
-                                <Text style={styles.modalTitle}>Select child date of birth</Text>
+                                <View style={styles.modalHandle} />
+                                <Text style={styles.modalTitle}>Child&apos;s date of birth</Text>
                                 <DateTimePicker
                                   value={childDobDraft}
                                   mode="date"
@@ -910,96 +1051,83 @@ export default function ProfileScreen() {
                         style={[styles.removeChildBtn, webPointer]}
                         onPress={() => removeChild(child.id)}
                         activeOpacity={0.8}
+                        accessibilityRole="button"
+                        accessibilityLabel="Remove child"
                       >
                         <Ionicons name="trash-outline" size={16} color={C.error} />
                       </TouchableOpacity>
                     </View>
                   ))
                 )}
-              </View>
+              </Section>
 
-              {Platform.OS !== 'web' && (
-                <View style={styles.actions}>
-                  <TouchableOpacity style={[styles.secondaryBtn, webPointer]} onPress={handleLogout} activeOpacity={0.85}>
-                    <Ionicons name="log-out-outline" size={18} color={C.primaryDark} />
-                    <Text style={styles.secondaryBtnText}>Log out</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={[styles.primaryBtn, shadow(C.primaryDark, 0.24, 10, 4), webPointer]}
-                    onPress={handleSave}
-                    disabled={loading}
-                    activeOpacity={0.9}
-                  >
-                    {loading ? (
-                      <ActivityIndicator color={C.white} />
-                    ) : (
-                      <>
-                        <Ionicons name="save-outline" size={18} color={C.white} />
-                        <Text style={styles.primaryBtnText}>Save changes</Text>
-                      </>
-                    )}
-                  </TouchableOpacity>
-                </View>
+              {!isWeb && (
+                <TouchableOpacity style={styles.logoutRow} onPress={handleLogout} activeOpacity={0.8}>
+                  <Ionicons name="log-out-outline" size={18} color={C.error} />
+                  <Text style={styles.logoutText}>Log out</Text>
+                </TouchableOpacity>
               )}
             </View>
           </View>
         </ScrollView>
+
+        {/* Sticky save bar */}
+        <View style={styles.saveBar}>
+          <View style={styles.saveBarInner}>
+            <View style={styles.saveBarStatus}>
+              <View style={[styles.saveDot, { backgroundColor: dirty ? C.gold : C.primaryMid }]} />
+              <Text style={styles.saveBarText}>{dirty ? 'You have unsaved changes' : 'All changes saved'}</Text>
+            </View>
+            <TouchableOpacity
+              style={[styles.saveBtn, (!dirty || loading) && styles.saveBtnDisabled, webPointer]}
+              onPress={handleSave}
+              disabled={!dirty || loading}
+              activeOpacity={0.9}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: !dirty || loading }}
+            >
+              {loading ? (
+                <ActivityIndicator color={C.white} />
+              ) : (
+                <>
+                  <Ionicons name="save-outline" size={17} color={C.white} />
+                  <Text style={styles.primaryBtnText}>Save changes</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
       </KeyboardAvoidingView>
 
-      {/* Gender Picker Modal */}
-      <Modal visible={genderOpen} transparent animationType="fade" onRequestClose={() => setGenderOpen(false)}>
-        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setGenderOpen(false)}>
-          <View style={styles.modalSheet}>
-            {Platform.OS !== 'web' && <View style={styles.modalHandle} />}
-            <Text style={styles.modalTitle}>Select Gender</Text>
-            {['Male', 'Female'].map((item) => (
-              <TouchableOpacity
-                key={item}
-                style={[styles.modalItem, webPointer, item === form.gender && styles.modalItemActive]}
-                onPress={() => { updateField('gender', item); setGenderOpen(false); }}
-              >
-                <Text style={[styles.modalItemText, item === form.gender && styles.modalItemTextActive]}>{item}</Text>
-                {item === form.gender && <Ionicons name="checkmark-circle" size={22} color={C.primaryDark} />}
-              </TouchableOpacity>
-            ))}
-          </View>
-        </TouchableOpacity>
-      </Modal>
+      <PickerModal
+        visible={genderOpen}
+        title="Select gender"
+        options={['Male', 'Female']}
+        value={form.gender}
+        onSelect={(v) => updateField('gender', v)}
+        onClose={() => setGenderOpen(false)}
+      />
+      <PickerModal
+        visible={civilStatusOpen}
+        title="Select civil status"
+        options={['Single', 'Married', 'Widowed', 'Separated', 'Divorced']}
+        value={form.civilStatus}
+        onSelect={(v) => updateField('civilStatus', v)}
+        onClose={() => setCivilStatusOpen(false)}
+      />
 
-      {/* Civil Status Picker Modal */}
-      <Modal visible={civilStatusOpen} transparent animationType="fade" onRequestClose={() => setCivilStatusOpen(false)}>
-        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setCivilStatusOpen(false)}>
-          <View style={styles.modalSheet}>
-            {Platform.OS !== 'web' && <View style={styles.modalHandle} />}
-            <Text style={styles.modalTitle}>Select Civil Status</Text>
-            {['Single', 'Married', 'Widowed', 'Separated', 'Divorced'].map((item) => (
-              <TouchableOpacity
-                key={item}
-                style={[styles.modalItem, webPointer, item === form.civilStatus && styles.modalItemActive]}
-                onPress={() => { updateField('civilStatus', item); setCivilStatusOpen(false); }}
-              >
-                <Text style={[styles.modalItemText, item === form.civilStatus && styles.modalItemTextActive]}>{item}</Text>
-                {item === form.civilStatus && <Ionicons name="checkmark-circle" size={22} color={C.primaryDark} />}
-              </TouchableOpacity>
-            ))}
-          </View>
-        </TouchableOpacity>
-      </Modal>
-
-      {/* Birth Certificate In-App Viewer Modal */}
+      {/* Birth certificate viewer */}
       <Modal
         visible={viewerVisible}
         animationType="fade"
         transparent
         onRequestClose={() => setViewerVisible(false)}
       >
-        <View style={styles.viewerModalOverlay}>
-          <SafeAreaView style={styles.viewerModalSafe}>
-            {/* Header */}
-            <View style={styles.viewerModalHeader}>
+        <View style={styles.viewerOverlay}>
+          <SafeAreaView style={{ flex: 1 }}>
+            <View style={styles.viewerHeader}>
               <TouchableOpacity
-                style={[styles.viewerModalCloseBtn, webPointer]}
+                style={[styles.viewerIconBtn, webPointer]}
                 onPress={() => setViewerVisible(false)}
                 activeOpacity={0.8}
                 accessibilityLabel="Close viewer"
@@ -1007,15 +1135,13 @@ export default function ProfileScreen() {
                 <Ionicons name="close" size={22} color={C.white} />
               </TouchableOpacity>
 
-              <View style={styles.viewerModalTitleWrap}>
-                <Text style={styles.viewerModalTitle}>Birth Certificate</Text>
-                <Text style={styles.viewerModalSubtitle}>
-                  {birthcert?.toLowerCase().includes('.pdf') ? 'PDF Document' : 'Image Preview'}
-                </Text>
+              <View style={{ alignItems: 'center' }}>
+                <Text style={styles.viewerTitle}>Birth certificate</Text>
+                <Text style={styles.viewerSubtitle}>{birthcertIsPdf ? 'PDF document' : 'Image preview'}</Text>
               </View>
 
               <TouchableOpacity
-                style={[styles.viewerModalDeleteHeaderBtn, webPointer]}
+                style={[styles.viewerIconBtn, styles.viewerIconBtnDanger, webPointer]}
                 onPress={handleDeleteBirthCertificate}
                 disabled={birthcertDeleting}
                 activeOpacity={0.8}
@@ -1029,11 +1155,10 @@ export default function ProfileScreen() {
               </TouchableOpacity>
             </View>
 
-            {/* Viewer Content Area */}
-            <View style={styles.viewerModalContent}>
+            <View style={styles.viewerContent}>
               {birthcert ? (
-                birthcert.toLowerCase().includes('.pdf') ? (
-                  Platform.OS === 'web' ? (
+                birthcertIsPdf ? (
+                  isWeb ? (
                     // @ts-ignore
                     <iframe
                       key={birthcert}
@@ -1053,9 +1178,9 @@ export default function ProfileScreen() {
                       style={styles.viewerWebView}
                       startInLoadingState
                       renderLoading={() => (
-                        <View style={styles.viewerLoadingWrap}>
+                        <View style={styles.viewerLoading}>
                           <ActivityIndicator size="large" color={C.primarySoft} />
-                          <Text style={styles.viewerLoadingText}>Loading PDF...</Text>
+                          <Text style={styles.viewerLoadingText}>Loading PDF…</Text>
                         </View>
                       )}
                     />
@@ -1080,10 +1205,9 @@ export default function ProfileScreen() {
               ) : null}
             </View>
 
-            {/* Footer Controls */}
-            <View style={styles.viewerModalFooter}>
+            <View style={styles.viewerFooter}>
               <TouchableOpacity
-                style={[styles.viewerFooterBtn, styles.viewerFooterReplace, webPointer]}
+                style={[styles.viewerFooterBtn, { backgroundColor: C.primarySoft }, webPointer]}
                 onPress={handleBirthCertificatePick}
                 disabled={birthcertUploading || birthcertDeleting}
                 activeOpacity={0.85}
@@ -1093,11 +1217,11 @@ export default function ProfileScreen() {
                 ) : (
                   <Ionicons name="swap-horizontal-outline" size={18} color={C.primaryDark} />
                 )}
-                <Text style={styles.viewerFooterReplaceText}>Replace</Text>
+                <Text style={[styles.viewerFooterText, { color: C.primaryDark }]}>Replace</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={[styles.viewerFooterBtn, styles.viewerFooterDelete, webPointer]}
+                style={[styles.viewerFooterBtn, styles.viewerFooterDanger, webPointer]}
                 onPress={handleDeleteBirthCertificate}
                 disabled={birthcertUploading || birthcertDeleting}
                 activeOpacity={0.85}
@@ -1107,7 +1231,7 @@ export default function ProfileScreen() {
                 ) : (
                   <Ionicons name="trash-outline" size={18} color="#FF8080" />
                 )}
-                <Text style={styles.viewerFooterDeleteText}>Delete</Text>
+                <Text style={[styles.viewerFooterText, { color: '#FF8080' }]}>Delete</Text>
               </TouchableOpacity>
             </View>
           </SafeAreaView>
@@ -1117,17 +1241,22 @@ export default function ProfileScreen() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Styles
+// ---------------------------------------------------------------------------
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: C.bg },
   container: {
     flexGrow: 1,
     paddingHorizontal: sp(5),
     paddingTop: Math.max(sp(3), 10),
-    paddingBottom: sp(10),
+    paddingBottom: sp(8),
     width: '100%',
-    maxWidth: Platform.OS === 'web' ? 1060 : 460,
+    maxWidth: isWeb ? 1060 : 460,
     alignSelf: 'center',
   },
+
+  // Header
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1135,124 +1264,87 @@ const styles = StyleSheet.create({
     marginBottom: sp(5),
   },
   backBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     backgroundColor: C.card,
+    borderWidth: 1,
+    borderColor: C.line,
     alignItems: 'center',
     justifyContent: 'center',
-    ...Platform.select({
-      ios: { shadowColor: C.ink, shadowOpacity: 0.06, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
-      android: { elevation: 1 },
-    }),
   },
   headerTitleWrap: { alignItems: 'center' },
-  title: {
-    fontFamily: 'FraunTitle',
-    fontWeight: '600',
-    fontSize: 22,
-    color: C.ink,
-  },
-  subtitle: {
-    fontFamily: 'InterBody',
-    fontSize: 11.5,
-    color: C.inkFaint,
-    marginTop: 2,
-  },
-  placeholder: {
-    width: 40,
-  },
+  title: { fontFamily: 'FraunTitle', fontWeight: '600', fontSize: 22, color: C.ink },
+  subtitle: { fontFamily: 'InterBody', fontSize: 12, color: C.inkFaint, marginTop: 2 },
+  placeholder: { width: 42 },
 
+  // Layout
   bodyLayout: {
-    flexDirection: Platform.OS === 'web' ? 'row' : 'column',
+    flexDirection: isWeb ? 'row' : 'column',
     alignItems: 'flex-start',
     gap: sp(5),
   },
-  leftCol: {
-    width: Platform.OS === 'web' ? 340 : '100%',
-    gap: sp(5),
-  },
-  rightCol: {
-    flex: 1,
-    width: '100%',
-    gap: sp(5),
-  },
+  leftCol: { width: isWeb ? 340 : '100%', gap: sp(5) },
+  rightCol: { flex: 1, width: '100%', gap: sp(4) },
 
+  // Profile card
   profileCard: {
     backgroundColor: C.card,
-    borderRadius: 24,
+    borderRadius: 28,
     alignItems: 'center',
     overflow: 'hidden',
-    paddingBottom: sp(6),
+    paddingBottom: sp(5),
     width: '100%',
   },
-  banner: {
-    width: '100%',
-    height: 76,
-  },
+  banner: { width: '100%', height: 96 },
   avatarWrap: {
-    width: 92,
-    height: 92,
-    borderRadius: 46,
+    width: 104,
+    height: 104,
+    borderRadius: 52,
     backgroundColor: C.primarySoft,
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
-    marginTop: -46,
     borderWidth: 4,
     borderColor: C.card,
   },
-  avatarImage: {
-    width: 92,
-    height: 92,
-    borderRadius: 46,
-    backgroundColor: C.primarySoft,
+  avatarImage: { width: 104, height: 104, borderRadius: 52, backgroundColor: C.primarySoft },
+  avatarInitials: { fontFamily: 'FraunTitle', fontSize: 34, color: C.primaryDark },
+  avatarOverlay: {
+    position: 'absolute', top: 0, right: 0, bottom: 0, left: 0,
+    backgroundColor: 'rgba(15, 51, 35, 0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
+  avatarOuter: { width: 104, height: 104, marginTop: -52 },
   avatarBadge: {
     position: 'absolute',
     bottom: 2,
     right: 2,
-    width: 24,
-    height: 24,
-    borderRadius: 12,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     backgroundColor: C.primaryDark,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 2,
+    borderWidth: 2.5,
     borderColor: C.card,
   },
   nameText: {
     fontFamily: 'FraunTitle',
-    fontSize: 21,
+    fontSize: 22,
+    lineHeight: 28,
     color: C.ink,
     marginTop: sp(3),
-  },
-  emailRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    marginTop: 4,
+    paddingHorizontal: sp(4),
+    textAlign: 'center',
   },
   emailText: {
     fontFamily: 'InterBody',
-    fontSize: 12.5,
+    fontSize: 13,
     color: C.inkSoft,
-  },
-  changePhotoBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: C.primarySoft,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 20,
-    marginTop: sp(3),
-  },
-  changePhotoBtnText: {
-    fontFamily: 'InterBody',
-    fontSize: 12,
-    fontWeight: '600',
-    color: C.primaryDark,
+    marginTop: 4,
+    paddingHorizontal: sp(4),
   },
   metaRow: {
     flexDirection: 'row',
@@ -1264,314 +1356,171 @@ const styles = StyleSheet.create({
   metaPill: {
     flex: 1,
     backgroundColor: C.bg,
-    borderRadius: 12,
-    paddingVertical: sp(2.5),
+    borderRadius: 14,
+    paddingVertical: sp(3),
     alignItems: 'center',
   },
-  metaLabel: {
-    fontFamily: 'InterBody',
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-    color: C.inkFaint,
-    textTransform: 'uppercase',
+  metaLabel: { fontFamily: 'InterBody', fontSize: 11.5, color: C.inkFaint },
+  metaVal: { fontFamily: 'InterBody', fontSize: 14, fontWeight: '700', color: C.ink, marginTop: 3 },
+  statusRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 3 },
+  statusDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: C.primaryMid },
+
+  completion: {
+    width: '100%',
+    paddingHorizontal: sp(4),
+    marginTop: sp(4),
   },
-  metaVal: {
+  completionTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' },
+  completionTitle: { fontFamily: 'InterBody', fontWeight: '600', fontSize: 12.5, color: C.inkSoft },
+  completionPct: { fontFamily: 'FraunTitle', fontSize: 16, color: C.primaryDark },
+  completionTrack: {
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: C.lineSoft,
+    overflow: 'hidden',
+    marginTop: 8,
+  },
+  completionFill: { height: 8, borderRadius: 4, backgroundColor: C.primaryMid },
+  completionHint: { fontFamily: 'InterBody', fontSize: 12, color: C.inkFaint, marginTop: 8 },
+
+  // Digital ID
+  qrCard: {
+    backgroundColor: C.card,
+    borderRadius: 28,
+    padding: sp(5),
+    alignItems: 'center',
+    width: '100%',
+  },
+  qrHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
+  qrTitle: { fontFamily: 'FraunTitle', fontSize: 17, color: C.ink },
+  qrDesc: {
     fontFamily: 'InterBody',
-    fontSize: 13,
-    fontWeight: '700',
-    color: C.ink,
-    marginTop: 2,
+    fontSize: 12.5,
+    lineHeight: 18,
+    color: C.inkSoft,
+    textAlign: 'center',
+    marginBottom: sp(4),
+    paddingHorizontal: sp(2),
+  },
+  qrWrap: {
+    padding: 16,
+    backgroundColor: C.white,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: C.line,
+  },
+  verifiedPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: C.primarySoft,
+    borderRadius: 20,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    marginTop: sp(3),
+    marginBottom: sp(3),
+  },
+  verifiedText: { fontFamily: 'InterBody', fontWeight: '600', fontSize: 12, color: C.primaryDark },
+  viewIdBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: C.primaryDark,
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    alignSelf: 'stretch',
+  },
+  viewIdBtnTxt: { fontFamily: 'InterBody', fontWeight: '700', fontSize: 13.5, color: C.white },
+  lockedIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: C.lineSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: sp(2),
   },
 
-  formCard: {
+  // Sections
+  section: {
     backgroundColor: C.card,
     borderRadius: 24,
     padding: sp(5),
     width: '100%',
   },
-  sectionHeader: {
-    marginBottom: sp(5),
-  },
-  sectionHeaderInline: {
+  sectionHead: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: sp(2),
-    flex: 1,
+    gap: sp(3),
+    marginBottom: sp(4),
   },
-  sectionIconWrap: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+  sectionIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 12,
     backgroundColor: C.primarySoft,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  sectionTitle: {
-    fontFamily: 'FraunTitle',
-    fontSize: 17,
-    color: C.ink,
-  },
-  sectionSubtitle: {
-    fontFamily: 'InterBody',
-    fontSize: 12,
-    color: C.inkFaint,
-    marginTop: 2,
-  },
+  sectionTitle: { fontFamily: 'FraunTitle', fontSize: 17, color: C.ink },
+  sectionSubtitle: { fontFamily: 'InterBody', fontSize: 12, color: C.inkFaint, marginTop: 2 },
 
-  fieldRow: {
-    flexDirection: 'row',
-    gap: sp(3),
-    marginBottom: sp(3.5),
-  },
-  fieldFull: {
-    flex: 1,
-  },
-  fieldHalf: {
-    flex: 1,
-  },
-  fieldThird: {
-    flex: 1,
-  },
+  // Fields
+  fieldRow: { flexDirection: 'row', flexWrap: 'wrap', gap: sp(3) },
+  field: { flex: 1, minWidth: 150, marginBottom: sp(3.5) },
   label: {
     fontFamily: 'InterBody',
-    fontSize: 12,
-    fontWeight: '700',
+    fontSize: 12.5,
+    fontWeight: '600',
     color: C.inkSoft,
     marginBottom: 6,
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
   },
   input: {
-    backgroundColor: C.bg,
+    backgroundColor: C.white,
     borderWidth: 1,
     borderColor: C.line,
     borderRadius: 14,
     paddingHorizontal: 14,
     paddingVertical: 12,
     fontFamily: 'InterBody',
-    fontSize: 14,
+    fontSize: 14.5,
     color: C.ink,
     ...webNoOutline,
   },
-  textArea: {
-    minHeight: 76,
-    textAlignVertical: 'top',
-    paddingTop: 12,
-    marginBottom: sp(3.5),
+  inputFocused: {
+    borderColor: C.primaryMid,
+    borderWidth: 1.5,
+    backgroundColor: '#FBFDFA',
+  },
+  selectInput: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
   readOnly: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: hexToRgba(C.line, 0.45),
-  },
-  readOnlyText: {
-    fontFamily: 'InterBody',
-    fontSize: 14,
-    color: C.ink,
-  },
-  placeholderText: {
-    fontFamily: 'InterBody',
-    fontSize: 14,
-    color: C.inkFaint,
-  },
-  divider: {
-    height: 1,
-    backgroundColor: C.line,
-    marginVertical: sp(4),
-  },
-
-  birthcertSection: {
-    marginTop: sp(1),
-  },
-  birthcertHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: sp(2),
-    marginBottom: sp(2),
-  },
-  birthcertStatus: {
-    flexDirection: 'row',
-    alignItems: 'center',
     gap: 8,
-    borderRadius: 10,
-    paddingHorizontal: 10,
+    backgroundColor: C.bg,
+    borderColor: C.lineSoft,
+  },
+  textArea: { minHeight: 84, textAlignVertical: 'top', paddingTop: 12 },
+  valueText: { fontFamily: 'InterBody', fontSize: 14.5, color: C.ink },
+  placeholderText: { fontFamily: 'InterBody', fontSize: 14.5, color: C.inkFaint },
+
+  // Buttons
+  smallBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: C.primaryDark,
+    borderRadius: 12,
+    paddingHorizontal: 12,
     paddingVertical: 9,
   },
-  birthcertSubmitted: {
-    backgroundColor: C.primarySoft,
-  },
-  birthcertMissing: {
-    backgroundColor: C.goldSoft,
-  },
-  birthcertStatusText: {
-    fontFamily: 'InterBody',
-    fontSize: 12,
-    fontWeight: '700',
-    color: C.primaryDark,
-  },
-  birthcertMissingText: {
-    color: C.goldDark,
-  },
-  birthcertCard: {
-    backgroundColor: C.card,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: C.line,
-    overflow: 'hidden',
-  },
-  birthcertCardMain: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: sp(3),
-    gap: sp(2.5),
-    backgroundColor: hexToRgba(C.primary, 0.05),
-  },
-  birthcertBadge: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: C.primarySoft,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  birthcertCardTitle: {
-    fontFamily: 'InterBody',
-    fontSize: 13,
-    fontWeight: '700',
-    color: C.ink,
-  },
-  birthcertCardSubtitle: {
-    fontFamily: 'InterBody',
-    fontSize: 11,
-    color: C.inkFaint,
-    marginTop: 2,
-  },
-  birthcertViewPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: C.primarySoft,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 20,
-  },
-  birthcertViewPillText: {
-    fontFamily: 'InterBody',
-    fontSize: 12,
-    fontWeight: '700',
-    color: C.primaryDark,
-  },
-  birthcertActionsRow: {
-    flexDirection: 'row',
-    borderTopWidth: 1,
-    borderTopColor: C.line,
-    backgroundColor: C.card,
-  },
-  birthcertActionBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 10,
-  },
-  birthcertReplaceBtn: {
-    borderRightWidth: 1,
-    borderRightColor: C.line,
-  },
-  birthcertReplaceBtnText: {
-    fontFamily: 'InterBody',
-    fontSize: 12,
-    fontWeight: '600',
-    color: C.primaryDark,
-  },
-  birthcertDeleteBtn: {},
-  birthcertDeleteBtnText: {
-    fontFamily: 'InterBody',
-    fontSize: 12,
-    fontWeight: '600',
-    color: C.error,
-  },
-
-  childrenHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: sp(2),
-    marginBottom: sp(3),
-  },
-  childrenHint: {
-    fontFamily: 'InterBody',
-    fontSize: 11,
-    color: C.inkFaint,
-    marginTop: 2,
-  },
-  addChildBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: C.primaryDark,
-    borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-  },
-  addChildBtnText: {
-    fontFamily: 'InterBody',
-    fontWeight: '700',
-    fontSize: 12,
-    color: C.white,
-  },
-  noChildrenText: {
-    fontFamily: 'InterBody',
-    fontSize: 13,
-    color: C.inkFaint,
-    marginBottom: sp(2),
-  },
-  childRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: sp(2),
-    borderWidth: 1,
-    borderColor: C.line,
-    borderRadius: 14,
-    padding: sp(3),
-    marginBottom: sp(2),
-    backgroundColor: C.bg,
-  },
-  childNumber: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: C.primarySoft,
-    marginTop: 2,
-  },
-  childNumberText: {
-    fontFamily: 'InterBody',
-    fontWeight: '700',
-    fontSize: 12,
-    color: C.primaryDark,
-  },
-  childFields: {
-    flex: 1,
-  },
-  removeChildBtn: {
-    width: 32,
-    height: 32,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 10,
-    backgroundColor: '#FCE8E6',
-  },
-
-  actions: {
-    flexDirection: 'row',
-    gap: sp(3),
-    marginTop: sp(4),
-  },
+  smallBtnText: { fontFamily: 'InterBody', fontWeight: '700', fontSize: 12.5, color: C.white },
   primaryBtn: {
     flex: 1,
     flexDirection: 'row',
@@ -1582,91 +1531,180 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     paddingVertical: 14,
   },
-  primaryBtnText: {
-    fontFamily: 'InterBody',
-    fontSize: 14,
-    fontWeight: '700',
-    color: C.white,
+  primaryBtnText: { fontFamily: 'InterBody', fontSize: 14, fontWeight: '700', color: C.white },
+
+  // Birth certificate
+  docCard: {
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: C.line,
+    overflow: 'hidden',
   },
-  secondaryBtn: {
+  docMain: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: sp(3.5),
+    gap: sp(3),
+    backgroundColor: hexToRgba(C.primary, 0.05),
+  },
+  docIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 13,
+    backgroundColor: C.primarySoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  docTitle: { fontFamily: 'InterBody', fontSize: 14, fontWeight: '700', color: C.ink },
+  docSub: { fontFamily: 'InterBody', fontSize: 12, color: C.inkSoft, marginTop: 2 },
+  docActions: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: C.line },
+  docActionBtn: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
-    backgroundColor: C.card,
+    paddingVertical: 12,
+  },
+  docActionDivider: { borderRightWidth: 1, borderRightColor: C.line },
+  docActionText: { fontFamily: 'InterBody', fontSize: 13, fontWeight: '600' },
+  docMissing: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: sp(3),
+    backgroundColor: C.goldSoft,
+    borderRadius: 16,
+    padding: sp(3.5),
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: hexToRgba(C.gold, 0.6),
+  },
+  docMissingTitle: { fontFamily: 'InterBody', fontSize: 13.5, fontWeight: '700', color: C.goldDark },
+  docMissingSub: { fontFamily: 'InterBody', fontSize: 12, color: C.goldDark, marginTop: 2 },
+
+  // Children
+  childEmpty: {
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: sp(6),
+    borderRadius: 16,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: C.line,
+  },
+  childEmptyText: { fontFamily: 'InterBody', fontSize: 13, color: C.inkSoft },
+  childRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: sp(2.5),
     borderWidth: 1,
     borderColor: C.line,
-    borderRadius: 14,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
+    borderRadius: 18,
+    padding: sp(3),
+    paddingBottom: 0,
+    marginBottom: sp(3),
+    backgroundColor: C.bg,
   },
-  secondaryBtnText: {
-    fontFamily: 'InterBody',
-    fontSize: 14,
-    fontWeight: '600',
-    color: C.ink,
+  childIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: C.primarySoft,
+    marginTop: 2,
+  },
+  childFields: { flex: 1 },
+  removeChildBtn: {
+    width: 34,
+    height: 34,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 12,
+    backgroundColor: C.errorSoft,
   },
 
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    justifyContent: 'flex-end',
+  logoutRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: sp(3.5),
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: hexToRgba(C.error, 0.25),
+    backgroundColor: C.card,
   },
+  logoutText: { fontFamily: 'InterBody', fontSize: 14, fontWeight: '600', color: C.error },
+
+  // Save bar
+  saveBar: {
+    backgroundColor: C.card,
+    borderTopWidth: 1,
+    borderTopColor: C.line,
+    paddingHorizontal: sp(5),
+    paddingVertical: sp(3),
+  },
+  saveBarInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: sp(3),
+    width: '100%',
+    maxWidth: isWeb ? 1060 : 460,
+    alignSelf: 'center',
+  },
+  saveBarStatus: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  saveDot: { width: 8, height: 8, borderRadius: 4 },
+  saveBarText: { fontFamily: 'InterBody', fontSize: 12.5, fontWeight: '600', color: C.inkSoft, flexShrink: 1 },
+  saveBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: C.primaryDark,
+    borderRadius: 14,
+    paddingVertical: 13,
+    paddingHorizontal: 20,
+    minWidth: 150,
+  },
+  saveBtnDisabled: { opacity: 0.45 },
+
+  // Pickers
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
   modalSheet: {
     backgroundColor: C.card,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
     padding: sp(5),
     paddingBottom: Platform.OS === 'ios' ? sp(9) : sp(5),
     width: '100%',
-    maxWidth: Platform.OS === 'web' ? 460 : '100%',
+    maxWidth: isWeb ? 460 : '100%',
     alignSelf: 'center',
   },
   modalHandle: {
-    width: 36,
+    width: 40,
     height: 4,
     borderRadius: 2,
     backgroundColor: C.line,
     alignSelf: 'center',
     marginBottom: sp(3),
   },
-  modalTitle: {
-    fontFamily: 'FraunTitle',
-    fontSize: 17,
-    color: C.ink,
-    marginBottom: sp(3),
-  },
+  modalTitle: { fontFamily: 'FraunTitle', fontSize: 18, color: C.ink, marginBottom: sp(3) },
   modalItem: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: sp(3),
-    borderBottomWidth: 1,
-    borderBottomColor: hexToRgba(C.line, 0.5),
-  },
-  modalItemActive: {
-    backgroundColor: hexToRgba(C.primary, 0.05),
-    borderRadius: 10,
+    paddingVertical: sp(3.5),
     paddingHorizontal: sp(2),
+    borderRadius: 12,
   },
-  modalItemText: {
-    fontFamily: 'InterBody',
-    fontSize: 15,
-    color: C.ink,
-  },
-  modalItemTextActive: {
-    fontWeight: '700',
-    color: C.primaryDark,
-  },
+  modalItemActive: { backgroundColor: C.primarySoft },
+  modalItemText: { fontFamily: 'InterBody', fontSize: 15.5, color: C.ink },
+  modalItemTextActive: { fontWeight: '700', color: C.primaryDark },
 
-  viewerModalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(10, 20, 16, 0.96)',
-  },
-  viewerModalSafe: {
-    flex: 1,
-  },
-  viewerModalHeader: {
+  // Viewer
+  viewerOverlay: { flex: 1, backgroundColor: 'rgba(10, 20, 16, 0.96)' },
+  viewerHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -1675,73 +1713,30 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(255, 255, 255, 0.12)',
   },
-  viewerModalCloseBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
+  viewerIconBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: 'rgba(255, 255, 255, 0.12)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  viewerModalTitleWrap: {
-    alignItems: 'center',
-  },
-  viewerModalTitle: {
-    fontFamily: 'FraunTitle',
-    fontSize: 17,
-    fontWeight: '600',
-    color: C.white,
-  },
-  viewerModalSubtitle: {
-    fontFamily: 'InterBody',
-    fontSize: 11,
-    color: 'rgba(255, 255, 255, 0.65)',
-    marginTop: 2,
-  },
-  viewerModalDeleteHeaderBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: 'rgba(255, 80, 80, 0.15)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  viewerModalContent: {
-    flex: 1,
-    backgroundColor: '#0F1A14',
-  },
-  viewerWebView: {
-    flex: 1,
-    backgroundColor: '#0F1A14',
-  },
-  viewerLoadingWrap: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
+  viewerIconBtnDanger: { backgroundColor: 'rgba(255, 80, 80, 0.15)' },
+  viewerTitle: { fontFamily: 'FraunTitle', fontSize: 17, fontWeight: '600', color: C.white },
+  viewerSubtitle: { fontFamily: 'InterBody', fontSize: 11.5, color: 'rgba(255, 255, 255, 0.65)', marginTop: 2 },
+  viewerContent: { flex: 1, backgroundColor: '#0F1A14' },
+  viewerWebView: { flex: 1, backgroundColor: '#0F1A14' },
+  viewerLoading: {
+    position: 'absolute', top: 0, right: 0, bottom: 0, left: 0,
     backgroundColor: '#0F1A14',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 12,
   },
-  viewerLoadingText: {
-    fontFamily: 'InterBody',
-    fontSize: 13,
-    color: 'rgba(255, 255, 255, 0.7)',
-  },
-  viewerImageScroll: {
-    flexGrow: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: sp(3),
-  },
-  viewerImage: {
-    width: '100%',
-    height: '100%',
-    minHeight: 380,
-  },
-  viewerModalFooter: {
+  viewerLoadingText: { fontFamily: 'InterBody', fontSize: 13, color: 'rgba(255, 255, 255, 0.7)' },
+  viewerImageScroll: { flexGrow: 1, justifyContent: 'center', alignItems: 'center', padding: sp(3) },
+  viewerImage: { width: '100%', height: '100%', minHeight: 380 },
+  viewerFooter: {
     flexDirection: 'row',
     gap: sp(3),
     paddingHorizontal: sp(4),
@@ -1756,110 +1751,35 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    paddingVertical: 12,
-    borderRadius: 12,
+    paddingVertical: 13,
+    borderRadius: 14,
   },
-  viewerFooterReplace: {
-    backgroundColor: C.primarySoft,
-  },
-  viewerFooterReplaceText: {
-    fontFamily: 'InterBody',
-    fontSize: 13,
-    fontWeight: '700',
-    color: C.primaryDark,
-  },
-  viewerFooterDelete: {
+  viewerFooterDanger: {
     backgroundColor: 'rgba(255, 80, 80, 0.16)',
     borderWidth: 1,
     borderColor: 'rgba(255, 80, 80, 0.3)',
   },
-  viewerFooterDeleteText: {
-    fontFamily: 'InterBody',
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#FF8080',
-  },
+  viewerFooterText: { fontFamily: 'InterBody', fontSize: 13.5, fontWeight: '700' },
 
-  qrCard: {
-    backgroundColor: C.card,
-    borderRadius: 24,
-    padding: sp(5),
-    alignItems: 'center',
-    width: '100%',
-  },
-  qrHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginBottom: 4,
-  },
-  qrTitle: {
-    fontFamily: 'FraunTitle',
-    fontSize: 16,
-    color: C.ink,
-  },
-  qrDesc: {
-    fontFamily: 'InterBody',
-    fontSize: 12,
-    color: C.inkFaint,
-    textAlign: 'center',
-    marginBottom: sp(4),
-    paddingHorizontal: sp(2),
-  },
-  qrWrap: {
-    padding: 14,
-    backgroundColor: C.white,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: C.line,
-  },
-  qrLabelRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    marginTop: 10,
-    marginBottom: 12,
-  },
-  qrLabel: {
-    fontFamily: 'InterBody',
-    fontWeight: '600',
-    fontSize: 12,
-    color: C.inkSoft,
-  },
-  viewIdBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: C.primaryDark,
-    borderRadius: 12,
-    paddingVertical: 11,
-    paddingHorizontal: 20,
-  },
-  viewIdBtnTxt: {
-    fontFamily: 'InterBody',
-    fontWeight: '700',
-    fontSize: 13,
-    color: C.white,
-  },
-
-  emptyState: {
-    flex: 1,
+  // Logged-out state
+  emptyState: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: sp(6) },
+  emptyIcon: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: C.primarySoft,
     alignItems: 'center',
     justifyContent: 'center',
-    padding: sp(6),
   },
-  emptyTitle: {
-    fontFamily: 'FraunTitle',
-    fontSize: 20,
-    color: C.ink,
-    marginTop: sp(3),
-  },
+  emptyTitle: { fontFamily: 'FraunTitle', fontSize: 20, color: C.ink, marginTop: sp(4) },
   emptyText: {
     fontFamily: 'InterBody',
-    fontSize: 13,
-    color: C.inkFaint,
+    fontSize: 13.5,
+    lineHeight: 20,
+    color: C.inkSoft,
     marginTop: 6,
     marginBottom: sp(5),
     textAlign: 'center',
+    maxWidth: 300,
   },
 });

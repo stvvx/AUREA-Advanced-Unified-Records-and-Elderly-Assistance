@@ -74,11 +74,13 @@ export default function ChatScreen() {
   const { user } = useAuth();
 
   const userRole = (user?.role || 'user').toLowerCase();
-  const isAdmin = userRole === 'osca admin' || userRole === 'super admin';
+  const isAdmin = userRole === 'osca admin' || userRole === 'osca staff' || userRole === 'super admin';
 
   // For Admin: active thread selection
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [loadingThreads, setLoadingThreads] = useState(false);
+  const [threadError, setThreadError] = useState(false);
+  const threadsInFlight = useRef(false);
   const [selectedUser, setSelectedUser] = useState<ChatThread | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -122,12 +124,17 @@ export default function ChatScreen() {
 
   // ── 1. Poll threads for Admin ─────────────────────────────────────────────
   const loadThreads = async () => {
-    if (!isAdmin) return;
+    if (!isAdmin || threadsInFlight.current) return;
+    threadsInFlight.current = true;
     try {
       const data = await fetchChatThreads();
       setThreads(data);
-    } catch (err) {
-      console.warn('[Chat] Failed to load threads:', err);
+      setThreadError(false);
+    } catch {
+      setThreadError(true);
+    } finally {
+      threadsInFlight.current = false;
+      setLoadingThreads(false);
     }
   };
 
@@ -307,13 +314,18 @@ export default function ChatScreen() {
           )}
         </View>
 
+        {threadError && (
+          <Text style={s.emptySubtitle} accessibilityRole="alert">
+            Could not load conversations. Tap refresh to try again.
+          </Text>
+        )}
         {/* Thread List */}
         {loadingThreads ? (
           <View style={s.centerBox}>
             <ActivityIndicator size="large" color={C.primary} />
             <Text style={s.loadingText}>Loading conversations...</Text>
           </View>
-        ) : filteredThreads.length === 0 ? (
+        ) : threadError && threads.length === 0 ? null : filteredThreads.length === 0 ? (
           <View style={s.emptyBox}>
             <View style={s.emptyIconCircle}>
               <Ionicons name="chatbubbles-outline" size={40} color={C.primaryMid} />

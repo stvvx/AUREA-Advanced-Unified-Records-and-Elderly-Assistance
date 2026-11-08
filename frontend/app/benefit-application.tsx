@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -17,6 +17,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../context/AuthContext';
 import Toast from '../components/Toast';
+import BirthdayBenefitTracker from '../components/BirthdayBenefitTracker';
 import { getBenefitById } from '../data/benefits';
 import { getUser } from '../lib/authApi';
 import { submitOctogenarianBenefitApplication } from '../services/benefitApi';
@@ -158,7 +159,7 @@ async function geocodeAddress(address: string): Promise<{ lat: number; lon: numb
 
     if (!response.ok) return null;
 
-    const data = (await response.json()) as Array<{ lat: string; lon: string }>;
+    const data = (await response.json()) as { lat: string; lon: string }[];
     if (!Array.isArray(data) || data.length === 0) return null;
 
     const first = data[0];
@@ -218,6 +219,15 @@ const FIELD_STYLE = {
 };
 
 export default function BenefitApplicationScreen() {
+  const { user } = useAuth();
+  const params = useLocalSearchParams<{ benefitId?: string }>();
+  if (params.benefitId === 'financial-aid' && user) {
+    return <BirthdayBenefitTracker key={user.id} userId={user.id} renderForm={(onSubmitted) => <BenefitApplicationForm onBirthdaySubmitted={onSubmitted} />} />;
+  }
+  return <BenefitApplicationForm />;
+}
+
+function BenefitApplicationForm({ onBirthdaySubmitted }: { onBirthdaySubmitted?: (application: any) => void }) {
   const router = useRouter();
   const params = useLocalSearchParams<{ benefit?: string; benefitId?: string }>();
   const { user } = useAuth();
@@ -303,7 +313,6 @@ export default function BenefitApplicationScreen() {
       setToast({ visible: true, message: `Please allow ${source === 'camera' ? 'camera' : 'photo library'} access to attach this document.`, type: 'error' });
       return;
     }
-          <AttachmentStatus label="Endorsed list document" attached={endorsedListSubmitted} optional />
     const result = source === 'camera'
       ? await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.8, base64: true })
       : await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.8, base64: true });
@@ -322,7 +331,7 @@ export default function BenefitApplicationScreen() {
     }
   };
 
-  const locateNearestCenter = async (addressInput: string) => {
+  const locateNearestCenter = useCallback(async (addressInput: string) => {
     const trimmedAddress = addressInput.trim();
     if (!trimmedAddress) {
       setNearestCenter(null);
@@ -371,7 +380,7 @@ export default function BenefitApplicationScreen() {
     } finally {
       setLocatingCenter(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     if ((!isCheckUp && !isFinancialAid) || !user?.id) return;
@@ -416,14 +425,15 @@ export default function BenefitApplicationScreen() {
     return () => {
       active = false;
     };
-  }, [isCheckUp, isFinancialAid, user?.id, user?.address, user?.contact, user?.dob, user?.gender]);
+  }, [isCheckUp, isFinancialAid, user?.id, user?.address, user?.contact, user?.dob, user?.gender, user?.children, user?.civilStatus, user?.email, user?.firstName, user?.lastName, user?.middleName]);
 
   useEffect(() => {
     if (!isCheckUp) return;
     if (!checkUpForm.address.trim()) return;
 
-    locateNearestCenter(checkUpForm.address);
-  }, [isCheckUp]);
+    const timer = setTimeout(() => { void locateNearestCenter(checkUpForm.address); }, 400);
+    return () => clearTimeout(timer);
+  }, [isCheckUp, checkUpForm.address, locateNearestCenter]);
 
   const displayedAge = calculateAgeFromDob(financialAidForm.dateOfBirth);
   const displayedBenefitType = classifySeniorBenefit(financialAidForm.dateOfBirth);
@@ -449,7 +459,7 @@ export default function BenefitApplicationScreen() {
         citizenship: financialAidForm.citizenship,
         is_dual_citizen: financialAidForm.isDualCitizen,
         dual_citizenship_details: financialAidForm.dualCitizenshipDetails,
-        birth_certificate_submitted: Boolean(user?.birthcert || user?.birthCertificate),
+        birth_certificate_submitted: Boolean(user?.birthcert),
         valid_id_submitted: Boolean(user?.id),
         id_picture_submitted: Boolean(user?.avatarUrl),
         full_body_picture_submitted: fullBodyPictureSubmitted,
@@ -466,7 +476,7 @@ export default function BenefitApplicationScreen() {
           civilStatus: financialAidForm.civilStatus,
           address: financialAidForm.permanentAddressPhilippines,
           children: profileChildren,
-          avatarUrl: user?.avatarUrl,
+          avatarUrl: user?.avatarUrl ?? undefined,
           oscaIdNumber,
         },
       });
@@ -479,9 +489,9 @@ export default function BenefitApplicationScreen() {
     }
   };
 
-  const handlePreviewAnnexAPdf = () => {
+  const handlePreviewAnnexAPdf = async () => {
     try {
-      openBirthdayBenefitsFormPreview({
+      await openBirthdayBenefitsFormPreview({
         user_id: user?.id,
         osca_id_number: oscaIdNumber,
         benefit_type: displayedBenefitType || 'Octogenarian',
@@ -497,7 +507,7 @@ export default function BenefitApplicationScreen() {
         citizenship: financialAidForm.citizenship,
         is_dual_citizen: financialAidForm.isDualCitizen,
         dual_citizenship_details: financialAidForm.dualCitizenshipDetails,
-        birth_certificate_submitted: Boolean(user?.birthcert || user?.birthCertificate),
+        birth_certificate_submitted: Boolean(user?.birthcert),
         valid_id_submitted: Boolean(user?.id),
         id_picture_submitted: Boolean(user?.avatarUrl),
         full_body_picture_submitted: fullBodyPictureSubmitted,
@@ -514,7 +524,7 @@ export default function BenefitApplicationScreen() {
           civilStatus: financialAidForm.civilStatus,
           address: financialAidForm.permanentAddressPhilippines,
           children: profileChildren,
-          avatarUrl: user?.avatarUrl,
+          avatarUrl: user?.avatarUrl ?? undefined,
           oscaIdNumber,
         },
       });
@@ -535,7 +545,7 @@ export default function BenefitApplicationScreen() {
         return;
       }
 
-      const requiredFields: Array<[string, string]> = [
+      const requiredFields: [string, string][] = [
         ['given name', financialAidForm.givenName],
         ['last name', financialAidForm.lastName],
         ['date of birth', financialAidForm.dateOfBirth],
@@ -560,7 +570,7 @@ export default function BenefitApplicationScreen() {
       }
       setSubmitting(true);
       try {
-        await submitOctogenarianBenefitApplication({
+        const result = await submitOctogenarianBenefitApplication({
           user_id: user!.id,
           osca_id_number: oscaIdNumber,
           date_of_birth: financialAidForm.dateOfBirth.trim(),
@@ -586,7 +596,7 @@ export default function BenefitApplicationScreen() {
           applicant_signature_date: new Date().toISOString().slice(0, 10),
         });
         setToast({ visible: true, message: 'Birthday Benefits application submitted successfully.', type: 'success' });
-        setTimeout(() => router.back(), 1200);
+        onBirthdaySubmitted?.(result.application);
       } catch (error) {
         setToast({ visible: true, message: error instanceof Error ? error.message : 'Unable to submit your application right now.', type: 'error' });
       } finally {
@@ -1221,7 +1231,7 @@ export default function BenefitApplicationScreen() {
               activeOpacity={0.85}
             >
               <Ionicons name="document-text-outline" size={18} color="#1F5C3E" />
-              <Text style={s.exportPdfButtonText}>Download / Print Annex "A" Form (PDF)</Text>
+              <Text style={s.exportPdfButtonText}>Download / Print Annex &quot;A&quot; Form (PDF)</Text>
             </TouchableOpacity>
           )}
         </View>

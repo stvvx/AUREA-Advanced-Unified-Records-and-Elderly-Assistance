@@ -63,16 +63,15 @@ export async function sendChatMessage(params: {
 }
 
 export async function fetchChatThreads(): Promise<ChatThread[]> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 25000);
   try {
-    const res = await fetch(`${API_BASE_URL}/api/chat/threads`);
-    if (!res.ok) {
-      throw new Error(`Failed to load threads (${res.status})`);
-    }
+    const res = await fetch(`${API_BASE_URL}/api/chat/threads`, { signal: controller.signal });
+    if (!res.ok) throw new Error('Could not load conversations. Please try again.');
     const data = await res.json();
     return data.threads ?? [];
-  } catch (error) {
-    console.warn('[ChatApi] fetchChatThreads error:', error);
-    return [];
+  } finally {
+    clearTimeout(timeout);
   }
 }
 

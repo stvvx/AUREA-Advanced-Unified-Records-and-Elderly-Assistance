@@ -1,6 +1,6 @@
 
 import secrets
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 
 import requests
 from flask import Blueprint, jsonify, request
@@ -420,6 +420,19 @@ def create_reservation():
     screening_id = data.get("screening_id")
 
     try:
+        today = datetime.now(timezone(timedelta(hours=8))).date().isoformat()
+        existing = _supabase("GET", "movie_reservations", params={
+            "user_id": f"eq.{user['id']}",
+            "status": "in.(Pending,Confirmed)",
+            "select": "id,screening_id",
+        }) or []
+        for reservation in existing:
+            previous_screening = fetch_one("movie_screenings", reservation.get("screening_id"))
+            previous_date = (previous_screening or {}).get("screening_date")
+            if not previous_date or str(previous_date)[:10] >= today:
+                return error_response(
+                    "You already have an active reservation. Cancel it before booking another screening.", 409
+                )
         attendee_count = int(data.get("attendee_count", 1))
         if attendee_count < 1:
             return error_response("At least one attendee is required.")
@@ -428,7 +441,7 @@ def create_reservation():
         if not screening or not screening.get("is_active"):
             return error_response("This screening is unavailable.", 404)
 
-        if screening.get("screening_date") < date.today().isoformat():
+        if screening.get("screening_date") < today:
             return error_response("This screening date has already passed.")
 
         confirmation_code = (

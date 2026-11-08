@@ -161,7 +161,7 @@ def messages():
                 data = [_serialize_message(r) for r in cursor.fetchall()]
 
         # Trigger background read receipt marking
-        if reader_role in ("osca admin", "super admin", "admin"):
+        if reader_role in ("osca admin", "osca staff", "super admin", "admin"):
             _mark_as_read(user_id, "admin_inbound")
         else:
             _mark_as_read(user_id, "user_inbound")
@@ -321,7 +321,7 @@ def unread_count():
             "read": "eq.false",
             "select": "id",
         }
-        if role in ("osca admin", "super admin", "admin"):
+        if role in ("osca admin", "osca staff", "super admin", "admin"):
             params["sender_role"] = "eq.user"
         else:
             if not user_id_raw:
@@ -339,7 +339,7 @@ def unread_count():
     # Fallback to local DB
     try:
         with _get_local_db() as conn:
-            if role in ("osca admin", "super admin", "admin"):
+            if role in ("osca admin", "osca staff", "super admin", "admin"):
                 cursor = conn.execute("SELECT COUNT(*) FROM osca_chat_messages WHERE sender_role = 'user' AND read = 0")
             else:
                 if not user_id_raw:

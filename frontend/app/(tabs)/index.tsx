@@ -526,7 +526,15 @@ export default function DashboardScreen() {
 
             <View style={{ flex: 1 }}>
 
-              <Text style={s.brandText}>AUREA</Text>
+              <View style={s.brandRow}>
+                <Image
+                  source={require('../../assets/images/aurea-pateros-logo.png')}
+                  style={s.brandLogo}
+                  resizeMode="contain"
+                  accessibilityLabel="AUREA Municipality of Pateros logo"
+                />
+                <Text style={s.brandText}>AUREA</Text>
+              </View>
 
               {user ? (
 
@@ -678,44 +686,6 @@ export default function DashboardScreen() {
               {user && menuOpen && (
 
                 <View style={s.headerMenu}>
-
-                  <TouchableOpacity
-
-                    style={[s.headerMenuItem, webPointer]}
-
-                    onPress={() => {
-
-                      setMenuOpen(false);
-
-                      router.push('/chat');
-
-                    }}
-
-                    activeOpacity={0.8}
-
-                    accessibilityRole="button"
-
-                    accessibilityLabel="Open chat"
-
-                  >
-
-                    <Ionicons name="chatbubbles-outline" size={16} color={C.ink} />
-
-                    <Text style={s.headerMenuText}>OSCA Chat Support</Text>
-
-                    {displayedUnreadChatCount > 0 && (
-
-                      <View style={[s.chatBadge, { position: 'relative', top: 0, right: 0, marginLeft: 'auto' }]}>
-
-                        <Text style={s.chatBadgeText}>{displayedUnreadChatCount}</Text>
-
-                      </View>
-
-                    )}
-
-                  </TouchableOpacity>
-
-                  <View style={s.headerMenuDivider} />
 
                   <TouchableOpacity
 
@@ -1314,6 +1284,15 @@ const s = StyleSheet.create({
 
   },
 
+  brandRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  brandLogo: {
+    width: 64,
+    height: 46,
+  },
   brandText: {
 
     fontFamily: 'FraunTitle',

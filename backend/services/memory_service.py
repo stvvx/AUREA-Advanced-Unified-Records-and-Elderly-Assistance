@@ -114,17 +114,23 @@ def _supabase(
     url     = f"{Config.SUPABASE_URL}/rest/v1/{path}"
     headers = Config.supabase_headers(prefer_return=(method.upper() == "POST"))
 
-    try:
-        resp = requests.request(
-            method.upper(),
-            url,
-            headers=headers,
-            params=params,
-            json=payload,
-            timeout=(3, 5),
-        )
-    except requests.RequestException as exc:
-        raise RuntimeError(f"Cannot reach Supabase: {exc}") from exc
+    # Retry reads only: retrying writes after a timeout can create duplicates.
+    attempts = 2 if method.upper() == "GET" else 1
+    for attempt in range(attempts):
+        try:
+            resp = requests.request(
+                method.upper(), url, headers=headers, params=params,
+                json=payload, timeout=(3, 8),
+            )
+        except requests.RequestException as exc:
+            if attempt + 1 < attempts:
+                continue
+            raise RuntimeError(
+                "The database service is temporarily unavailable. Please try again."
+            ) from exc
+        if resp.status_code in (502, 503, 504) and attempt + 1 < attempts:
+            continue
+        break
 
     if not resp.ok:
         try:
