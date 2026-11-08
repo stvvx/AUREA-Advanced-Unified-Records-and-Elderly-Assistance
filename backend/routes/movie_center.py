@@ -1,5 +1,6 @@
 
 import secrets
+import re
 from datetime import date, datetime, timedelta, timezone
 
 import requests
@@ -406,6 +407,20 @@ def update_screening(screening_id):
 # RESERVATIONS
 # ==========================================================
 
+@movie_center_bp.route("/screenings/<screening_id>/seats", methods=["GET"])
+def screening_reserved_seats(screening_id):
+    user, error = get_requester(get_user_id())
+    if error:
+        return error
+    try:
+        rows = _supabase("GET", "movie_reservation_seats", params={
+            "screening_id": f"eq.{screening_id}", "select": "seat_label",
+        }) or []
+        return jsonify({"reserved_seats": [row["seat_label"] for row in rows]}), 200
+    except Exception:
+        return error_response("Could not load reserved seats. Please try again.", 503)
+
+
 @movie_center_bp.route("/reservations", methods=["POST"])
 def create_reservation():
     data = request.get_json(silent=True) or {}
@@ -433,7 +448,12 @@ def create_reservation():
                 return error_response(
                     "You already have an active reservation. Cancel it before booking another screening.", 409
                 )
-        attendee_count = int(data.get("attendee_count", 1))
+        seats = data.get("seat_labels")
+        if not isinstance(seats, list) or not 1 <= len(seats) <= 5 or any(
+            not isinstance(seat, str) or not re.fullmatch(r"[A-G](10|[1-9])", seat) for seat in seats
+        ) or len(set(seats)) != len(seats):
+            return error_response("Select between one and five available seats.")
+        attendee_count = len(seats)
         if attendee_count < 1:
             return error_response("At least one attendee is required.")
 
@@ -450,7 +470,7 @@ def create_reservation():
 
         rpc_url = (
             f"{Config.SUPABASE_URL}/rest/v1/rpc/"
-            "reserve_movie_screening"
+            "reserve_movie_screening_with_seats"
         )
 
         response = requests.post(
@@ -465,7 +485,7 @@ def create_reservation():
             json={
                 "p_screening_id": screening_id,
                 "p_user_id": int(user["id"]),
-                "p_attendee_count": attendee_count,
+                "p_seat_labels": seats,
                 "p_confirmation_code": confirmation_code,
             },
             timeout=30,

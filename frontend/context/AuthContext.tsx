@@ -1,9 +1,11 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import type { ChildProfile } from '../lib/authApi';
+import { revokeUserSession, validateUserSession, type ChildProfile } from '../lib/authApi';
 
 type User = {
   id: number;
+  token?: string;
+  tokenExpiresAt?: string;
   firstName: string;
   lastName: string;
   email: string;
@@ -11,6 +13,11 @@ type User = {
   dob?: string;
   gender?: string;
   civilStatus?: string;
+  category?: string;
+  sourceOfIncome?: 'Pension' | 'Allowance' | 'Working' | null;
+  occupation?: string | null;
+  spouse?: string;
+  monthlyIncome?: number | string | null;
   contact?: string;
   address?: string;
   avatarUrl?: string | null;
@@ -51,11 +58,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     let active = true;
 
     AsyncStorage.getItem(STORAGE_KEY)
-      .then((raw) => {
+      .then(async (raw) => {
         if (!active || !raw) return;
 
         try {
-          setUser(JSON.parse(raw));
+          const saved: User = JSON.parse(raw);
+          if (!saved.token || !saved.tokenExpiresAt || !Number.isFinite(Date.parse(saved.tokenExpiresAt)) || Date.parse(saved.tokenExpiresAt) <= Date.now()) {
+            await AsyncStorage.removeItem(STORAGE_KEY);
+            return;
+          }
+          try {
+            if (!(await validateUserSession(saved.token))) {
+              await AsyncStorage.removeItem(STORAGE_KEY);
+              return;
+            }
+          } catch {
+            // Keep a locally unexpired session available during a network outage.
+          }
+          if (active) setUser(saved);
         } catch {
           AsyncStorage.removeItem(STORAGE_KEY).catch(() => undefined);
         }
@@ -73,6 +93,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const login = async (userData: User) => {
     const normalizedUser: User = {
       id: userData.id,
+      token: userData.token,
+      tokenExpiresAt: userData.tokenExpiresAt,
       firstName: userData.firstName,
       lastName: userData.lastName,
       email: userData.email,
@@ -80,6 +102,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       dob: userData.dob ?? '',
       gender: userData.gender ?? '',
       civilStatus: userData.civilStatus ?? '',
+      category: userData.category ?? 'Not Specified',
+      spouse: userData.spouse ?? '',
+      sourceOfIncome: userData.sourceOfIncome ?? null,
+      occupation: userData.occupation ?? null,
+      monthlyIncome: userData.monthlyIncome ?? null,
       contact: userData.contact ?? '',
       address: userData.address ?? '',
       avatarUrl: userData.avatarUrl ?? userData.profilePhoto ?? null,
@@ -111,6 +138,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const logout = async () => {
+    if (user?.token) await revokeUserSession(user.token);
     await AsyncStorage.removeItem(STORAGE_KEY);
     setUser(null);
   };

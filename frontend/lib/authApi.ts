@@ -103,7 +103,7 @@ export async function registerUser(payload: RegisterPayload): Promise<{ message:
   return request('/api/auth/register', payload);
 }
 
-export async function loginUser(payload: LoginPayload): Promise<{ message: string; user: { id: number; firstName: string; middleName?: string; lastName: string; dob?: string; gender?: string; civilStatus?: string; contact?: string; address?: string; email: string; avatarUrl?: string | null; profilePhoto?: string | null; oscaIdNumber?: string; role?: string; requiresFaceVerification?: boolean; children?: ChildProfile[] } }> {
+export async function loginUser(payload: LoginPayload): Promise<{ message: string; user: { id: number; firstName: string; middleName?: string; lastName: string; dob?: string; gender?: string; civilStatus?: string; contact?: string; address?: string; email: string; avatarUrl?: string | null; profilePhoto?: string | null; oscaIdNumber?: string; role?: string; requiresFaceVerification?: boolean; children?: ChildProfile[]; token?: string; tokenExpiresAt?: string } }> {
   return request('/api/auth/login', payload);
 }
 
@@ -125,7 +125,14 @@ export type UserProfile = {
   children?: ChildProfile[];
   signature?: string | null;
   digitalSignature?: string | null;
+  token?: string;
+  tokenExpiresAt?: string;
   createdAt?: string;
+  sourceOfIncome?: 'Pension' | 'Allowance' | 'Working' | null;
+  occupation?: string | null;
+  spouse?: string;
+  monthlyIncome?: number | string | null;
+  category?: string;
 };
 
 export async function getUser(userId: number): Promise<{ user: UserProfile }> {
@@ -320,4 +327,29 @@ export async function enrollFace(payload: {
   mimeType?: string;
 }): Promise<EnrollFaceResponse> {
   return request('/api/auth/enroll-face', payload);
+}
+
+
+export async function validateUserSession(token: string): Promise<boolean> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/auth/session`, {
+      headers: { Authorization: `Bearer ${token}` }, signal: controller.signal,
+    });
+    if (response.status === 401) return false;
+    if (!response.ok) throw new Error('Could not validate session.');
+    return true;
+  } finally { clearTimeout(timeout); }
+}
+
+export async function revokeUserSession(token: string): Promise<void> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/auth/logout`, {
+      method: 'POST', headers: { Authorization: `Bearer ${token}` }, signal: controller.signal,
+    });
+    if (!response.ok && response.status !== 401) throw new Error('Could not end your session. Please try again.');
+  } finally { clearTimeout(timeout); }
 }

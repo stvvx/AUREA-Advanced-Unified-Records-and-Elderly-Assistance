@@ -1,8 +1,11 @@
 import base64
+import secrets
+import ipaddress
+from decimal import Decimal, InvalidOperation
 import mimetypes
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
@@ -13,6 +16,8 @@ from werkzeug.security import check_password_hash, generate_password_hash
 import face_verifier
 import assistant_service
 from routes import register_lolo_routes
+from services.senior_categories import SENIOR_CATEGORIES
+from services.senior_profiles import with_senior_fields, income_source_patch
 
 
 # ---------------------------------------------------------------------------
@@ -171,7 +176,10 @@ def supabase_rest(
 
     if response.content:
         try:
-            return response.json()
+            rows = response.json()
+            if method.upper() == "GET" and table == SUPABASE_USERS_TABLE:
+                return with_senior_fields(rows, supabase_rest)
+            return rows
         except ValueError:
             return []
 
@@ -410,6 +418,62 @@ def register():
     }), 201
 
 
+# Session lifecycle. A users row stores the one current session for that account.
+def client_ip_address():
+    value = request.remote_addr or ""
+    if os.environ.get("TRUST_PROXY_HEADERS", "false").lower() == "true":
+        value = (request.headers.get("X-Forwarded-For") or value).split(",")[0].strip()
+    try:
+        return str(ipaddress.ip_address(value))
+    except ValueError:
+        return None
+
+
+def issue_user_session(user):
+    token = secrets.token_urlsafe(48)
+    expires = datetime.now(timezone.utc) + timedelta(days=7)
+    supabase_rest("PATCH", SUPABASE_USERS_TABLE, params={"id": f"eq.{user['id']}"}, payload={
+        "token": token, "token_expires_at": expires.isoformat(), "ip_address": client_ip_address(),
+    })
+    return {**_serialize_user(user), "token": token, "tokenExpiresAt": expires.isoformat()}
+
+
+def bearer_session_token():
+    scheme, _, token = request.headers.get("Authorization", "").partition(" ")
+    return token.strip() if scheme.lower() == "bearer" else ""
+
+
+@app.route("/api/auth/session", methods=["GET"])
+def current_session():
+    token = bearer_session_token()
+    if len(token) < 32 or len(token) > 256:
+        return jsonify({"message": "Please log in again."}), 401
+    rows = supabase_rest("GET", SUPABASE_USERS_TABLE, params={
+        "token": f"eq.{token}", "select": "*", "limit": "1",
+    })
+    if not rows:
+        return jsonify({"message": "Your session has ended. Please log in again."}), 401
+    try:
+        expires = datetime.fromisoformat(str(rows[0].get("token_expires_at") or "").replace("Z", "+00:00"))
+        if expires <= datetime.now(timezone.utc):
+            raise ValueError()
+    except (ValueError, TypeError):
+        return jsonify({"message": "Your session has expired. Please log in again."}), 401
+    return jsonify({"user": _serialize_user(rows[0])}), 200
+
+
+@app.route("/api/auth/logout", methods=["POST"])
+def logout_session():
+    token = bearer_session_token()
+    if len(token) < 32 or len(token) > 256:
+        return jsonify({"message": "Invalid session token."}), 401
+    # Matching the token also prevents an old device from clearing a newer login.
+    supabase_rest("PATCH", SUPABASE_USERS_TABLE, params={"token": f"eq.{token}"}, payload={
+        "token": None, "token_expires_at": None,
+    })
+    return jsonify({"message": "Logged out."}), 200
+
+
 # ---------------------------------------------------------------------------
 # Login
 # ---------------------------------------------------------------------------
@@ -490,34 +554,18 @@ def login():
             "message": "Invalid email or password."
         }), 401
 
-    return jsonify({
-        "message": "Login successful.",
-
-        "user": {
-            "id": user["id"],
-
-            "firstName": user["first_name"],
-
-            "middleName": user.get("middle_name") or "",
-
-            "lastName": user["last_name"],
-
-            "dob": user.get("dob") or "",
-
-            "contact": user.get("contact") or "",
-
-            "address": user.get("address") or "",
-
-            "email": user["email"],
-
-            "avatarUrl": user.get("avatar_url") or "",
-            "gender": user.get("gender") or "",
-            "civilStatus": user.get("civil_status") or "",
-            "role": user.get("role") or "user",
+    try:
+        response_user = _serialize_user(user)
+        if not requires_face_verification(user.get("role")):
+            response_user = issue_user_session(user)
+        response_user.update({
             "requiresFaceVerification": requires_face_verification(user.get("role")),
             "hasEnrolledFace": bool(user.get("avatar_url")),
-        },
-    }), 200
+        })
+        return jsonify({"message": "Login successful.", "user": response_user}), 200
+    except RuntimeError:
+        return jsonify({"message": "Could not start your session. Please try again."}), 503
+
 
 
 # ---------------------------------------------------------------------------
@@ -649,7 +697,7 @@ def verify_face():
                 "score": res.get("score", 0.0),
                 "angles": res.get("angles", {}),
                 "message": res["message"],
-                "user": _serialize_user(user),
+                "user": issue_user_session(user),
             }), 200
         else:
             return jsonify({
@@ -764,7 +812,7 @@ def enroll_face():
             "success": True,
             "avatarUrl": public_url,
             "message": "Face biometric registered successfully!",
-            "user": _serialize_user(updated_user) if updated_user else None,
+            "user": issue_user_session(updated_user) if updated_user else None,
         }), 200
 
     except Exception as exc:
@@ -807,6 +855,12 @@ def _serialize_user(u: dict) -> dict:
         "digitalSignature": sig,
         "role": u.get("role") or "user",
         "createdAt": u.get("created_at") or "",
+        "oscaIdNumber": u.get("osca_id_number") or "",
+        "spouse": u.get("spouse") or "",
+        "monthlyIncome": u.get("monthly_income"),
+        "sourceOfIncome": u.get("source_of_income"),
+        "occupation": u.get("occupation"),
+        "category": u.get("category") or "",
     }
 
 
@@ -833,6 +887,18 @@ def user_profile(user_id):
     # --- PUT ---
     data = request.get_json(silent=True) or {}
     payload = {}
+    senior_income = None
+    if "sourceOfIncome" in data or "occupation" in data:
+        try:
+            profiles = supabase_rest("GET", "seniors", params={"user_id": f"eq.{user_id}", "select": "source_of_income,occupation", "limit": "1"})
+            if not profiles:
+                return jsonify({"message": "Senior profile not found."}), 404
+            senior_income = income_source_patch(data, profiles[0])
+        except ValueError as exc:
+            return jsonify({"message": str(exc)}), 400
+        except RuntimeError as exc:
+            return jsonify({"message": str(exc)}), 500
+
 
     field_map = {
         "firstName": "first_name",
@@ -845,6 +911,9 @@ def user_profile(user_id):
         "profilePhoto": "avatar_url",
         "gender": "gender",
         "civilStatus": "civil_status",
+        "spouse": "spouse",
+        "category": "category",
+        "monthlyIncome": "monthly_income",
         "children": "children",
         "birthcert": "birth_certificate",
         "birthCertificate": "birth_certificate",
@@ -852,7 +921,22 @@ def user_profile(user_id):
     }
     for key, col in field_map.items():
         if key in data:
-            if key == "children":
+            if key == "category":
+                if not isinstance(data[key], str) or data[key] not in SENIOR_CATEGORIES:
+                    return jsonify({"message": "Select a valid senior citizen category."}), 400
+                payload[col] = data[key]
+            elif key == "monthlyIncome":
+                if data[key] is None or data[key] == "":
+                    payload[col] = None
+                else:
+                    try:
+                        income = Decimal(str(data[key]))
+                        if not income.is_finite() or income < 0 or income > Decimal("9999999999.99"):
+                            raise ValueError()
+                        payload[col] = str(income.quantize(Decimal("0.01")))
+                    except (InvalidOperation, ValueError):
+                        return jsonify({"message": "Monthly income must be a non-negative amount."}), 400
+            elif key == "children":
                 if not isinstance(data[key], list):
                     return jsonify({"message": "Children must be a list."}), 400
                 payload[col] = data[key]
@@ -863,7 +947,16 @@ def user_profile(user_id):
     # Handle digital signature fields
     sig_val = data.get("digitalSignature") or data.get("signature")
     if sig_val is not None:
-        payload["digital_signature"] = str(sig_val).strip()
+        try:
+            saved = supabase_rest("PATCH", "seniors", params={"user_id": f"eq.{user_id}"},
+                                  payload={"signature": str(sig_val).strip()})
+            # PATCH responses are empty unless return=representation is requested;
+            # verify the linked profile before treating the save as successful.
+            linked = supabase_rest("GET", "seniors", params={"user_id": f"eq.{user_id}", "select": "user_id", "limit": "1"})
+            if not linked:
+                return jsonify({"message": "Senior profile not found."}), 404
+        except RuntimeError as exc:
+            return jsonify({"message": str(exc)}), 500
 
     if "email" in payload and payload["email"]:
         payload["email"] = payload["email"].lower()
@@ -872,6 +965,11 @@ def user_profile(user_id):
         payload["address"] = normalize_address(data)
 
     if not payload:
+        if senior_income is not None:
+            supabase_rest("PATCH", "seniors", params={"user_id": f"eq.{user_id}"}, payload=senior_income)
+        if sig_val is not None or senior_income is not None:
+            rows = supabase_rest("GET", SUPABASE_USERS_TABLE, params={"id": f"eq.{user_id}", "select": "*", "limit": "1"})
+            return jsonify({"message": "Profile updated.", "user": _serialize_user(rows[0])}), 200
         return jsonify({"message": "No fields to update."}), 400
 
     try:
@@ -879,20 +977,6 @@ def user_profile(user_id):
         headers = _rest_headers(prefer_return=True)
         resp = requests.patch(url, headers=headers, params={"id": f"eq.{user_id}"}, json=payload, timeout=15)
         
-        # If patching digital_signature failed due to column name mismatch, try 'signature' column
-        if not resp.ok and "digital_signature" in payload:
-            alt_payload = dict(payload)
-            sig_content = alt_payload.pop("digital_signature")
-            alt_payload["signature"] = sig_content
-            resp = requests.patch(url, headers=headers, params={"id": f"eq.{user_id}"}, json=alt_payload, timeout=15)
-            
-            # If that also failed, try 'signature_url'
-            if not resp.ok:
-                alt_payload2 = dict(payload)
-                alt_payload2.pop("digital_signature", None)
-                alt_payload2["signature_url"] = sig_content
-                resp = requests.patch(url, headers=headers, params={"id": f"eq.{user_id}"}, json=alt_payload2, timeout=15)
-
         # If patching birth_certificate failed due to column name mismatch, try 'birthcert'
         if not resp.ok and "birth_certificate" in payload:
             alt_payload_bc = dict(payload)
@@ -907,7 +991,13 @@ def user_profile(user_id):
     except RuntimeError as exc:
         return jsonify({"message": str(exc)}), 500
 
+    if senior_income is not None:
+        try:
+            supabase_rest("PATCH", "seniors", params={"user_id": f"eq.{user_id}"}, payload=senior_income)
+        except RuntimeError as exc:
+            return jsonify({"message": str(exc)}), 500
     u = updated[0] if updated else {}
+    u = with_senior_fields([u], supabase_rest)[0] if u else u
     return jsonify({"message": "Profile updated.", "user": _serialize_user(u)}), 200
 
 
@@ -1120,51 +1210,17 @@ def save_digital_signature(user_id):
     if not signature_data:
         return jsonify({"message": "No signature data provided."}), 400
 
-    patch_url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_USERS_TABLE}"
-    headers = _rest_headers(prefer_return=True)
-    
-    # Try updating digital_signature column first
-    resp = requests.patch(
-        patch_url,
-        headers=headers,
-        params={"id": f"eq.{user_id}"},
-        json={"digital_signature": signature_data},
-        timeout=15,
-    )
+    try:
+        profiles = supabase_rest("GET", "seniors", params={"user_id": f"eq.{user_id}", "select": "user_id", "limit": "1"})
+        if not profiles:
+            return jsonify({"message": "Senior profile not found."}), 404
+        supabase_rest("PATCH", "seniors", params={"user_id": f"eq.{user_id}"}, payload={"signature": signature_data})
+        users = supabase_rest("GET", SUPABASE_USERS_TABLE, params={"id": f"eq.{user_id}", "select": "*", "limit": "1"})
+        return jsonify({"success": True, "message": "Digital signature saved successfully!",
+                        "signature": signature_data, "user": _serialize_user(users[0]) if users else {}}), 200
+    except RuntimeError as exc:
+        return jsonify({"message": str(exc)}), 500
 
-    # Fallback to signature column
-    if not resp.ok:
-        resp = requests.patch(
-            patch_url,
-            headers=headers,
-            params={"id": f"eq.{user_id}"},
-            json={"signature": signature_data},
-            timeout=15,
-        )
-
-    # Fallback to signature_url column
-    if not resp.ok:
-        resp = requests.patch(
-            patch_url,
-            headers=headers,
-            params={"id": f"eq.{user_id}"},
-            json={"signature_url": signature_data},
-            timeout=15,
-        )
-
-    if not resp.ok:
-        detail = resp.json().get("message", resp.text) if resp.content else resp.text
-        return jsonify({"message": f"Failed to save signature: {detail}"}), 500
-
-    updated_rows = resp.json() if resp.content else []
-    user_data = _serialize_user(updated_rows[0]) if updated_rows else {}
-
-    return jsonify({
-        "success": True,
-        "message": "Digital signature saved successfully!",
-        "signature": signature_data,
-        "user": user_data,
-    }), 200
 
 
 # ---------------------------------------------------------------------------

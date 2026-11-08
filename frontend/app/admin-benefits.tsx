@@ -88,7 +88,7 @@ type Application = {
   };
 };
 
-const VALIDATION_STATUSES = ['Pending', 'Under Review', 'Eligible', 'Ineligible', 'Approved', 'Rejected'];
+const VALIDATION_STATUSES = ['Pending', 'Eligible', 'Ineligible', 'Rejected'];
 const BENEFIT_STATUSES = ['Pending', 'For Processing', 'Approved', 'Released', 'Cancelled'];
 
 function statusColor(status: string) {

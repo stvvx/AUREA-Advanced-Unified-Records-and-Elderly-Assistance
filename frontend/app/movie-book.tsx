@@ -120,6 +120,39 @@ export default function MovieBookScreen() {
     null
   );
   const [selectedSeats, setSelectedSeats] = useState<string[]>([]);
+  const [reservedSeats, setReservedSeats] = useState<string[]>([]);
+  const [loadingSeats, setLoadingSeats] = useState(false);
+  const [seatError, setSeatError] = useState('');
+  const [loadedSeatScreening, setLoadedSeatScreening] = useState<string>('');
+  const [seatRefresh, setSeatRefresh] = useState(0);
+
+  useEffect(() => {
+    if (!selectedShowtime || !userId) return;
+    const controller = new AbortController();
+    let active = true;
+    let busy = false;
+    const load = async () => {
+      if (busy) return;
+      busy = true;
+      const timeout = setTimeout(() => controller.abort(), 20000);
+      try {
+        const response = await fetch(`${API_BASE}/api/movie-center/screenings/${selectedShowtime.id}/seats?user_id=${userId}`, { signal: controller.signal });
+        const data = await parseResponse(response);
+        if (!active) return;
+        const booked: string[] = data.reserved_seats || [];
+        setReservedSeats(booked);
+        setLoadedSeatScreening(String(selectedShowtime.id));
+        setSelectedSeats(previous => previous.filter(seat => !booked.includes(seat)));
+        setSeatError('');
+      } catch {
+        if (active) setSeatError('Could not load reserved seats. Tap retry before choosing seats.');
+      } finally { clearTimeout(timeout); busy = false; if (active) setLoadingSeats(false); }
+    };
+    const start = setTimeout(() => { setLoadingSeats(true); setReservedSeats([]); setSelectedSeats([]); void load(); }, 0);
+    const poll = setInterval(() => { void load(); }, 10000);
+    return () => { active = false; clearTimeout(start); clearInterval(poll); controller.abort(); };
+  }, [selectedShowtime?.id, userId, seatRefresh]);
+
 
   const [showConfirmation, setShowConfirmation] = useState(false);
   const [reservationCode, setReservationCode] = useState('');
@@ -357,7 +390,7 @@ export default function MovieBookScreen() {
   // The backend stores attendee_count, not actual seat numbers.
   // Seat labels are used only to let the user choose the attendee count.
   const handleSeatPress = (seatId: string) => {
-    if (!selectedShowtime) return;
+    if (!selectedShowtime || loadedSeatScreening !== String(selectedShowtime.id) || loadingSeats || seatError || reservedSeats.includes(seatId)) return;
 
     const availableSlots = Number(selectedShowtime.available_slots) || 0;
     const maxSelectable = Math.min(MAX_SEATS, availableSlots);
@@ -381,7 +414,7 @@ export default function MovieBookScreen() {
   };
 
   const handleReserve = async () => {
-    if (reservationBusy.current || existingReservation || checkingReservation || reservationError) return;
+    if (reservationBusy.current || existingReservation || checkingReservation || reservationError || loadingSeats || seatError || loadedSeatScreening !== String(selectedShowtime?.id)) return;
     if (!userId) {
       Alert.alert('Login required', 'Please log in again to make a reservation.');
       return;
@@ -425,6 +458,7 @@ export default function MovieBookScreen() {
             user_id: userId,
             screening_id: selectedShowtime.id,
             attendee_count: selectedSeats.length,
+            seat_labels: selectedSeats,
           }),
         }
       );
@@ -455,6 +489,7 @@ export default function MovieBookScreen() {
       // The successful booking stays visible even if this follow-up fails.
       await loadExistingReservation().catch(() => undefined);
     } catch (err: any) {
+      setSeatRefresh(value => value + 1);
       setReservationError('Please check your reservation before trying again.');
       await loadExistingReservation().catch(() => undefined);
       Alert.alert(
@@ -471,28 +506,34 @@ export default function MovieBookScreen() {
     !!selectedMovie &&
     !!selectedShowtime &&
     selectedSeats.length > 0 &&
-    !reserving &&
+    !reserving && !loadingSeats && !seatError && loadedSeatScreening === String(selectedShowtime?.id) &&
     selectedSeats.length <= Number(selectedShowtime?.available_slots || 0);
 
   const renderSeat = (row: string, col: number) => {
     const id = `${row}${col}`;
     const isSelected = selectedSeats.includes(id);
+    const isReserved = loadedSeatScreening === String(selectedShowtime?.id) && reservedSeats.includes(id);
+    const seatsUnavailable = loadingSeats || !!seatError || loadedSeatScreening !== String(selectedShowtime?.id);
 
     return (
       <TouchableOpacity
         key={id}
         activeOpacity={0.7}
         onPress={() => handleSeatPress(id)}
+        disabled={isReserved || seatsUnavailable}
+        accessibilityState={{ disabled: isReserved || seatsUnavailable, selected: isSelected }}
         accessibilityRole="button"
         accessibilityLabel={`Attendee ${id}, ${
-          isSelected ? 'selected' : 'not selected'
+          isReserved ? 'reserved' : isSelected ? 'selected' : 'available'
         }`}
         style={[
           styles.seat,
           { width: seatSize, height: seatSize },
           isSelected && styles.seatSelected,
+          isReserved && styles.seatReserved,
         ]}
       >
+        {isReserved && <Ionicons name="close" size={12} color="#FFFFFF" />}
         {isSelected && (
           <Text style={styles.seatSelectedText}>{col}</Text>
         )}
@@ -833,7 +874,7 @@ export default function MovieBookScreen() {
 
         {/* Attendee Selection */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Select Attendees</Text>
+          <Text style={styles.sectionTitle}>Select Seats</Text>
           <Text style={styles.sectionDescription}>
             Select one marker for each attendee. Up to {MAX_SEATS} attendees
             per reservation.
@@ -870,10 +911,16 @@ export default function MovieBookScreen() {
                 ))}
               </View>
 
+              {loadingSeats && <ActivityIndicator color="#7652A5" />}
+              {!!seatError && <TouchableOpacity onPress={() => setSeatRefresh(value => value + 1)}><Text style={styles.footerNote}>{seatError} Retry</Text></TouchableOpacity>}
               <View style={styles.legend}>
                 <View style={styles.legendItem}>
+                  <View style={[styles.legendSwatch, styles.seatReserved]} />
+                  <Text style={styles.legendText}>Reserved</Text>
+                </View>
+                <View style={styles.legendItem}>
                   <View style={[styles.legendSwatch, styles.seat]} />
-                  <Text style={styles.legendText}>Not selected</Text>
+                  <Text style={styles.legendText}>Available</Text>
                 </View>
                 <View style={styles.legendItem}>
                   <View
@@ -1337,6 +1384,7 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '800',
   },
+  seatReserved: { backgroundColor: '#929098', borderColor: '#929098' },
   legend: {
     flexDirection: 'row',
     justifyContent: 'center',

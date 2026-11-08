@@ -276,7 +276,7 @@ function BenefitApplicationForm({ onBirthdaySubmitted }: { onBirthdaySubmitted?:
     citizenship: 'Filipino',
     isDualCitizen: false,
     dualCitizenshipDetails: '',
-    spouseName: '',
+    spouseName: user?.spouse ?? '',
     spouseCitizenship: '',
     representativeName: '',
     representativeRelationship: '',
@@ -284,6 +284,7 @@ function BenefitApplicationForm({ onBirthdaySubmitted }: { onBirthdaySubmitted?:
     emailAddress: user?.email ?? '',
     applicantSignature: '',
   });
+  const [digitalSignature, setDigitalSignature] = useState<string | null>(null);
   const [profileChildren, setProfileChildren] = useState(user?.children ?? []);
   const [fullBodyPicture, setFullBodyPicture] = useState<BenefitAttachment | null>(null);
   const [endorsedListFile, setEndorsedListFile] = useState<BenefitAttachment | null>(null);
@@ -409,10 +410,12 @@ function BenefitApplicationForm({ onBirthdaySubmitted }: { onBirthdaySubmitted?:
           permanentAddressPhilippines: profile.address ?? user.address ?? '',
           sex: profile.gender ?? user.gender ?? '',
           civilStatus: profile.civilStatus ?? user.civilStatus ?? '',
+          spouseName: profile.spouse ?? '',
           contactNumber: profile.contact ?? user.contact ?? '',
           emailAddress: profile.email ?? user.email,
         }));
         setProfileChildren(profile.children ?? user.children ?? []);
+        setDigitalSignature(profile.digitalSignature || profile.signature || null);
         setFinancialAidForm((prev) => ({
           ...prev,
           benefitType: classifySeniorBenefit(profile.dob ?? user.dob),
@@ -425,7 +428,7 @@ function BenefitApplicationForm({ onBirthdaySubmitted }: { onBirthdaySubmitted?:
     return () => {
       active = false;
     };
-  }, [isCheckUp, isFinancialAid, user?.id, user?.address, user?.contact, user?.dob, user?.gender, user?.children, user?.civilStatus, user?.email, user?.firstName, user?.lastName, user?.middleName]);
+  }, [isCheckUp, isFinancialAid, user?.id, user?.address, user?.contact, user?.dob, user?.gender, user?.children, user?.civilStatus, user?.email, user?.firstName, user?.lastName, user?.middleName, user?.spouse]);
 
   useEffect(() => {
     if (!isCheckUp) return;
@@ -477,6 +480,7 @@ function BenefitApplicationForm({ onBirthdaySubmitted }: { onBirthdaySubmitted?:
           address: financialAidForm.permanentAddressPhilippines,
           children: profileChildren,
           avatarUrl: user?.avatarUrl ?? undefined,
+          digitalSignature,
           oscaIdNumber,
         },
       });
@@ -525,6 +529,7 @@ function BenefitApplicationForm({ onBirthdaySubmitted }: { onBirthdaySubmitted?:
           address: financialAidForm.permanentAddressPhilippines,
           children: profileChildren,
           avatarUrl: user?.avatarUrl ?? undefined,
+          digitalSignature,
           oscaIdNumber,
         },
       });

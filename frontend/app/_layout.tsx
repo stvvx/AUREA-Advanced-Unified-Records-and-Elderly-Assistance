@@ -55,6 +55,7 @@ export default function RootLayout() {
         <Stack.Screen name="movie-book" options={{ headerShown: false }} />
         <Stack.Screen name="admin-dashboard" options={{ headerShown: false }} />
         <Stack.Screen name="admin-benefits" options={{ headerShown: false }} />
+        <Stack.Screen name="admin-movie-center" options={{ headerShown: false }} />
         <Stack.Screen name="settings" options={{ headerShown: false }} />
         <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
         </Stack>

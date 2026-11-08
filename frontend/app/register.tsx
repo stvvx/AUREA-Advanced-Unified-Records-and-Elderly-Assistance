@@ -3,6 +3,7 @@ import {
   View,
   Text,
   TextInput,
+  TextInputProps,
   TouchableOpacity,
   Pressable,
   StyleSheet,
@@ -15,8 +16,9 @@ import {
   FlatList,
   Image,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import Toast from '../components/Toast';
 import { registerUser } from '../lib/authApi';
@@ -24,8 +26,8 @@ import { useAuth } from '../context/AuthContext';
 
 // ---------------------------------------------------------------------------
 // Design tokens
-// Bumped for readability: larger type scale, thicker borders, taller controls,
-// higher-contrast ink so the form is comfortable for older / low-vision users.
+// Large type, thick borders, tall controls and high-contrast ink so the form
+// stays comfortable for older and low-vision users. Matches the login screen.
 // ---------------------------------------------------------------------------
 const colors = {
   bg: '#F6FAF7',
@@ -33,10 +35,10 @@ const colors = {
   inkSoft: '#3E5548',
   primary: '#2E7D52',
   primaryDeep: '#1B5E3F',
+  primaryDarkest: '#0F3323',
   primarySoft: '#E3F2E8',
   accent: '#4C9A6B',
   border: '#B9D4C5',
-  borderFocus: '#2E7D52',
   error: '#C62828',
   errorSoft: '#FDECEC',
   white: '#FFFFFF',
@@ -44,10 +46,12 @@ const colors = {
 };
 
 const space = (n: number) => n * 4;
+const isWeb = Platform.OS === 'web';
 
 type Field = {
   label: string;
   key: string;
+  icon: string;
   placeholder: string;
   helper?: string;
   keyboardType?: 'default' | 'email-address' | 'numeric' | 'phone-pad';
@@ -69,23 +73,30 @@ const BARANGAYS = [
   'Tabacalera',
 ];
 
+const GENDERS = ['Male', 'Female'];
+const CIVIL_STATUSES = ['Single', 'Married', 'Widowed', 'Separated', 'Divorced'];
+
 const PERSONAL_FIELDS: Field[] = [
-  { label: 'First Name', key: 'firstName', placeholder: 'Juan', autoCapitalize: 'words', required: true },
-  { label: 'Middle Name', key: 'middleName', placeholder: 'Santos', helper: 'Optional', autoCapitalize: 'words' },
-  { label: 'Last Name', key: 'lastName', placeholder: 'Dela Cruz', autoCapitalize: 'words', required: true },
-  { label: 'Contact Number', key: 'contact', placeholder: '09XXXXXXXXX', helper: 'Your mobile or a family member\u2019s number', keyboardType: 'phone-pad', required: true },
+  { label: 'First name', key: 'firstName', icon: 'person-outline', placeholder: 'Juan', autoCapitalize: 'words', required: true },
+  { label: 'Middle name', key: 'middleName', icon: 'person-outline', placeholder: 'Santos', autoCapitalize: 'words' },
+  { label: 'Last name', key: 'lastName', icon: 'person-outline', placeholder: 'Dela Cruz', autoCapitalize: 'words', required: true },
 ];
 
+const CONTACT_FIELD: Field = {
+  label: 'Contact number', key: 'contact', icon: 'call-outline', placeholder: '09XXXXXXXXX',
+  helper: 'Your mobile or a family member\u2019s number', keyboardType: 'phone-pad', required: true,
+};
+
 const ACCOUNT_FIELDS: Field[] = [
-  { label: 'Email Address', key: 'email', placeholder: 'you@example.com', keyboardType: 'email-address', autoCapitalize: 'none', required: true },
-  { label: 'Password', key: 'password', placeholder: 'At least 8 characters', helper: 'Use 8 or more characters', autoCapitalize: 'none', secure: true, required: true },
-  { label: 'Confirm Password', key: 'confirmPassword', placeholder: 'Re-enter password', autoCapitalize: 'none', secure: true, required: true },
+  { label: 'Email address', key: 'email', icon: 'mail-outline', placeholder: 'you@example.com', keyboardType: 'email-address', autoCapitalize: 'none', required: true },
+  { label: 'Password', key: 'password', icon: 'lock-closed-outline', placeholder: 'At least 8 characters', autoCapitalize: 'none', secure: true, required: true },
+  { label: 'Confirm password', key: 'confirmPassword', icon: 'lock-closed-outline', placeholder: 'Re-enter password', autoCapitalize: 'none', secure: true, required: true },
 ];
 
 const STEPS = [
-  { title: 'Personal Information', icon: 'person-outline', description: 'Tell us who you are' },
-  { title: 'Home Address', icon: 'location-outline', description: 'Where you live in Pateros' },
-  { title: 'Account Details', icon: 'lock-closed-outline', description: 'Set up your login' },
+  { title: 'Personal information', short: 'Personal', icon: 'person-outline', description: 'Tell us who you are' },
+  { title: 'Home address', short: 'Address', icon: 'location-outline', description: 'Where you live in Pateros' },
+  { title: 'Account details', short: 'Account', icon: 'lock-closed-outline', description: 'Set up your login' },
 ] as const;
 
 function toDobString(date: Date) {
@@ -137,8 +148,137 @@ function parseDobString(value?: string): Date | null {
   return date;
 }
 
+const webDateStyle = {
+  height: 60,
+  boxSizing: 'border-box',
+  width: '100%',
+  borderRadius: 16,
+  border: `2px solid ${colors.border}`,
+  backgroundColor: colors.bg,
+  padding: '0 16px',
+  fontFamily: 'InterBody, sans-serif',
+  fontSize: 17,
+  color: colors.ink,
+} as any;
+
+// ---------------------------------------------------------------------------
+// Building blocks
+// ---------------------------------------------------------------------------
+function Label({ text, required, optional }: { text: string; required?: boolean; optional?: boolean }) {
+  return (
+    <Text style={styles.label}>
+      {text}
+      {required ? <Text style={styles.required}> *</Text> : null}
+      {optional ? <Text style={styles.optional}>  (optional)</Text> : null}
+    </Text>
+  );
+}
+
+function TextField({
+  label, required, optional, icon, error, helper, right, ...inputProps
+}: TextInputProps & {
+  label: string; required?: boolean; optional?: boolean; icon: string;
+  error?: boolean; helper?: React.ReactNode; right?: React.ReactNode;
+}) {
+  const [focused, setFocused] = useState(false);
+  return (
+    <View>
+      <Label text={label} required={required} optional={optional} />
+      <View style={[styles.inputWrap, focused && styles.inputWrapFocused, error && styles.inputWrapError]}>
+        <Ionicons
+          name={icon as any}
+          size={22}
+          color={error ? colors.error : focused ? colors.primaryDeep : colors.inkSoft}
+        />
+        <TextInput
+          {...inputProps}
+          onFocus={(e) => { setFocused(true); inputProps.onFocus?.(e); }}
+          onBlur={(e) => { setFocused(false); inputProps.onBlur?.(e); }}
+          placeholderTextColor="#6F8478"
+          style={styles.input}
+        />
+        {right}
+      </View>
+      {helper}
+    </View>
+  );
+}
+
+function SelectField({
+  label, required, optional, icon, value, placeholder, error, onPress, trailing = 'chevron-down',
+}: {
+  label: string; required?: boolean; optional?: boolean; icon: string; value: string;
+  placeholder: string; error?: boolean; onPress: () => void; trailing?: string;
+}) {
+  return (
+    <View>
+      <Label text={label} required={required} optional={optional} />
+      <TouchableOpacity
+        style={[styles.inputWrap, error && styles.inputWrapError]}
+        onPress={onPress}
+        activeOpacity={0.8}
+        accessibilityRole="button"
+        accessibilityLabel={`${label}: ${value || placeholder}`}
+      >
+        <Ionicons name={icon as any} size={22} color={error ? colors.error : colors.inkSoft} />
+        <Text style={[styles.selectText, !value && styles.selectPlaceholder]} numberOfLines={1}>
+          {value || placeholder}
+        </Text>
+        <Ionicons name={trailing as any} size={20} color={colors.inkSoft} />
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+function ChoiceChips({
+  label, required, optional, options, value, onChange, error,
+}: {
+  label: string; required?: boolean; optional?: boolean; options: string[];
+  value: string; onChange: (v: string) => void; error?: boolean;
+}) {
+  return (
+    <View>
+      <Label text={label} required={required} optional={optional} />
+      <View style={styles.chipWrap}>
+        {options.map((option) => {
+          const active = option === value;
+          return (
+            <TouchableOpacity
+              key={option}
+              style={[styles.chip, active && styles.chipActive, error && !active && styles.chipError]}
+              onPress={() => onChange(optional && active ? '' : option)}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityState={{ selected: active }}
+            >
+              {active && <Ionicons name="checkmark-circle" size={18} color={colors.primaryDeep} />}
+              <Text style={[styles.chipText, active && styles.chipTextActive]}>{option}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
+function SummaryRow({ icon, label, value }: { icon: string; label: string; value: string }) {
+  return (
+    <View style={styles.summaryRow}>
+      <Ionicons name={icon as any} size={18} color={colors.primaryDeep} style={{ marginTop: 2 }} />
+      <View style={{ flex: 1 }}>
+        <Text style={styles.summaryLabel}>{label}</Text>
+        <Text style={styles.summaryValue}>{value || '—'}</Text>
+      </View>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Screen
+// ---------------------------------------------------------------------------
 export default function RegisterScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { login } = useAuth();
   const scrollRef = useRef<React.ElementRef<typeof ScrollView>>(null);
 
@@ -155,13 +295,15 @@ export default function RegisterScreen() {
   });
   const [barangayOpen, setBarangayOpen] = useState(false);
   const [gender, setGender] = useState('');
-  const [genderOpen, setGenderOpen] = useState(false);
   const [civilStatus, setCivilStatus] = useState('');
-  const [civilStatusOpen, setCivilStatusOpen] = useState(false);
   const [address, setAddress] = useState({ barangay: '', houseNo: '', street: '', subdivision: '' });
+  const [errorKeys, setErrorKeys] = useState<string[]>([]);
   const [toast, setToast] = useState<{ visible: boolean; message: string; type: 'success' | 'error' }>({
     visible: false, message: '', type: 'success',
   });
+
+  const hasError = (key: string) => errorKeys.includes(key);
+  const clearError = (key: string) => setErrorKeys((keys) => keys.filter((k) => k !== key));
 
   const openDobPicker = () => {
     const parsed = parseDobString(form.dob);
@@ -188,34 +330,52 @@ export default function RegisterScreen() {
   const showToast = (message: string, type: 'success' | 'error') =>
     setToast({ visible: true, message, type });
 
-  const set = (key: string, value: string) => setForm((f) => ({ ...f, [key]: value }));
+  const set = (key: string, value: string) => {
+    setForm((f) => ({ ...f, [key]: value }));
+    clearError(key);
+  };
+
+  const setAddressField = (key: keyof typeof address, value: string) => {
+    setAddress((a) => ({ ...a, [key]: value }));
+    clearError(key);
+  };
 
   const scrollTop = () => scrollRef.current?.scrollTo({ y: 0, animated: true });
 
-  const validateStep = (index: number): string | null => {
+  const checkStep = (index: number): { message: string | null; keys: string[] } => {
+    const keys: string[] = [];
+    let message: string | null = null;
+    const fail = (key: string, msg: string) => {
+      keys.push(key);
+      if (!message) message = msg;
+    };
+
     if (index === 0) {
-      if (!form.firstName?.trim()) return 'Please enter your first name.';
-      if (!form.lastName?.trim()) return 'Please enter your last name.';
-      if (!form.dob?.trim()) return 'Please select your date of birth.';
-      if (!gender) return 'Please select your gender.';
-      if (!form.contact?.trim()) return 'Please enter a contact number.';
-      return null;
+      if (!form.firstName?.trim()) fail('firstName', 'Please enter your first name.');
+      if (!form.lastName?.trim()) fail('lastName', 'Please enter your last name.');
+      if (!form.dob?.trim()) fail('dob', 'Please select your date of birth.');
+      if (!gender) fail('gender', 'Please select your gender.');
+      if (!form.contact?.trim()) fail('contact', 'Please enter a contact number.');
+    } else if (index === 1) {
+      if (!address.barangay) fail('barangay', 'Please select your barangay.');
+      if (!address.houseNo.trim()) fail('houseNo', 'Please enter your house number.');
+      if (!address.street.trim()) fail('street', 'Please enter your street.');
+    } else {
+      if (!form.email?.trim()) fail('email', 'Please enter your email address.');
+      if (!form.password || form.password.length < 8) fail('password', 'Password must be at least 8 characters.');
+      if (form.password !== form.confirmPassword) fail('confirmPassword', 'Passwords do not match.');
     }
-    if (index === 1) {
-      if (!address.barangay) return 'Please select your barangay.';
-      if (!address.houseNo.trim()) return 'Please enter your house number.';
-      if (!address.street.trim()) return 'Please enter your street.';
-      return null;
-    }
-    if (!form.email?.trim()) return 'Please enter your email address.';
-    if (!form.password || form.password.length < 8) return 'Password must be at least 8 characters.';
-    if (form.password !== form.confirmPassword) return 'Passwords do not match.';
-    return null;
+    return { message, keys };
   };
 
   const handleNext = () => {
-    const err = validateStep(step);
-    if (err) { showToast(err, 'error'); return; }
+    const { message, keys } = checkStep(step);
+    if (message) {
+      setErrorKeys(keys);
+      showToast(message, 'error');
+      return;
+    }
+    setErrorKeys([]);
     if (step < STEPS.length - 1) {
       setStep((s) => s + 1);
       scrollTop();
@@ -226,13 +386,20 @@ export default function RegisterScreen() {
 
   const handleBack = () => {
     if (step === 0) { router.back(); return; }
+    setErrorKeys([]);
     setStep((s) => s - 1);
     scrollTop();
   };
 
+  const goToStep = (index: number) => {
+    setErrorKeys([]);
+    setStep(index);
+    scrollTop();
+  };
+
   const handleRegister = async () => {
-    const err = validateStep(2);
-    if (err) { showToast(err, 'error'); return; }
+    const { message, keys } = checkStep(2);
+    if (message) { setErrorKeys(keys); showToast(message, 'error'); return; }
     setLoading(true);
     try {
       const data = await registerUser({
@@ -262,8 +429,8 @@ export default function RegisterScreen() {
         } as any);
       }, 1200);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Registration failed. Please try again.';
-      showToast(message, 'error');
+      const msg = error instanceof Error ? error.message : 'Registration failed. Please try again.';
+      showToast(msg, 'error');
     } finally {
       setLoading(false);
     }
@@ -273,27 +440,66 @@ export default function RegisterScreen() {
     const isPassword = field.key === 'password';
     const isConfirm = field.key === 'confirmPassword';
     const secure = (isPassword && !showPassword) || (isConfirm && !showConfirm);
+    const value = form[field.key] ?? '';
 
-    if (field.secure) {
-      return (
-        <View key={field.key} style={styles.fieldBlock}>
-          <Text style={styles.label}>
-            {field.label} {field.required && <Text style={styles.required}>*</Text>}
+    let helper: React.ReactNode = field.helper ? <Text style={styles.helperText}>{field.helper}</Text> : null;
+
+    if (isPassword) {
+      const longEnough = value.length >= 8;
+      helper = (
+        <View style={styles.checkRow}>
+          <Ionicons
+            name={longEnough ? 'checkmark-circle' : 'ellipse-outline'}
+            size={16}
+            color={longEnough ? colors.primary : colors.inkSoft}
+          />
+          <Text style={[styles.helperText, { marginTop: 0 }, longEnough && styles.helperOk]}>
+            Use 8 or more characters
           </Text>
-          <View style={styles.passwordWrap}>
-            <TextInput
-              style={styles.passwordInput}
-              value={form[field.key] ?? ''}
-              onChangeText={(v) => set(field.key, v)}
-              placeholder={field.placeholder}
-              placeholderTextColor={colors.inkSoft}
-              secureTextEntry={secure}
-              autoCapitalize="none"
-            />
+        </View>
+      );
+    }
+
+    if (isConfirm && value.length > 0) {
+      const matches = value === (form.password ?? '');
+      helper = (
+        <View style={styles.checkRow}>
+          <Ionicons
+            name={matches ? 'checkmark-circle' : 'close-circle'}
+            size={16}
+            color={matches ? colors.primary : colors.error}
+          />
+          <Text style={[styles.helperText, { marginTop: 0 }, matches ? styles.helperOk : styles.helperBad]}>
+            {matches ? 'Passwords match' : 'Passwords do not match yet'}
+          </Text>
+        </View>
+      );
+    }
+
+    return (
+      <TextField
+        key={field.key}
+        label={field.label}
+        required={field.required}
+        optional={!field.required && field.key === 'middleName'}
+        icon={field.icon}
+        error={hasError(field.key)}
+        helper={helper}
+        value={value}
+        onChangeText={(v) => set(field.key, v)}
+        placeholder={field.placeholder}
+        keyboardType={field.keyboardType ?? 'default'}
+        autoCapitalize={field.autoCapitalize ?? 'sentences'}
+        autoCorrect={false}
+        secureTextEntry={secure}
+        autoComplete={isPassword || isConfirm ? 'new-password' : undefined}
+        right={
+          field.secure ? (
             <TouchableOpacity
-              onPress={() => isPassword ? setShowPassword((p) => !p) : setShowConfirm((p) => !p)}
+              onPress={() => (isPassword ? setShowPassword((p) => !p) : setShowConfirm((p) => !p))}
               activeOpacity={0.7}
               hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              accessibilityRole="button"
               accessibilityLabel={secure ? 'Show password' : 'Hide password'}
             >
               <Ionicons
@@ -302,37 +508,18 @@ export default function RegisterScreen() {
                 color={colors.primaryDeep}
               />
             </TouchableOpacity>
-          </View>
-          {field.helper && <Text style={styles.helperText}>{field.helper}</Text>}
-        </View>
-      );
-    }
-
-    return (
-      <View key={field.key} style={styles.fieldBlock}>
-        <Text style={styles.label}>
-          {field.label} {field.required && <Text style={styles.required}>*</Text>}
-        </Text>
-        <TextInput
-          style={styles.input}
-          value={form[field.key] ?? ''}
-          onChangeText={(v) => set(field.key, v)}
-          placeholder={field.placeholder}
-          placeholderTextColor={colors.inkSoft}
-          keyboardType={field.keyboardType ?? 'default'}
-          autoCapitalize={field.autoCapitalize ?? 'sentences'}
-          autoCorrect={false}
-        />
-        {field.helper && <Text style={styles.helperText}>{field.helper}</Text>}
-      </View>
+          ) : undefined
+        }
+      />
     );
   };
 
   const current = STEPS[step];
+  const fullName = [form.firstName, form.middleName, form.lastName].map((p) => p?.trim()).filter(Boolean).join(' ');
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-      <StatusBar barStyle="dark-content" />
+    <View style={styles.safe}>
+      <StatusBar barStyle="light-content" />
       <Toast
         visible={toast.visible}
         message={toast.message}
@@ -343,34 +530,46 @@ export default function RegisterScreen() {
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
-        {/* Top bar: back + step progress (stays visible on every step) */}
-        <View style={styles.topBar}>
-          <TouchableOpacity
-            style={styles.back}
-            onPress={handleBack}
-            activeOpacity={0.7}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            accessibilityLabel="Go back"
-          >
-            <Ionicons name="arrow-back" size={24} color={colors.primaryDeep} />
-            <Text style={styles.backText}>Back</Text>
-          </TouchableOpacity>
+        {/* Top bar: back + labelled step progress (stays visible on every step) */}
+        <LinearGradient
+          colors={[colors.primary, colors.primaryDarkest]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={[styles.topBar, { paddingTop: Math.max(insets.top, space(3)) + space(1) }]}
+        >
+          <View style={styles.topInner}>
+            <View style={styles.topRow}>
+              <TouchableOpacity
+                style={styles.back}
+                onPress={handleBack}
+                activeOpacity={0.7}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                accessibilityRole="button"
+                accessibilityLabel="Go back"
+              >
+                <Ionicons name="arrow-back" size={22} color={colors.white} />
+                <Text style={styles.backText}>Back</Text>
+              </TouchableOpacity>
+              <Text style={styles.stepCount}>Step {step + 1} of {STEPS.length}</Text>
+            </View>
 
-          <View style={styles.progressWrap}>
-            <Text style={styles.progressLabel}>Step {step + 1} of {STEPS.length}</Text>
-            <View style={styles.progressTrack}>
-              {STEPS.map((_, i) => (
-                <View
-                  key={i}
-                  style={[
-                    styles.progressSegment,
-                    i <= step && styles.progressSegmentDone,
-                  ]}
-                />
-              ))}
+            <View style={styles.stepper}>
+              {STEPS.map((s, i) => {
+                const done = i < step;
+                const active = i === step;
+                return (
+                  <View key={s.short} style={styles.stepItem}>
+                    <View style={[styles.stepBar, (done || active) && styles.stepBarOn]} />
+                    <View style={styles.stepNameRow}>
+                      {done && <Ionicons name="checkmark-circle" size={14} color={colors.white} />}
+                      <Text style={[styles.stepName, active && styles.stepNameActive]}>{s.short}</Text>
+                    </View>
+                  </View>
+                );
+              })}
             </View>
           </View>
-        </View>
+        </LinearGradient>
 
         <ScrollView
           ref={scrollRef}
@@ -378,50 +577,51 @@ export default function RegisterScreen() {
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          {/* Header */}
-          <View style={styles.header}>
-            <View style={styles.logoRow}>
-              <Image
-                source={require('../assets/images/aurea-pateros-logo.png')}
-                style={styles.aureaLogo}
-                resizeMode="contain"
-                accessibilityLabel="AUREA Municipality of Pateros logo"
-              />
-              <Image
-                source={require('../assets/images/image copy 2.png')}
-                style={styles.logo}
-                resizeMode="contain"
-                accessibilityLabel="Gobyernong Pateros logo"
-              />
-            </View>
-            <Text style={styles.eyebrow}>MUNICIPALITY OF PATEROS</Text>
-            <Text style={styles.title}>Create Your Account</Text>
-            <Text style={styles.subtitle}>Register as a senior citizen of Pateros</Text>
-          </View>
-
-          {/* Current step card */}
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <View style={styles.sectionIconWrap}>
-                <Ionicons name={current.icon as any} size={20} color={colors.primaryDeep} />
+          <View style={styles.content}>
+            {/* Intro (first step only, so later steps get straight to the form) */}
+            {step === 0 && (
+              <View style={styles.header}>
+                <View style={styles.logoCard}>
+                  <Image
+                    source={require('../assets/images/aurea-pateros-logo.png')}
+                    style={styles.aureaLogo}
+                    resizeMode="contain"
+                    accessibilityLabel="AUREA Municipality of Pateros logo"
+                  />
+                  <View style={styles.logoDivider} />
+                  <Image
+                    source={require('../assets/images/image copy 2.png')}
+                    style={styles.logo}
+                    resizeMode="contain"
+                    accessibilityLabel="Gobyernong Pateros logo"
+                  />
+                </View>
+                <Text style={styles.title}>Create your account</Text>
+                <Text style={styles.subtitle}>Register as a senior citizen of Pateros</Text>
               </View>
-              <View>
-                <Text style={styles.sectionTitle}>{current.title}</Text>
-                <Text style={styles.sectionSubtitle}>{current.description}</Text>
+            )}
+
+            {/* Current step card */}
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <View style={styles.sectionIconWrap}>
+                  <Ionicons name={current.icon as any} size={22} color={colors.primaryDeep} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.sectionTitle}>{current.title}</Text>
+                  <Text style={styles.sectionSubtitle}>{current.description}</Text>
+                </View>
               </View>
-            </View>
 
-            <View style={styles.fields}>
-              {step === 0 && (
-                <>
-                  {PERSONAL_FIELDS.map(renderField)}
+              <View style={styles.fields}>
+                {step === 0 && (
+                  <>
+                    {PERSONAL_FIELDS.map(renderField)}
 
-                  {/* Date of Birth — calendar picker */}
-                  <View style={styles.fieldBlock}>
-                    <Text style={styles.label}>Date of Birth <Text style={styles.required}>*</Text></Text>
-                    
-                    {Platform.OS === 'web' ? (
-                      <>
+                    {/* Date of birth */}
+                    {isWeb ? (
+                      <View>
+                        <Label text="Date of birth" required />
                         <input
                           type="date"
                           value={form.dob ? toDateInputValue(parseDobString(form.dob) ?? dobDraft) : ''}
@@ -435,378 +635,381 @@ export default function RegisterScreen() {
                             }
                           }}
                           max={new Date().toISOString().split('T')[0]}
-                          style={styles.input}
+                          style={webDateStyle}
                         />
-                      </>
+                      </View>
                     ) : (
-                      <TouchableOpacity
-                        style={styles.dropdown}
+                      <SelectField
+                        label="Date of birth"
+                        required
+                        icon="calendar-outline"
+                        trailing="chevron-down"
+                        value={form.dob ?? ''}
+                        placeholder="Select date of birth"
+                        error={hasError('dob')}
                         onPress={openDobPicker}
-                        activeOpacity={0.8}
-                      >
-                        <Text style={form.dob ? styles.dropdownValue : styles.dropdownPlaceholder}>
-                          {form.dob || 'Select date of birth'}
-                        </Text>
-                        <Ionicons name="calendar-outline" size={20} color={colors.inkSoft} />
-                      </TouchableOpacity>
+                      />
                     )}
-                  </View>
 
-                  {/* Gender picker */}
-                  <View style={styles.fieldBlock}>
-                    <Text style={styles.label}>Gender <Text style={styles.required}>*</Text></Text>
-                    <TouchableOpacity
-                      style={styles.dropdown}
-                      onPress={() => setGenderOpen(true)}
-                      activeOpacity={0.8}
-                    >
-                      <Text style={gender ? styles.dropdownValue : styles.dropdownPlaceholder}>
-                        {gender || 'Select gender'}
-                      </Text>
-                      <Ionicons name="chevron-down" size={20} color={colors.inkSoft} />
-                    </TouchableOpacity>
-                  </View>
+                    <ChoiceChips
+                      label="Gender"
+                      required
+                      options={GENDERS}
+                      value={gender}
+                      error={hasError('gender')}
+                      onChange={(v) => { setGender(v); clearError('gender'); }}
+                    />
 
-                  {/* Civil Status picker */}
-                  <View style={styles.fieldBlock}>
-                    <Text style={styles.label}>Civil Status <Text style={styles.optional}>(optional)</Text></Text>
-                    <TouchableOpacity
-                      style={styles.dropdown}
-                      onPress={() => setCivilStatusOpen(true)}
-                      activeOpacity={0.8}
-                    >
-                      <Text style={civilStatus ? styles.dropdownValue : styles.dropdownPlaceholder}>
-                        {civilStatus || 'Select civil status'}
-                      </Text>
-                      <Ionicons name="chevron-down" size={20} color={colors.inkSoft} />
-                    </TouchableOpacity>
-                  </View>
-                </>
-              )}
+                    <ChoiceChips
+                      label="Civil status"
+                      optional
+                      options={CIVIL_STATUSES}
+                      value={civilStatus}
+                      onChange={setCivilStatus}
+                    />
 
-              {step === 1 && (
-                <>
-                  <View style={styles.fieldBlock}>
-                    <Text style={styles.label}>Barangay <Text style={styles.required}>*</Text></Text>
-                    <TouchableOpacity
-                      style={styles.dropdown}
+                    {renderField(CONTACT_FIELD)}
+                  </>
+                )}
+
+                {step === 1 && (
+                  <>
+                    <SelectField
+                      label="Barangay"
+                      required
+                      icon="location-outline"
+                      value={address.barangay}
+                      placeholder="Select your barangay"
+                      error={hasError('barangay')}
                       onPress={() => setBarangayOpen(true)}
-                      activeOpacity={0.8}
-                    >
-                      <Text style={address.barangay ? styles.dropdownValue : styles.dropdownPlaceholder}>
-                        {address.barangay || 'Select your barangay'}
-                      </Text>
-                      <Ionicons name="chevron-down" size={20} color={colors.inkSoft} />
-                    </TouchableOpacity>
-                  </View>
+                    />
 
-                  <View style={styles.row}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.label}>House No. <Text style={styles.required}>*</Text></Text>
-                      <TextInput
-                        style={styles.input}
-                        value={address.houseNo}
-                        onChangeText={(v) => setAddress((a) => ({ ...a, houseNo: v }))}
-                        placeholder="123"
-                        placeholderTextColor={colors.inkSoft}
-                        keyboardType="default"
-                      />
+                    <View style={styles.row}>
+                      <View style={{ flex: 1 }}>
+                        <TextField
+                          label="House no."
+                          required
+                          icon="home-outline"
+                          error={hasError('houseNo')}
+                          value={address.houseNo}
+                          onChangeText={(v) => setAddressField('houseNo', v)}
+                          placeholder="123"
+                        />
+                      </View>
+                      <View style={{ flex: 2 }}>
+                        <TextField
+                          label="Street"
+                          required
+                          icon="trail-sign-outline"
+                          error={hasError('street')}
+                          value={address.street}
+                          onChangeText={(v) => setAddressField('street', v)}
+                          placeholder="Rizal Street"
+                          autoCapitalize="words"
+                        />
+                      </View>
                     </View>
-                    <View style={{ flex: 2 }}>
-                      <Text style={styles.label}>Street <Text style={styles.required}>*</Text></Text>
-                      <TextInput
-                        style={styles.input}
-                        value={address.street}
-                        onChangeText={(v) => setAddress((a) => ({ ...a, street: v }))}
-                        placeholder="Rizal Street"
-                        placeholderTextColor={colors.inkSoft}
-                        autoCapitalize="words"
-                      />
-                    </View>
-                  </View>
 
-                  <View style={styles.fieldBlock}>
-                    <Text style={styles.label}>Subdivision <Text style={styles.optional}>(optional)</Text></Text>
-                    <TextInput
-                      style={styles.input}
+                    <TextField
+                      label="Subdivision"
+                      optional
+                      icon="business-outline"
                       value={address.subdivision}
-                      onChangeText={(v) => setAddress((a) => ({ ...a, subdivision: v }))}
+                      onChangeText={(v) => setAddressField('subdivision', v)}
                       placeholder="e.g. Pateros Homes"
-                      placeholderTextColor={colors.inkSoft}
                       autoCapitalize="words"
                     />
+                  </>
+                )}
+
+                {step === 2 && ACCOUNT_FIELDS.map(renderField)}
+              </View>
+            </View>
+
+            {/* Review (last step) */}
+            {step === 2 && (
+              <>
+                <View style={styles.summaryCard}>
+                  <Text style={styles.summaryTitle}>Please check your details</Text>
+
+                  <View style={styles.summaryGroup}>
+                    <View style={styles.summaryGroupHead}>
+                      <Text style={styles.summaryGroupTitle}>Personal</Text>
+                      <TouchableOpacity onPress={() => goToStep(0)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} accessibilityRole="button" accessibilityLabel="Edit personal information">
+                        <Text style={styles.editLink}>Edit</Text>
+                      </TouchableOpacity>
+                    </View>
+                    <SummaryRow icon="person-outline" label="Name" value={fullName} />
+                    <SummaryRow icon="calendar-outline" label="Date of birth" value={form.dob ?? ''} />
+                    <SummaryRow icon="call-outline" label="Contact" value={form.contact?.trim() ?? ''} />
                   </View>
-                </>
-              )}
 
-              {step === 2 && ACCOUNT_FIELDS.map(renderField)}
-            </View>
+                  <View style={styles.summaryDivider} />
+
+                  <View style={styles.summaryGroup}>
+                    <View style={styles.summaryGroupHead}>
+                      <Text style={styles.summaryGroupTitle}>Address</Text>
+                      <TouchableOpacity onPress={() => goToStep(1)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} accessibilityRole="button" accessibilityLabel="Edit address">
+                        <Text style={styles.editLink}>Edit</Text>
+                      </TouchableOpacity>
+                    </View>
+                    <SummaryRow icon="location-outline" label="Home address" value={buildAddress()} />
+                  </View>
+                </View>
+
+                <View style={styles.note}>
+                  <View style={styles.noteIcon}>
+                    <Ionicons name="scan-outline" size={20} color={colors.primaryDeep} />
+                  </View>
+                  <Text style={styles.noteText}>
+                    After you create your account, you will set up Face ID. It helps keep your account safe.
+                  </Text>
+                </View>
+              </>
+            )}
+
+            {/* Log in link on the first step only */}
+            {step === 0 && (
+              <View style={styles.footer}>
+                <Text style={styles.footerText}>Already have an account?</Text>
+                <TouchableOpacity
+                  style={styles.loginBtn}
+                  onPress={() => router.replace('/login')}
+                  activeOpacity={0.8}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.loginBtnText}>Log in</Text>
+                </TouchableOpacity>
+              </View>
+            )}
           </View>
-
-          {/* Footer link only shown on first step to reduce clutter later */}
-          {step === 0 && (
-            <View style={styles.footer}>
-              <Text style={styles.footerText}>Already have an account? </Text>
-              <TouchableOpacity onPress={() => router.replace('/login')} activeOpacity={0.7}>
-                <Text style={styles.footerLink}>Log in</Text>
-              </TouchableOpacity>
-            </View>
-          )}
         </ScrollView>
 
         {/* Sticky bottom action bar */}
-        <View style={styles.actionBar}>
-          <TouchableOpacity
-            style={[styles.submitBtn, loading && { opacity: 0.7 }]}
-            onPress={handleNext}
-            activeOpacity={0.85}
-            disabled={loading}
-            accessibilityRole="button"
-            accessibilityLabel={step === STEPS.length - 1 ? 'Create account' : 'Continue'}
-          >
-            {loading ? (
-              <ActivityIndicator color={colors.white} />
-            ) : (
-              <>
-                <Text style={styles.submitText}>
-                  {step === STEPS.length - 1 ? 'Create Account' : 'Continue'}
-                </Text>
-                {step < STEPS.length - 1 && (
-                  <Ionicons name="arrow-forward" size={20} color={colors.white} style={{ marginLeft: 8 }} />
-                )}
-              </>
-            )}
-          </TouchableOpacity>
+        <View style={[styles.actionBar, { paddingBottom: Math.max(insets.bottom, space(4)) }]}>
+          <View style={styles.actionInner}>
+            <TouchableOpacity
+              style={[styles.submitBtn, loading && { opacity: 0.7 }]}
+              onPress={handleNext}
+              activeOpacity={0.85}
+              disabled={loading}
+              accessibilityRole="button"
+              accessibilityLabel={step === STEPS.length - 1 ? 'Create account' : 'Continue'}
+            >
+              {loading ? (
+                <ActivityIndicator color={colors.white} />
+              ) : (
+                <>
+                  <Text style={styles.submitText}>
+                    {step === STEPS.length - 1 ? 'Create account' : 'Continue'}
+                  </Text>
+                  <Ionicons
+                    name={step === STEPS.length - 1 ? 'checkmark' : 'arrow-forward'}
+                    size={20}
+                    color={colors.white}
+                  />
+                </>
+              )}
+            </TouchableOpacity>
+          </View>
         </View>
       </KeyboardAvoidingView>
 
-        <Modal visible={dobOpen} transparent animationType="fade" onRequestClose={() => setDobOpen(false)}>
-            <Pressable style={styles.modalOverlay} onPress={() => setDobOpen(false)}>
-              <Pressable style={[styles.modalSheet, { paddingHorizontal: space(5) }]} onPress={() => {}}>
-                <View style={styles.modalHandle} />
-                <Text style={styles.modalTitle}>Select Date of Birth</Text>
-                <View style={styles.datePickerColumns}>
-                  {([
-                    ['month', MONTHS, dobDraft.getMonth()],
-                    ['day', Array.from({ length: daysInMonth(dobDraft.getFullYear(), dobDraft.getMonth() + 1) }, (_, index) => String(index + 1)), dobDraft.getDate() - 1],
-                    ['year', DOB_YEARS.map(String), DOB_YEARS.indexOf(dobDraft.getFullYear())],
-                  ] as const).map(([column, options, selectedIndex]) => (
-                    <View key={column} style={styles.datePickerColumn}>
-                      <Text style={styles.datePickerColumnLabel}>{column.toUpperCase()}</Text>
-                      <FlatList
-                        data={options}
-                        keyExtractor={(item) => String(item)}
-                        initialScrollIndex={Math.max(0, selectedIndex)}
-                        getItemLayout={(_, index) => ({ length: 44, offset: 44 * index, index })}
-                        showsVerticalScrollIndicator={false}
-                        renderItem={({ item, index }) => {
-                          const isSelected = index === selectedIndex;
-                          return (
-                            <TouchableOpacity
-                              style={[styles.datePickerOption, isSelected && styles.datePickerOptionSelected]}
-                              onPress={() => {
-                                const next = new Date(dobDraft);
-                                if (column === 'month') {
-                                  const month = Number(index);
-                                  next.setDate(Math.min(next.getDate(), daysInMonth(next.getFullYear(), month + 1)));
-                                  next.setMonth(month);
-                                } else if (column === 'day') {
-                                  next.setDate(Number(item));
-                                } else {
-                                  next.setFullYear(Number(item));
-                                  next.setDate(Math.min(next.getDate(), daysInMonth(next.getFullYear(), next.getMonth() + 1)));
-                                }
-                                setDobDraft(next);
-                              }}
-                            >
-                              <Text style={[styles.datePickerOptionText, isSelected && styles.datePickerOptionTextSelected]}>
-                                {item}
-                              </Text>
-                            </TouchableOpacity>
-                          );
-                        }}
-                      />
-                    </View>
-                  ))}
-                </View>
-
-                <View style={styles.modalActions}>
-                  <TouchableOpacity
-                    style={styles.modalBtnSecondary}
-                    onPress={() => setDobOpen(false)}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={styles.modalBtnSecondaryTxt}>Cancel</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={styles.modalBtnPrimary}
-                    onPress={confirmDob}
-                    activeOpacity={0.85}
-                  >
-                    <Text style={styles.modalBtnPrimaryTxt}>Confirm</Text>
-                  </TouchableOpacity>
-                </View>
-              </Pressable>
-            </Pressable>
-        </Modal>
-
-      {/* Gender Picker Modal */}
-      <Modal visible={genderOpen} transparent animationType="fade" onRequestClose={() => setGenderOpen(false)}>
-        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setGenderOpen(false)}>
-          <View style={styles.modalSheet}>
+      {/* Date of birth picker */}
+      <Modal visible={dobOpen} transparent animationType="fade" onRequestClose={() => setDobOpen(false)}>
+        <Pressable style={styles.modalOverlay} onPress={() => setDobOpen(false)}>
+          <Pressable style={[styles.modalSheet, { paddingHorizontal: space(5) }]} onPress={() => {}}>
             <View style={styles.modalHandle} />
-            <Text style={styles.modalTitle}>Select Gender</Text>
-            {['Male', 'Female'].map((item) => (
+            <Text style={styles.modalTitle}>Select date of birth</Text>
+            <Text style={styles.dobPreview}>
+              {MONTHS[dobDraft.getMonth()]} {dobDraft.getDate()}, {dobDraft.getFullYear()}
+            </Text>
+            <View style={styles.datePickerColumns}>
+              {([
+                ['Month', MONTHS, dobDraft.getMonth()],
+                ['Day', Array.from({ length: daysInMonth(dobDraft.getFullYear(), dobDraft.getMonth() + 1) }, (_, index) => String(index + 1)), dobDraft.getDate() - 1],
+                ['Year', DOB_YEARS.map(String), DOB_YEARS.indexOf(dobDraft.getFullYear())],
+              ] as const).map(([column, options, selectedIndex]) => (
+                <View key={column} style={styles.datePickerColumn}>
+                  <Text style={styles.datePickerColumnLabel}>{column}</Text>
+                  <FlatList
+                    data={options}
+                    keyExtractor={(item) => String(item)}
+                    initialScrollIndex={Math.max(0, selectedIndex)}
+                    getItemLayout={(_, index) => ({ length: 48, offset: 48 * index, index })}
+                    showsVerticalScrollIndicator={false}
+                    renderItem={({ item, index }) => {
+                      const isSelected = index === selectedIndex;
+                      return (
+                        <TouchableOpacity
+                          style={[styles.datePickerOption, isSelected && styles.datePickerOptionSelected]}
+                          onPress={() => {
+                            const next = new Date(dobDraft);
+                            if (column === 'Month') {
+                              const month = Number(index);
+                              next.setDate(Math.min(next.getDate(), daysInMonth(next.getFullYear(), month + 1)));
+                              next.setMonth(month);
+                            } else if (column === 'Day') {
+                              next.setDate(Number(item));
+                            } else {
+                              next.setFullYear(Number(item));
+                              next.setDate(Math.min(next.getDate(), daysInMonth(next.getFullYear(), next.getMonth() + 1)));
+                            }
+                            setDobDraft(next);
+                          }}
+                        >
+                          <Text style={[styles.datePickerOptionText, isSelected && styles.datePickerOptionTextSelected]}>
+                            {item}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    }}
+                  />
+                </View>
+              ))}
+            </View>
+
+            <View style={styles.modalActions}>
               <TouchableOpacity
-                key={item}
-                style={[styles.modalItem, item === gender && styles.modalItemActive]}
-                onPress={() => { setGender(item); setGenderOpen(false); }}
+                style={styles.modalBtnSecondary}
+                onPress={() => setDobOpen(false)}
+                activeOpacity={0.8}
               >
-                <Text style={[styles.modalItemText, item === gender && styles.modalItemTextActive]}>{item}</Text>
-                {item === gender && <Ionicons name="checkmark-circle" size={22} color={colors.primaryDeep} />}
+                <Text style={styles.modalBtnSecondaryTxt}>Cancel</Text>
               </TouchableOpacity>
-            ))}
-          </View>
-        </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.modalBtnPrimary}
+                onPress={confirmDob}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.modalBtnPrimaryTxt}>Confirm</Text>
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </Pressable>
       </Modal>
 
-      {/* Civil Status Picker Modal */}
-      <Modal visible={civilStatusOpen} transparent animationType="fade" onRequestClose={() => setCivilStatusOpen(false)}>
-        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setCivilStatusOpen(false)}>
-          <View style={styles.modalSheet}>
-            <View style={styles.modalHandle} />
-            <Text style={styles.modalTitle}>Select Civil Status</Text>
-            {['Single', 'Married', 'Widowed', 'Separated', 'Divorced'].map((item) => (
-              <TouchableOpacity
-                key={item}
-                style={[styles.modalItem, item === civilStatus && styles.modalItemActive]}
-                onPress={() => { setCivilStatus(item); setCivilStatusOpen(false); }}
-              >
-                <Text style={[styles.modalItemText, item === civilStatus && styles.modalItemTextActive]}>{item}</Text>
-                {item === civilStatus && <Ionicons name="checkmark-circle" size={22} color={colors.primaryDeep} />}
-              </TouchableOpacity>
-            ))}
-          </View>
-        </TouchableOpacity>
-      </Modal>
-
-      {/* Barangay Picker Modal */}
+      {/* Barangay picker */}
       <Modal visible={barangayOpen} transparent animationType="fade" onRequestClose={() => setBarangayOpen(false)}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setBarangayOpen(false)}>
           <View style={styles.modalSheet}>
             <View style={styles.modalHandle} />
-            <Text style={styles.modalTitle}>Select Barangay</Text>
+            <Text style={styles.modalTitle}>Select barangay</Text>
             <FlatList
               data={BARANGAYS}
               keyExtractor={(item) => item}
-              renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={[
-                    styles.modalItem,
-                    item === address.barangay && styles.modalItemActive,
-                  ]}
-                  onPress={() => {
-                    setAddress((a) => ({ ...a, barangay: item }));
-                    setBarangayOpen(false);
-                  }}
-                >
-                  <Text style={[
-                    styles.modalItemText,
-                    item === address.barangay && styles.modalItemTextActive,
-                  ]}>{item}</Text>
-                  {item === address.barangay && (
-                    <Ionicons name="checkmark-circle" size={22} color={colors.primaryDeep} />
-                  )}
-                </TouchableOpacity>
-              )}
+              renderItem={({ item }) => {
+                const active = item === address.barangay;
+                return (
+                  <TouchableOpacity
+                    style={[styles.modalItem, active && styles.modalItemActive]}
+                    onPress={() => {
+                      setAddressField('barangay', item);
+                      setBarangayOpen(false);
+                    }}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: active }}
+                  >
+                    <Text style={[styles.modalItemText, active && styles.modalItemTextActive]}>{item}</Text>
+                    {active && <Ionicons name="checkmark-circle" size={22} color={colors.primaryDeep} />}
+                  </TouchableOpacity>
+                );
+              }}
             />
           </View>
         </TouchableOpacity>
       </Modal>
-    </SafeAreaView>
+    </View>
   );
 }
 
+// ---------------------------------------------------------------------------
+// Styles
+// ---------------------------------------------------------------------------
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },
 
-  // Top bar with back button + progress indicator
+  // Top bar
   topBar: {
     paddingHorizontal: space(5),
-    paddingTop: space(3),
-    paddingBottom: space(2),
-    backgroundColor: colors.bg,
+    paddingBottom: space(4),
+    borderBottomLeftRadius: 28,
+    borderBottomRightRadius: 28,
+  },
+  topInner: { width: '100%', maxWidth: 480, alignSelf: 'center' },
+  topRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: space(4),
   },
   back: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    marginBottom: space(3),
-    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(255,255,255,0.16)',
+    borderRadius: 22,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
   },
   backText: {
     fontFamily: 'InterBody',
     fontSize: 16,
-    color: colors.primaryDeep,
+    color: colors.white,
     fontWeight: '700',
   },
-  progressWrap: { gap: 6 },
-  progressLabel: {
+  stepCount: {
     fontFamily: 'InterBody',
     fontWeight: '700',
-    fontSize: 13,
-    color: colors.accent,
-    letterSpacing: 0.4,
+    fontSize: 14,
+    color: 'rgba(255,255,255,0.85)',
   },
-  progressTrack: {
-    flexDirection: 'row',
-    gap: 6,
-  },
-  progressSegment: {
-    flex: 1,
+  stepper: { flexDirection: 'row', gap: space(2) },
+  stepItem: { flex: 1, gap: 8 },
+  stepBar: {
     height: 6,
     borderRadius: 3,
-    backgroundColor: colors.track,
+    backgroundColor: 'rgba(255,255,255,0.25)',
   },
-  progressSegmentDone: {
-    backgroundColor: colors.primary,
+  stepBarOn: { backgroundColor: colors.white },
+  stepNameRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  stepName: {
+    fontFamily: 'InterBody',
+    fontSize: 13,
+    fontWeight: '600',
+    color: 'rgba(255,255,255,0.65)',
   },
+  stepNameActive: { color: colors.white, fontWeight: '700' },
 
   container: {
     flexGrow: 1,
     paddingHorizontal: space(5),
-    paddingTop: Math.max(space(3), 10),
-    paddingBottom: space(10),
+    paddingTop: space(5),
+    paddingBottom: space(8),
   },
+  content: { width: '100%', maxWidth: 480, alignSelf: 'center' },
 
+  // Intro
   header: {
     alignItems: 'center',
-    marginTop: space(2),
-    marginBottom: space(6),
+    marginBottom: space(5),
   },
-  logoRow: {
+  logoCard: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: space(4),
-    marginBottom: space(3),
+    gap: space(3),
+    backgroundColor: colors.white,
+    borderRadius: 22,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    paddingVertical: space(3),
+    paddingHorizontal: space(5),
+    marginBottom: space(4),
   },
-  aureaLogo: {
-    width: 124,
-    height: 88,
-  },
-  logo: {
-    width: 88,
-    height: 88,
-  },
-  eyebrow: {
-    fontFamily: 'InterBody',
-    fontWeight: '700',
-    fontSize: 11,
-    letterSpacing: 1.4,
-    color: colors.accent,
-    marginBottom: space(2),
-  },
+  aureaLogo: { width: 104, height: 68 },
+  logoDivider: { width: 1.5, height: 40, backgroundColor: colors.border },
+  logo: { width: 68, height: 68 },
   title: {
     fontFamily: 'FraunTitle',
     fontSize: 30,
@@ -816,22 +1019,23 @@ const styles = StyleSheet.create({
   },
   subtitle: {
     fontFamily: 'InterBody',
-    fontSize: 15,
+    fontSize: 16,
     color: colors.inkSoft,
     textAlign: 'center',
-    lineHeight: 21,
+    lineHeight: 22,
   },
 
+  // Step card
   section: {
     marginBottom: space(5),
     backgroundColor: colors.white,
-    borderRadius: 20,
+    borderRadius: 24,
     borderWidth: 1.5,
     borderColor: colors.border,
     padding: space(5),
     ...Platform.select({
-      ios: { shadowColor: '#0E1F16', shadowOpacity: 0.06, shadowRadius: 12, shadowOffset: { width: 0, height: 4 } },
-      android: { elevation: 1 },
+      ios: { shadowColor: '#0E1F16', shadowOpacity: 0.07, shadowRadius: 14, shadowOffset: { width: 0, height: 6 } },
+      android: { elevation: 2 },
     }),
   },
   sectionHeader: {
@@ -841,31 +1045,30 @@ const styles = StyleSheet.create({
     marginBottom: space(5),
     paddingBottom: space(4),
     borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    borderBottomColor: colors.track,
   },
   sectionIconWrap: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
+    width: 46,
+    height: 46,
+    borderRadius: 15,
     backgroundColor: colors.primarySoft,
     alignItems: 'center',
     justifyContent: 'center',
   },
   sectionTitle: {
-    fontFamily: 'InterBody',
-    fontWeight: '700',
-    fontSize: 17,
+    fontFamily: 'FraunTitle',
+    fontSize: 20,
     color: colors.ink,
   },
   sectionSubtitle: {
     fontFamily: 'InterBody',
-    fontSize: 13,
+    fontSize: 14,
     color: colors.inkSoft,
     marginTop: 2,
   },
 
+  // Fields
   fields: { gap: space(5) },
-  fieldBlock: { gap: 0 },
   label: {
     fontFamily: 'InterBody',
     fontWeight: '700',
@@ -873,104 +1076,211 @@ const styles = StyleSheet.create({
     color: colors.ink,
     marginBottom: space(2),
   },
-  helperText: {
-    fontFamily: 'InterBody',
-    fontSize: 12.5,
-    color: colors.inkSoft,
-    marginTop: 6,
-  },
-  input: {
-    height: 58,
-    borderRadius: 14,
-    borderWidth: 2,
-    borderColor: colors.border,
-    backgroundColor: colors.white,
-    paddingHorizontal: space(4),
-    fontFamily: 'InterBody',
-    fontSize: 17,
-    color: colors.ink,
-  },
-  passwordWrap: {
-    height: 58,
-    borderRadius: 14,
-    borderWidth: 2,
-    borderColor: colors.border,
-    backgroundColor: colors.white,
-    paddingHorizontal: space(4),
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  passwordInput: {
-    flex: 1,
-    fontFamily: 'InterBody',
-    fontSize: 17,
-    color: colors.ink,
-  },
-
-  row: {
-    flexDirection: 'row',
-    gap: space(3),
-  },
-  dropdown: {
-    height: 58,
-    borderRadius: 14,
-    borderWidth: 2,
-    borderColor: colors.border,
-    backgroundColor: colors.white,
-    paddingHorizontal: space(4),
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  dropdownValue: {
-    fontFamily: 'InterBody',
-    fontSize: 17,
-    color: colors.ink,
-  },
-  dropdownPlaceholder: {
-    fontFamily: 'InterBody',
-    fontSize: 17,
-    color: colors.inkSoft,
-  },
-  required: {
-    color: colors.error,
-    fontWeight: '700',
-  },
+  required: { color: colors.error, fontWeight: '700' },
   optional: {
     fontFamily: 'InterBody',
     fontSize: 13,
     color: colors.inkSoft,
     fontWeight: '400',
   },
+  inputWrap: {
+    height: 60,
+    borderRadius: 16,
+    borderWidth: 2,
+    borderColor: colors.border,
+    backgroundColor: colors.bg,
+    paddingHorizontal: space(4),
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space(3),
+  },
+  inputWrapFocused: {
+    borderColor: colors.primary,
+    backgroundColor: colors.white,
+  },
+  inputWrapError: {
+    borderColor: colors.error,
+    backgroundColor: colors.errorSoft,
+  },
+  input: {
+    flex: 1,
+    height: '100%',
+    fontFamily: 'InterBody',
+    fontSize: 17,
+    color: colors.ink,
+    ...(isWeb ? ({ outlineStyle: 'none' } as any) : {}),
+  },
+  selectText: {
+    flex: 1,
+    fontFamily: 'InterBody',
+    fontSize: 17,
+    color: colors.ink,
+  },
+  selectPlaceholder: { color: '#6F8478' },
+  helperText: {
+    fontFamily: 'InterBody',
+    fontSize: 13.5,
+    color: colors.inkSoft,
+    marginTop: 8,
+  },
+  helperOk: { color: colors.primaryDeep, fontWeight: '600' },
+  helperBad: { color: colors.error, fontWeight: '600' },
+  checkRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8 },
+  row: { flexDirection: 'row', gap: space(3) },
+
+  // Choice chips
+  chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: space(2.5) },
+  chip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    minHeight: 52,
+    minWidth: 96,
+    paddingHorizontal: space(4),
+    borderRadius: 16,
+    borderWidth: 2,
+    borderColor: colors.border,
+    backgroundColor: colors.bg,
+  },
+  chipActive: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primarySoft,
+  },
+  chipError: {
+    borderColor: colors.error,
+    backgroundColor: colors.errorSoft,
+  },
+  chipText: {
+    fontFamily: 'InterBody',
+    fontSize: 16.5,
+    color: colors.ink,
+    fontWeight: '500',
+  },
+  chipTextActive: { color: colors.primaryDeep, fontWeight: '700' },
+
+  // Review
+  summaryCard: {
+    backgroundColor: colors.white,
+    borderRadius: 24,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    padding: space(5),
+    marginBottom: space(4),
+  },
+  summaryTitle: {
+    fontFamily: 'FraunTitle',
+    fontSize: 18,
+    color: colors.ink,
+    marginBottom: space(4),
+  },
+  summaryGroup: { gap: space(3) },
+  summaryGroupHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  summaryGroupTitle: {
+    fontFamily: 'InterBody',
+    fontWeight: '700',
+    fontSize: 14,
+    color: colors.accent,
+  },
+  editLink: {
+    fontFamily: 'InterBody',
+    fontWeight: '700',
+    fontSize: 15,
+    color: colors.primaryDeep,
+    textDecorationLine: 'underline',
+  },
+  summaryRow: { flexDirection: 'row', gap: space(3) },
+  summaryLabel: { fontFamily: 'InterBody', fontSize: 13, color: colors.inkSoft },
+  summaryValue: { fontFamily: 'InterBody', fontSize: 16, fontWeight: '600', color: colors.ink, marginTop: 1 },
+  summaryDivider: { height: 1, backgroundColor: colors.track, marginVertical: space(4) },
+
+  note: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space(3),
+    backgroundColor: colors.primarySoft,
+    borderRadius: 18,
+    padding: space(4),
+    marginBottom: space(2),
+  },
+  noteIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: colors.white,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  noteText: {
+    flex: 1,
+    fontFamily: 'InterBody',
+    fontSize: 14.5,
+    lineHeight: 21,
+    color: colors.inkSoft,
+  },
+
+  // Footer
+  footer: {
+    alignItems: 'center',
+    gap: space(3),
+    marginTop: space(2),
+  },
+  footerText: {
+    fontFamily: 'InterBody',
+    fontSize: 15,
+    color: colors.inkSoft,
+  },
+  loginBtn: {
+    alignSelf: 'stretch',
+    height: 56,
+    borderRadius: 16,
+    borderWidth: 2,
+    borderColor: colors.primaryDeep,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.white,
+  },
+  loginBtnText: {
+    fontFamily: 'InterBody',
+    fontSize: 17,
+    fontWeight: '700',
+    color: colors.primaryDeep,
+  },
 
   // Sticky action bar keeps the primary button in the same place every step
   actionBar: {
     paddingHorizontal: space(5),
     paddingTop: space(3),
-    paddingBottom: Platform.OS === 'ios' ? space(6) : space(4),
-    backgroundColor: colors.bg,
+    backgroundColor: colors.white,
     borderTopWidth: 1,
     borderTopColor: colors.border,
   },
+  actionInner: { width: '100%', maxWidth: 480, alignSelf: 'center' },
   submitBtn: {
-    height: 58,
-    borderRadius: 16,
+    height: 60,
+    borderRadius: 18,
     backgroundColor: colors.primaryDeep,
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
+    gap: 10,
     ...Platform.select({
-      ios: { shadowColor: '#000', shadowOpacity: 0.16, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
-      android: { elevation: 3 },
+      ios: { shadowColor: colors.primaryDeep, shadowOpacity: 0.3, shadowRadius: 12, shadowOffset: { width: 0, height: 6 } },
+      android: { elevation: 4 },
     }),
   },
   submitText: {
     fontFamily: 'InterBody',
     fontWeight: '700',
-    fontSize: 17,
+    fontSize: 18,
     color: colors.white,
   },
 
+  // Modals
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(14,31,22,0.5)',
@@ -978,11 +1288,14 @@ const styles = StyleSheet.create({
   },
   modalSheet: {
     backgroundColor: colors.white,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
     paddingTop: space(3),
     paddingBottom: space(8),
-    maxHeight: '70%',
+    maxHeight: '75%',
+    width: '100%',
+    maxWidth: isWeb ? 480 : '100%',
+    alignSelf: 'center',
   },
   modalHandle: {
     width: 44,
@@ -994,7 +1307,7 @@ const styles = StyleSheet.create({
   },
   modalTitle: {
     fontFamily: 'FraunTitle',
-    fontSize: 19,
+    fontSize: 20,
     color: colors.ink,
     textAlign: 'center',
     marginBottom: space(3),
@@ -1007,48 +1320,50 @@ const styles = StyleSheet.create({
     paddingVertical: 18,
     paddingHorizontal: space(6),
     borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    borderBottomColor: colors.track,
   },
-  modalItemActive: {
-    backgroundColor: colors.primarySoft,
-  },
+  modalItemActive: { backgroundColor: colors.primarySoft },
   modalItemText: {
     fontFamily: 'InterBody',
-    fontSize: 16.5,
+    fontSize: 17,
     color: colors.ink,
   },
   modalItemTextActive: {
     color: colors.primaryDeep,
     fontWeight: '700',
   },
+
+  dobPreview: {
+    fontFamily: 'FraunTitle',
+    fontSize: 24,
+    color: colors.primaryDeep,
+    textAlign: 'center',
+    marginBottom: space(3),
+  },
   datePickerColumns: {
     flexDirection: 'row',
     gap: space(2),
-    height: 220,
+    height: 240,
   },
-  datePickerColumn: {
-    flex: 1,
-  },
+  datePickerColumn: { flex: 1 },
   datePickerColumnLabel: {
     fontFamily: 'InterBody',
-    fontSize: 11,
+    fontSize: 13,
     fontWeight: '700',
     color: colors.inkSoft,
     textAlign: 'center',
     marginBottom: space(1),
   },
   datePickerOption: {
-    height: 44,
-    borderRadius: 10,
+    height: 48,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  datePickerOptionSelected: {
-    backgroundColor: colors.primarySoft,
-  },
+  datePickerOptionSelected: { backgroundColor: colors.primarySoft },
   datePickerOptionText: {
     fontFamily: 'InterBody',
-    fontSize: 15,
+    fontSize: 17,
     color: colors.inkSoft,
   },
   datePickerOptionTextSelected: {
@@ -1059,13 +1374,13 @@ const styles = StyleSheet.create({
   modalActions: {
     flexDirection: 'row',
     gap: space(3),
-    marginTop: space(3),
+    marginTop: space(4),
   },
   modalBtnSecondary: {
     flex: 1,
-    height: 48,
-    borderRadius: 12,
-    borderWidth: 1.5,
+    height: 54,
+    borderRadius: 16,
+    borderWidth: 2,
     borderColor: colors.border,
     alignItems: 'center',
     justifyContent: 'center',
@@ -1073,39 +1388,22 @@ const styles = StyleSheet.create({
   },
   modalBtnSecondaryTxt: {
     fontFamily: 'InterBody',
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: '700',
     color: colors.inkSoft,
   },
   modalBtnPrimary: {
     flex: 1,
-    height: 48,
-    borderRadius: 12,
+    height: 54,
+    borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: colors.primaryDeep,
   },
   modalBtnPrimaryTxt: {
     fontFamily: 'InterBody',
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: '700',
     color: colors.white,
-  },
-  footer: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginTop: space(2),
-  },
-  footerText: {
-    fontFamily: 'InterBody',
-    fontSize: 14.5,
-    color: colors.inkSoft,
-  },
-  footerLink: {
-    fontFamily: 'InterBody',
-    fontSize: 14.5,
-    fontWeight: '700',
-    color: colors.primaryDeep,
   },
 });

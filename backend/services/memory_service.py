@@ -21,6 +21,7 @@ from typing import Any, Optional
 import requests
 
 from config import Config
+from services.senior_profiles import with_senior_fields
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -140,7 +141,10 @@ def _supabase(
             detail = resp.text
         raise RuntimeError(f"Supabase error ({resp.status_code}): {detail}")
 
-    return resp.json() if resp.content else []
+    rows = resp.json() if resp.content else []
+    if method.upper() == "GET" and path == Config.SUPABASE_USERS_TABLE:
+        return with_senior_fields(rows, _supabase)
+    return rows
 
 
 # ─── Gemini Client ────────────────────────────────────────────────────────────

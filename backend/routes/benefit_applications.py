@@ -107,6 +107,52 @@ def missing_schema_column(error: Exception) -> str | None:
     return next((value for value in match.groups() if value), None) if match else None
 
 
+def birthday_benefit_milestone(dob, on_date=None):
+    try:
+        try:
+            birth = datetime.strptime(str(dob).strip(), "%Y-%m-%d").date()
+        except ValueError:
+            birth = datetime.strptime(str(dob).strip(), "%m/%d/%Y").date()
+        today = date.fromisoformat(str(on_date)[:10]) if on_date else date.today()
+        age = today.year - birth.year - ((today.month, today.day) < (birth.month, birth.day))
+        return next((milestone for milestone in (100, 95, 90, 85, 80) if age >= milestone), None)
+    except (ValueError, TypeError):
+        return None
+
+
+def application_milestone(application, dob):
+    if application.get("benefit_milestone") in (80, 85, 90, 95, 100):
+        return application["benefit_milestone"]
+    return birthday_benefit_milestone(dob, application.get("date_of_application") or application.get("created_at")) if (application.get("date_of_application") or application.get("created_at")) else {"Octogenarian": 80, "Nonagenarian": 90, "Centenarian": 100}.get(application.get("benefit_type"))
+
+
+def birthday_application_eligibility(dob, applications, reviewed_ids):
+    benefit_type = classify_benefit_type(dob)
+    if not benefit_type:
+        return {"can_apply": False, "benefit_type": None, "message": "You are not yet eligible for a birthday benefit."}
+    if any(item.get("benefit_status") != "Released" for item in applications):
+        return {"can_apply": False, "benefit_type": benefit_type, "message": "Track your existing application until your benefit is released."}
+    # The tracking view and feedback requirement both refer to the latest application.
+    if applications and str(applications[0].get("id")) not in reviewed_ids:
+        return {"can_apply": False, "benefit_type": benefit_type, "message": "Submit feedback for your released benefit before applying again."}
+    milestone = birthday_benefit_milestone(dob)
+    if any(application_milestone(item, dob) == milestone for item in applications):
+        next_age = {80: 85, 85: 90, 90: 95, 95: 100}.get(milestone)
+        message = f"You may apply for your next birthday benefit when you turn {next_age}." if next_age else "You have already applied for the Centenarian benefit."
+        return {"can_apply": False, "benefit_type": benefit_type, "message": message}
+    return {"can_apply": True, "benefit_type": benefit_type, "message": f"You are eligible to apply for the age {milestone} birthday benefit."}
+
+
+def load_birthday_eligibility(user_id, dob, applications):
+    feedback = _supabase("GET", "service_feedback", params={
+        "user_id": f"eq.{user_id}", "service_key": "eq.birthday_benefits", "select": "*",
+    }) if applications else []
+    result = birthday_application_eligibility(dob, applications, {str(row["service_record_id"]) for row in (feedback or [])})
+    latest_id = str(applications[0].get("id")) if applications else None
+    result["latest_feedback"] = next((row for row in (feedback or []) if str(row.get("service_record_id")) == latest_id), None)
+    return result
+
+
 @benefit_applications_bp.route("", methods=["POST", "OPTIONS"])
 def create_benefit_application():
     if request.method == "OPTIONS":
@@ -130,16 +176,16 @@ def create_benefit_application():
     if not isinstance(users, list) or not users:
         return jsonify({"success": False, "error": "Applicant was not found."}), 404
 
+    profile = users[0]
     try:
         existing = _supabase("GET", "octogenarian_benefit_applications", params={
-            "user_id": f"eq.{user_id}", "select": "id", "limit": "1",
+            "user_id": f"eq.{user_id}", "select": "*", "order": "created_at.desc",
         }) or []
-        if existing:
-            return jsonify({"error": "You already submitted an application. Please track its status."}), 409
+        eligibility = load_birthday_eligibility(user_id, profile.get("dob"), existing)
+        if not eligibility["can_apply"]:
+            return jsonify({"error": eligibility["message"]}), 409
     except Exception:
-        return jsonify({"error": "Could not check existing applications. Please try again."}), 503
-
-    profile = users[0]
+        return jsonify({"error": "Could not check application eligibility. Please try again."}), 503
     applicant_dob = str(profile.get("dob") or "").strip()
     try:
         try:
@@ -159,7 +205,8 @@ def create_benefit_application():
             "error": "Only users aged 60 and above may avail senior citizen services.",
         }), 403
 
-    date_of_birth = str(data.get("date_of_birth") or "").strip()
+    # Eligibility uses the saved profile DOB, not a client-supplied age.
+    date_of_birth = str(profile.get("dob") or "").strip()
     benefit_type = classify_benefit_type(date_of_birth)
     if not date_of_birth:
         return jsonify({"success": False, "error": "date_of_birth is required."}), 400
@@ -183,6 +230,7 @@ def create_benefit_application():
     payload["user_id"] = user_id
     payload["osca_id_number"] = f"SA-{user_id:04d}"
     payload["benefit_type"] = benefit_type
+    payload["benefit_milestone"] = birthday_benefit_milestone(date_of_birth)
     profile_birth_certificate = (
         profile.get("birth_certificate")
         or profile.get("birthcert")
@@ -341,6 +389,7 @@ def list_admin_benefit_applications():
                 "children": user.get("children") or [],
                 "avatarUrl": id_picture_url,
                 "oscaIdNumber": user.get("osca_id_number") or "",
+                "digitalSignature": user.get("digital_signature") or user.get("signature") or None,
             },
         })
 
@@ -362,7 +411,12 @@ def get_user_benefit_applications(user_id: int):
                 "order": "created_at.desc",
             },
         )
-        return jsonify({"success": True, "applications": applications or []}), 200
+        users = _supabase("GET", "users", params={"id": f"eq.{user_id}", "select": "id,dob", "limit": "1"}) or []
+        if not users:
+            return jsonify({"error": "Applicant not found."}), 404
+        eligibility = load_birthday_eligibility(user_id, users[0].get("dob"), applications or [])
+        return jsonify({"success": True, "applications": applications or [],
+                        "feedback": eligibility.pop("latest_feedback", None), "eligibility": eligibility}), 200
     except Exception as exc:
         return jsonify({"success": False, "error": str(exc)}), 500
 

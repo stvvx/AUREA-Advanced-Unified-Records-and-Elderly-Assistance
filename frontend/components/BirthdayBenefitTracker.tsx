@@ -5,7 +5,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { API_BASE_URL } from '../services/loloApi';
 
 type Application = {
-  id: string; benefit_type?: string; validation_status?: string; benefit_status?: string;
+  id: string; benefit_milestone?: number; benefit_type?: string; validation_status?: string; benefit_status?: string;
   created_at?: string; date_validated?: string; date_released?: string; benefit_amount?: number;
   findings_concerns_recommendations?: string;
 };
@@ -28,6 +28,7 @@ export default function BirthdayBenefitTracker({ userId, renderForm }: {
   const [rating, setRating] = useState(0);
   const [comments, setComments] = useState('');
   const [saving, setSaving] = useState(false);
+  const [eligibility, setEligibility] = useState<{ can_apply: boolean; message: string } | null>(null);
 
   useFocusEffect(useCallback(() => {
     let active = true;
@@ -43,14 +44,11 @@ export default function BirthdayBenefitTracker({ userId, renderForm }: {
         if (!active) return;
         const item = data.applications?.[0] || null;
         setApplication(item);
+        setEligibility(data.eligibility || null);
         setChecked(true);
         setError('');
-        if (item?.benefit_status === 'Released') {
-          const result = await read(await fetch(`${API_BASE_URL}/api/benefit-applications/${item.id}/feedback?user_id=${userId}`, { signal: controller.signal }));
-          if (!active) return;
-          setFeedback(result.feedback);
-          setFeedbackReady(true);
-        }
+        setFeedback(data.feedback || null);
+        setFeedbackReady(true);
       } catch (err) {
         if (active) setError(err instanceof Error ? err.message : 'Could not connect. Please try again.');
       } finally { clearTimeout(timeout); busy = false; }
@@ -71,13 +69,15 @@ export default function BirthdayBenefitTracker({ userId, renderForm }: {
         body: JSON.stringify({ user_id: userId, rating, comments: comments.trim() }),
       }));
       setFeedback(data.feedback);
+      setEligibility(null);
+      setRefresh(value => value + 1);
       setError('');
     } catch (err) { setError(err instanceof Error ? err.message : 'Could not save feedback.'); }
     finally { setSaving(false); }
   };
 
-  if (checked && !application && !error) {
-    return <>{renderForm((item) => { setApplication(item); setFeedbackReady(false); setRefresh(v => v + 1); })}</>;
+  if (checked && !error && (!application || (eligibility?.can_apply && feedback))) {
+    return <>{renderForm((item) => { setApplication(item); setEligibility(null); setFeedback(null); setFeedbackReady(false); setRefresh(v => v + 1); })}</>;
   }
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
@@ -88,8 +88,9 @@ export default function BirthdayBenefitTracker({ userId, renderForm }: {
         {error ? <View style={s.card}><Text style={s.error}>{error}</Text><TouchableOpacity onPress={() => setRefresh(v => v + 1)}><Text style={s.link}>Try again</Text></TouchableOpacity></View> : null}
         {!checked && !error ? <ActivityIndicator color="#1F5C3E" /> : null}
         {application && <>
+          {feedback && eligibility && <View style={s.card}><Text style={s.detail}>{eligibility.message}</Text></View>}
           <View style={s.card}>
-            <Text style={s.heading}>{application.benefit_type} application</Text>
+            <Text style={s.heading}>{application.benefit_type} application{application.benefit_milestone ? ` (age ${application.benefit_milestone})` : ''}</Text>
             <Text selectable style={s.detail}>Reference: {application.id}</Text>
             <Text style={s.detail}>Submitted: {application.created_at?.slice(0, 10) || 'Submitted'}</Text>
             <Text style={s.label}>VALIDATION STATUS</Text><Text style={s.status}>{application.validation_status || 'Pending'}</Text>

@@ -26,6 +26,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import QRCode from 'react-native-qrcode-svg';
 import { WebView } from 'react-native-webview';
 import { useAuth } from '../context/AuthContext';
+import { SENIOR_CATEGORIES } from '../data/seniorCategories';
 import {
   getUser,
   updateUser,
@@ -279,6 +280,7 @@ function PickerModal({
         <View style={styles.modalSheet}>
           {!isWeb && <View style={styles.modalHandle} />}
           <Text style={styles.modalTitle}>{title}</Text>
+          <ScrollView style={{ maxHeight: 360 }} keyboardShouldPersistTaps="handled">
           {options.map((item) => {
             const active = item === value;
             return (
@@ -294,6 +296,7 @@ function PickerModal({
               </TouchableOpacity>
             );
           })}
+          </ScrollView>
         </View>
       </TouchableOpacity>
     </Modal>
@@ -304,7 +307,7 @@ function PickerModal({
 // Screen
 // ---------------------------------------------------------------------------
 const snapshotOf = (f: Record<string, any>, kids: ChildProfile[]) =>
-  JSON.stringify([f.firstName, f.middleName, f.lastName, f.email, f.dob, f.gender, f.civilStatus, f.contact, f.address, kids]);
+  JSON.stringify([f.firstName, f.middleName, f.lastName, f.email, f.dob, f.gender, f.civilStatus, f.category, f.spouse, f.monthlyIncome, f.sourceOfIncome, f.occupation, f.contact, f.address, kids]);
 
 export default function ProfileScreen() {
   const router = useRouter();
@@ -318,6 +321,8 @@ export default function ProfileScreen() {
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [genderOpen, setGenderOpen] = useState(false);
   const [civilStatusOpen, setCivilStatusOpen] = useState(false);
+  const [categoryOpen, setCategoryOpen] = useState(false);
+  const [incomeSourceOpen, setIncomeSourceOpen] = useState(false);
 
   const [children, setChildren] = useState<ChildProfile[]>(user?.children ?? []);
   const [childDobPickerId, setChildDobPickerId] = useState<string | null>(null);
@@ -335,6 +340,11 @@ export default function ProfileScreen() {
     dob: user?.dob ?? '',
     gender: user?.gender ?? '',
     civilStatus: user?.civilStatus ?? '',
+    spouse: user?.spouse ?? '',
+    sourceOfIncome: user?.sourceOfIncome ?? '',
+    occupation: user?.occupation ?? '',
+    monthlyIncome: user?.monthlyIncome == null ? '' : String(user.monthlyIncome),
+    category: SENIOR_CATEGORIES.includes(user?.category || '') ? user!.category! : 'Not Specified',
     contact: user?.contact ?? '',
     address: user?.address ?? '',
     profilePhoto: user?.profilePhoto ?? user?.avatarUrl ?? null,
@@ -356,6 +366,11 @@ export default function ProfileScreen() {
       dob: user.dob ?? '',
       gender: user.gender ?? '',
       civilStatus: user.civilStatus ?? '',
+      spouse: user.spouse ?? '',
+      sourceOfIncome: user.sourceOfIncome ?? '',
+      occupation: user.occupation ?? '',
+      monthlyIncome: user.monthlyIncome == null ? '' : String(user.monthlyIncome),
+      category: SENIOR_CATEGORIES.includes(user.category || '') ? user.category! : 'Not Specified',
       contact: user.contact ?? '',
       address: user.address ?? '',
       profilePhoto: user.profilePhoto ?? user.avatarUrl ?? null,
@@ -373,6 +388,11 @@ export default function ProfileScreen() {
           dob: profile.dob ?? sessionFallback.dob,
           gender: profile.gender ?? (user?.gender ?? ''),
           civilStatus: profile.civilStatus ?? (user?.civilStatus ?? ''),
+          spouse: profile.spouse ?? sessionFallback.spouse,
+          sourceOfIncome: profile.sourceOfIncome ?? '',
+          occupation: profile.occupation ?? '',
+          monthlyIncome: profile.monthlyIncome == null ? '' : String(profile.monthlyIncome),
+          category: SENIOR_CATEGORIES.includes(profile.category || '') ? profile.category! : sessionFallback.category,
           contact: profile.contact ?? sessionFallback.contact,
           address: profile.address ?? sessionFallback.address,
           profilePhoto: nextProfilePhoto,
@@ -390,7 +410,7 @@ export default function ProfileScreen() {
         setBaseline(snapshotOf(sessionFallback, children));
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.id, user?.firstName, user?.lastName, user?.email, user?.middleName, user?.dob, user?.gender, user?.civilStatus, user?.contact, user?.address, user?.birthcert]);
+  }, [user?.id, user?.firstName, user?.lastName, user?.email, user?.middleName, user?.dob, user?.gender, user?.civilStatus, user?.category, user?.spouse, user?.monthlyIncome, user?.sourceOfIncome, user?.occupation, user?.contact, user?.address, user?.birthcert]);
 
   // ── Birth certificate ──
   const handleBirthCertificatePick = async () => {
@@ -552,6 +572,16 @@ export default function ProfileScreen() {
       return;
     }
 
+    if (form.sourceOfIncome === 'Working' && !form.occupation.trim()) {
+      Alert.alert('Work details required', 'Please specify your work.');
+      return;
+    }
+    const income = form.monthlyIncome.trim();
+    if (income && (!/^\d+(?:\.\d{1,2})?$/.test(income) || Number(income) > 9999999999.99)) {
+      Alert.alert('Monthly income', 'Enter a non-negative amount with up to two decimal places.');
+      return;
+    }
+
     setLoading(true);
     try {
       const { user: updated } = await updateUser(user.id, {
@@ -562,6 +592,11 @@ export default function ProfileScreen() {
         dob: form.dob.trim(),
         gender: form.gender.trim(),
         civilStatus: form.civilStatus.trim(),
+        category: form.category,
+        spouse: form.spouse.trim(),
+        monthlyIncome: income || null,
+        sourceOfIncome: (form.sourceOfIncome || null) as 'Pension' | 'Allowance' | 'Working' | null,
+        occupation: form.sourceOfIncome === 'Working' ? form.occupation.trim() : null,
         contact: form.contact.trim(),
         address: form.address.trim(),
         children,
@@ -805,6 +840,13 @@ export default function ProfileScreen() {
 
               {/* Personal + contact */}
               <Section icon="create-outline" title="Personal and contact details">
+                <SelectField
+                  label="Senior citizen category"
+                  value={form.category}
+                  placeholder="Select health or mobility category"
+                  onPress={() => setCategoryOpen(true)}
+                />
+                <Text style={styles.qrDesc}>Select the primary condition that best describes your current health or mobility.</Text>
                 <View style={styles.fieldRow}>
                   <SelectField
                     label="Gender"
@@ -817,6 +859,37 @@ export default function ProfileScreen() {
                     value={form.civilStatus}
                     placeholder="Select status"
                     onPress={() => setCivilStatusOpen(true)}
+                  />
+                </View>
+                <SelectField
+                  label="Source of income"
+                  value={form.sourceOfIncome}
+                  placeholder="Select source of income"
+                  onPress={() => setIncomeSourceOpen(true)}
+                />
+                {form.sourceOfIncome === 'Working' && <TextField
+                  label="Type of work"
+                  required
+                  value={form.occupation}
+                  onChangeText={(value) => updateField('occupation', value)}
+                  placeholder="e.g. Vendor, farmer, driver"
+                  maxLength={200}
+                  autoCapitalize="sentences"
+                />}
+                <View style={styles.fieldRow}>
+                  <TextField
+                    label="Spouse name"
+                    value={form.spouse}
+                    onChangeText={(value) => updateField('spouse', value)}
+                    placeholder="Full name (if applicable)"
+                    autoCapitalize="words"
+                  />
+                  <TextField
+                    label="Monthly income (PHP)"
+                    value={form.monthlyIncome}
+                    onChangeText={(value) => updateField('monthlyIncome', value)}
+                    placeholder="0.00"
+                    keyboardType="decimal-pad"
                   />
                 </View>
                 <View style={styles.fieldRow}>
@@ -1114,6 +1187,26 @@ export default function ProfileScreen() {
         value={form.civilStatus}
         onSelect={(v) => updateField('civilStatus', v)}
         onClose={() => setCivilStatusOpen(false)}
+      />
+
+      <PickerModal
+        visible={categoryOpen}
+        title="Senior citizen category"
+        options={SENIOR_CATEGORIES}
+        value={form.category}
+        onSelect={(value) => updateField('category', value)}
+        onClose={() => setCategoryOpen(false)}
+      />
+
+      <PickerModal
+        visible={incomeSourceOpen}
+        title="Source of income"
+        options={['Pension', 'Allowance', 'Working']}
+        value={form.sourceOfIncome}
+        onSelect={(value) => {
+          setForm(previous => ({ ...previous, sourceOfIncome: value, occupation: value === 'Working' ? previous.occupation : '' }));
+        }}
+        onClose={() => setIncomeSourceOpen(false)}
       />
 
       {/* Birth certificate viewer */}

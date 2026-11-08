@@ -62,6 +62,8 @@ export type BirthdayBenefitApplicationPdfData = {
     children?: Array<{ id?: string; name: string; dob?: string }>;
     avatarUrl?: string;
     oscaIdNumber?: string;
+    digitalSignature?: string | null;
+    signature?: string | null;
   };
 };
 
@@ -73,6 +75,25 @@ function escapeHtml(value?: string | null): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
+}
+
+function renderApplicantSignature(value?: string | null): string {
+  if (!value) return '';
+  try {
+    const parsed = JSON.parse(value);
+    if (Array.isArray(parsed?.strokes) && parsed.strokes.length) {
+      const width = Number(parsed.width) || 320;
+      const height = Number(parsed.height) || 140;
+      if (width <= 0 || height <= 0 || !Number.isFinite(width) || !Number.isFinite(height)) return '';
+      const paths = parsed.strokes.filter((stroke: any) => typeof stroke.d === 'string')
+        .map((stroke: any) => `<path d="${escapeHtml(stroke.d)}" stroke="${escapeHtml(stroke.color || '#132018')}" stroke-width="${Math.max(1, Math.min(Number(stroke.width) || 2.4, 20))}" fill="none" stroke-linecap="round" stroke-linejoin="round" />`).join('');
+      return `<div class="applicant-signature"><svg xmlns="http://www.w3.org/2000/svg" width="220" height="52" viewBox="0 0 ${width} ${height}" role="img" aria-label="Applicant digital signature">${paths}</svg></div>`;
+    }
+  } catch { /* An image signature is handled below. Typed names are not drawn signatures. */ }
+  if (/^(?:https?:\/\/|data:image\/)/i.test(value)) {
+    return `<div class="applicant-signature"><img src="${escapeHtml(value)}" alt="Applicant digital signature" /></div>`;
+  }
+  return '';
 }
 
 function formatDate(dateStr?: string | null): string {
@@ -400,6 +421,9 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
 
   const contactNumber = data.contact_number || data.applicant?.contact || 'N/A';
   const emailAddress = data.email_address || data.applicant?.email || 'N/A';
+
+  const applicantSignatureHtml = renderApplicantSignature(data.applicant?.digitalSignature || data.applicant?.signature)
+    || renderApplicantSignature(data.applicant_signature);
 
   const applicationDateFormatted = formatDate(data.applicant_signature_date || data.date_of_application || data.created_at || new Date().toISOString());
 
@@ -1036,6 +1060,9 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
     .page-1 .form-table > tbody > tr > td { padding-top: 7px; padding-bottom: 7px; }
     .page-2 .certification-text, .page-2 .privacy-text { line-height: 1.45; }
     .findings-box { min-height: 170px; }
+    .applicant-signature { height: 54px; text-align: center; margin: 0 auto 2px; }
+    .applicant-signature img { width: 220px; height: 52px; object-fit: contain; }
+    .applicant-signature svg { max-width: 100%; }
   </style>
 </head>
 <body>
@@ -1291,6 +1318,7 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
       </tr>
       <tr>
         <td style="padding: 10px 10px 4px 10px;">
+          ${applicantSignatureHtml}
           <div style="text-align: center; font-size: 14.3px; font-weight: 900; letter-spacing: 0.5px; border-bottom: 1.5px solid #000; width: 80%; margin: 0 auto 3px auto; padding-bottom: 2px;">
             ${escapeHtml(applicantFullName)}
           </div>
@@ -1556,6 +1584,7 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
     <table class="form-table">
       <tr>
         <td style="padding: 12px 10px 6px 10px; text-align: center;">
+          ${applicantSignatureHtml}
           <div style="font-size: 14.3px; font-weight: 900; letter-spacing: 0.5px; border-bottom: 1.5px solid #000; width: 75%; margin: 0 auto 3px auto; padding-bottom: 2px;">
             ${escapeHtml(applicantFullName)}
           </div>
