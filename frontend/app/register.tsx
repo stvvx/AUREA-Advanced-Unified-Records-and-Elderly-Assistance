@@ -296,6 +296,8 @@ export default function RegisterScreen() {
   const [showConfirm, setShowConfirm] = useState(false);
   const [loading, setLoading] = useState(false);
   const [dobOpen, setDobOpen] = useState(false);
+  const [dobPart, setDobPart] = useState<'Year' | 'Month' | 'Day'>('Year');
+  const [birthYearInput, setBirthYearInput] = useState('');
   const [dobDraft, setDobDraft] = useState(() => {
     const base = new Date();
     base.setFullYear(base.getFullYear() - 60);
@@ -315,11 +317,20 @@ export default function RegisterScreen() {
 
   const openDobPicker = () => {
     const parsed = parseDobString(form.dob);
-    setDobDraft(parsed ?? dobDraft);
+    const date = parsed ?? dobDraft;
+    setDobDraft(date);
+    setBirthYearInput(String(date.getFullYear()));
+    setDobPart('Year');
     setDobOpen(true);
   };
 
+  const validBirthYear = /^\d{4}$/.test(birthYearInput) && Number(birthYearInput) >= 1900 && Number(birthYearInput) <= new Date().getFullYear();
+  const validBirthDate = validBirthYear && dobDraft.getTime() <= Date.now();
+  const updateBirthDate = (year: number, month: number, day: number) => {
+    setDobDraft(new Date(year, month, Math.min(day, daysInMonth(year, month + 1))));
+  };
   const confirmDob = () => {
+    if (!validBirthDate) return;
     set('dob', toDobString(dobDraft));
     setDobOpen(false);
   };
@@ -390,6 +401,11 @@ export default function RegisterScreen() {
     } else {
       handleRegister();
     }
+  };
+
+  const leaveRegistration = () => {
+    if (router.canGoBack()) router.back();
+    else router.replace('/login');
   };
 
   const handleBack = () => {
@@ -599,8 +615,8 @@ export default function RegisterScreen() {
         <Toast visible={toast.visible} message={toast.message} type={toast.type} onHide={() => setToast(t => ({ ...t, visible: false }))} />
         <ScrollView contentContainerStyle={styles.container}>
           <View style={styles.content}>
-            <TouchableOpacity disabled={scanning} onPress={() => idChoice ? setIdChoice(null) : router.back()} accessibilityRole="button">
-              <Text style={styles.loginBtnText}>Back</Text>
+            <TouchableOpacity style={styles.entryBack} disabled={scanning} onPress={() => idChoice ? setIdChoice(null) : leaveRegistration()} accessibilityRole="button" accessibilityLabel="Go back">
+              <Ionicons name="arrow-back" size={24} color={colors.primaryDeep} />
             </TouchableOpacity>
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>{idChoice === 'existing' ? 'Scan your senior citizen ID' : 'Do you have a senior citizen ID?'}</Text>
@@ -947,50 +963,51 @@ export default function RegisterScreen() {
             <Text style={styles.dobPreview}>
               {MONTHS[dobDraft.getMonth()]} {dobDraft.getDate()}, {dobDraft.getFullYear()}
             </Text>
-            <View style={styles.datePickerColumns}>
-              {([
-                ['Month', MONTHS, dobDraft.getMonth()],
-                ['Day', Array.from({ length: daysInMonth(dobDraft.getFullYear(), dobDraft.getMonth() + 1) }, (_, index) => String(index + 1)), dobDraft.getDate() - 1],
-                ['Year', DOB_YEARS.map(String), DOB_YEARS.indexOf(dobDraft.getFullYear())],
-              ] as const).map(([column, options, selectedIndex]) => (
-                <View key={column} style={styles.datePickerColumn}>
-                  <Text style={styles.datePickerColumnLabel}>{column}</Text>
-                  <FlatList
-                    data={options}
-                    keyExtractor={(item) => String(item)}
-                    initialScrollIndex={Math.max(0, selectedIndex)}
-                    getItemLayout={(_, index) => ({ length: 48, offset: 48 * index, index })}
-                    showsVerticalScrollIndicator={false}
-                    renderItem={({ item, index }) => {
-                      const isSelected = index === selectedIndex;
-                      return (
-                        <TouchableOpacity
-                          style={[styles.datePickerOption, isSelected && styles.datePickerOptionSelected]}
-                          onPress={() => {
-                            const next = new Date(dobDraft);
-                            if (column === 'Month') {
-                              const month = Number(index);
-                              next.setDate(Math.min(next.getDate(), daysInMonth(next.getFullYear(), month + 1)));
-                              next.setMonth(month);
-                            } else if (column === 'Day') {
-                              next.setDate(Number(item));
-                            } else {
-                              next.setFullYear(Number(item));
-                              next.setDate(Math.min(next.getDate(), daysInMonth(next.getFullYear(), next.getMonth() + 1)));
-                            }
-                            setDobDraft(next);
-                          }}
-                        >
-                          <Text style={[styles.datePickerOptionText, isSelected && styles.datePickerOptionTextSelected]}>
-                            {item}
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    }}
-                  />
-                </View>
-              ))}
+            <View style={styles.dateTabs}>
+              {(['Year', 'Month', 'Day'] as const).map(part => <TouchableOpacity key={part}
+                accessibilityRole="button" accessibilityState={{ selected: dobPart === part }}
+                onPress={() => setDobPart(part)} style={[styles.dateTab, dobPart === part && styles.dateTabActive]}>
+                <Text style={styles.dateTabLabel}>{part}</Text>
+                <Text style={styles.dateTabValue}>{part === 'Year' ? birthYearInput || 'YYYY' : part === 'Month' ? MONTHS[dobDraft.getMonth()] : dobDraft.getDate()}</Text>
+              </TouchableOpacity>)}
             </View>
+            {dobPart === 'Year' && <TextInput value={birthYearInput} keyboardType="number-pad" maxLength={4}
+              accessibilityLabel="Birth year" placeholder="Enter birth year, e.g. 1944" style={styles.birthYearInput}
+              onChangeText={value => {
+                const digits = value.replace(/\D/g, '');
+                setBirthYearInput(digits);
+                const year = Number(digits);
+                if (digits.length === 4 && year >= 1900 && year <= new Date().getFullYear()) {
+                  updateBirthDate(year, dobDraft.getMonth(), dobDraft.getDate());
+                }
+              }} />}
+            <ScrollView key={dobPart} style={styles.dateOptionsScroll} keyboardShouldPersistTaps="handled">
+              <View style={styles.dateOptionsGrid}>
+                {(dobPart === 'Year' ? DOB_YEARS.map(String) : dobPart === 'Month' ? MONTHS
+                  : Array.from({ length: daysInMonth(dobDraft.getFullYear(), dobDraft.getMonth() + 1) }, (_, index) => String(index + 1)))
+                  .map((item, index) => {
+                    const selected = dobPart === 'Year' ? Number(item) === dobDraft.getFullYear()
+                      : dobPart === 'Month' ? index === dobDraft.getMonth() : Number(item) === dobDraft.getDate();
+                    return <TouchableOpacity key={item} accessibilityRole="button" accessibilityState={{ selected }}
+                      accessibilityLabel={`${dobPart} ${item}`} style={[styles.dateGridOption, selected && styles.datePickerOptionSelected]}
+                      onPress={() => {
+                        if (dobPart === 'Year') {
+                          updateBirthDate(Number(item), dobDraft.getMonth(), dobDraft.getDate());
+                          setBirthYearInput(item);
+                          setDobPart('Month');
+                        } else if (dobPart === 'Month') {
+                          updateBirthDate(dobDraft.getFullYear(), index, dobDraft.getDate());
+                          setDobPart('Day');
+                        } else updateBirthDate(dobDraft.getFullYear(), dobDraft.getMonth(), Number(item));
+                      }}>
+                      <Text style={[styles.datePickerOptionText, selected && styles.datePickerOptionTextSelected]}>{item}</Text>
+                    </TouchableOpacity>;
+                  })}
+              </View>
+            </ScrollView>
+            {!validBirthDate && <Text accessibilityRole="alert" style={styles.dateError}>
+              {validBirthYear ? 'Date of birth cannot be in the future.' : `Enter a year from 1900 to ${new Date().getFullYear()}.`}
+            </Text>}
 
             <View style={styles.modalActions}>
               <TouchableOpacity
@@ -1001,7 +1018,8 @@ export default function RegisterScreen() {
                 <Text style={styles.modalBtnSecondaryTxt}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={styles.modalBtnPrimary}
+                style={[styles.modalBtnPrimary, !validBirthDate && { opacity: 0.5 }]}
+                disabled={!validBirthDate}
                 onPress={confirmDob}
                 activeOpacity={0.85}
               >
@@ -1463,26 +1481,17 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: space(3),
   },
-  datePickerColumns: {
-    flexDirection: 'row',
-    gap: space(2),
-    height: 240,
-  },
-  datePickerColumn: { flex: 1 },
-  datePickerColumnLabel: {
-    fontFamily: 'InterBody',
-    fontSize: 13,
-    fontWeight: '700',
-    color: colors.inkSoft,
-    textAlign: 'center',
-    marginBottom: space(1),
-  },
-  datePickerOption: {
-    height: 48,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  entryBack: { width: 46, height: 46, borderRadius: 14, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.white, alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
+  dateTabs: { flexDirection: 'row', gap: 10, marginBottom: 14 },
+  dateTab: { flex: 1, paddingVertical: 12, borderWidth: 1, borderColor: colors.border, borderRadius: 12, alignItems: 'center' },
+  dateTabActive: { borderColor: colors.primaryDeep, backgroundColor: colors.primarySoft },
+  dateTabLabel: { fontFamily: 'InterBody', fontSize: 13, color: colors.inkSoft },
+  dateTabValue: { fontFamily: 'InterBody', fontSize: 19, fontWeight: '700', color: colors.primaryDeep, marginTop: 4 },
+  birthYearInput: { borderWidth: 1, borderColor: colors.border, borderRadius: 12, padding: 14, fontSize: 18, color: colors.ink, marginBottom: 12 },
+  dateOptionsScroll: { maxHeight: 240 },
+  dateOptionsGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', gap: 8 },
+  dateGridOption: { width: '23%', minHeight: 48, borderRadius: 10, backgroundColor: colors.white, alignItems: 'center', justifyContent: 'center' },
+  dateError: { color: '#B3432E', fontSize: 13, marginTop: 10 },
   datePickerOptionSelected: { backgroundColor: colors.primarySoft },
   datePickerOptionText: {
     fontFamily: 'InterBody',

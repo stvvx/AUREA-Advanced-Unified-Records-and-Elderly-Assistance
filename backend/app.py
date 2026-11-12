@@ -10,7 +10,7 @@ from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_file
 from itsdangerous import URLSafeTimedSerializer, BadSignature
 from services.registration_id import scan_registration_id
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -1302,6 +1302,35 @@ def admin_service_records():
         return jsonify({"records": service_records(supabase_rest, SUPABASE_USERS_TABLE)}), 200
     except RuntimeError as exc:
         return jsonify({"message": str(exc)}), 500
+
+
+@app.route("/api/admin/seniors/export", methods=["POST", "OPTIONS"])
+def export_senior_table():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    session, status = current_session()
+    if status != 200:
+        return session, status
+    role = str(session.get_json()["user"].get("role") or "").strip().lower()
+    if role not in {"osca admin", "super admin"}:
+        return jsonify({"message": "Administrator access is required."}), 403
+    data = request.get_json(silent=True) or {}
+    format_name = data.get("format")
+    if format_name not in {"pdf", "xlsx"}:
+        return jsonify({"message": "Choose PDF or Excel export."}), 400
+    try:
+        from services.senior_exports import export_pdf, export_excel
+        output = export_pdf(data) if format_name == "pdf" else export_excel(data)
+        mime = "application/pdf" if format_name == "pdf" else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        response = send_file(output, mimetype=mime, as_attachment=True,
+                             download_name=f"senior-citizens.{format_name}")
+        response.headers["Cache-Control"] = "no-store"
+        return response
+    except ValueError as exc:
+        return jsonify({"message": str(exc)}), 400
+    except Exception:
+        app.logger.exception("Senior registry export failed")
+        return jsonify({"message": "Could not generate the export. Please try again."}), 500
 
 
 @app.route("/api/admin/users", methods=["GET", "OPTIONS"])

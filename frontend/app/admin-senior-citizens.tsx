@@ -1,27 +1,28 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import { ActivityIndicator, Image, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { WebView } from 'react-native-webview';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { API_BASE_URL } from '../services/loloApi';
 import { useAuth } from '../context/AuthContext';
+import { downloadSeniorTable, type ExportCell } from '../services/seniorTableExport';
 
 type Senior = Record<string, unknown>;
-const columns = [
-  ['id', 'Record ID', 100], ['oscaIdNumber', 'OSCA ID', 170],
-  ['lastName', 'Last name', 170], ['firstName', 'First name', 170], ['middleName', 'Middle name', 170],
-  ['dob', 'Date of birth', 150], ['age', 'Age', 80], ['gender', 'Gender', 120],
-  ['civilStatus', 'Civil status', 140], ['contact', 'Contact number', 180],
-  ['email', 'Email', 260], ['address', 'Residential address', 340],
-  ['spouse', 'Spouse', 200], ['children', 'Children', 340],
-  ['monthlyIncome', 'Monthly income', 160], ['sourceOfIncome', 'Source of income', 220],
-  ['occupation', 'Occupation', 200], ['category', 'Category', 180],
-  ['avatarUrl', 'Photo / face enrollment', 190], ['birthCertificate', 'Birth certificate', 180],
-  ['digitalSignature', 'Digital signature', 180], ['role', 'Role', 140], ['createdAt', 'Registered on', 230],
+const fields = [
+  ['id', 'Record ID'], ['oscaIdNumber', 'OSCA ID'],
+  ['lastName', 'Last name'], ['firstName', 'First name'], ['middleName', 'Middle name'],
+  ['dob', 'Date of birth'], ['age', 'Age'], ['gender', 'Gender'],
+  ['civilStatus', 'Civil status'], ['contact', 'Contact number'],
+  ['email', 'Email'], ['address', 'Residential address'],
+  ['spouse', 'Spouse'], ['children', 'Children'],
+  ['monthlyIncome', 'Monthly income'], ['sourceOfIncome', 'Source of income'],
+  ['occupation', 'Occupation'], ['category', 'Category'],
+  ['avatarUrl', 'Photo / face enrollment'], ['birthCertificate', 'Birth certificate'],
+  ['digitalSignature', 'Digital signature'], ['role', 'Role'], ['createdAt', 'Registered on'],
 ] as const;
-const tableWidth = columns.reduce((total, [, , width]) => total + width, 0);
 const documents = new Set(['avatarUrl', 'birthCertificate', 'digitalSignature']);
-type SortKey = typeof columns[number][0];
+type SortKey = typeof fields[number][0];
 
 const barangays = [
   'Aguho', 'Magtanggol', 'Martires Del 96', 'Poblacion', 'San Pedro',
@@ -101,7 +102,7 @@ function display(value: unknown): string {
 function StatCard({ label, value, tone }: { label: string; value: string | number; tone?: 'brand' | 'amber' }) {
   return (
     <View style={s.stat}>
-      <Text style={[s.statValue, tone === 'amber' && { color: C.amber }]}>{value}</Text>
+      <Text style={[s.statValue, tone === 'amber' && { color: '#F2C879' }]}>{value}</Text>
       <Text style={s.statLabel}>{label}</Text>
     </View>
   );
@@ -113,8 +114,130 @@ function Pill({ text, tone }: { text: string; tone: 'good' | 'warn' | 'neutral' 
   return <View style={[s.pill, { backgroundColor: bg }]}><Text style={[s.pillText, { color: fg }]}>{text}</Text></View>;
 }
 
+const nameColumns = fields.filter(([key]) => ['lastName', 'firstName', 'middleName'].includes(key));
+const columnWidths: Record<SortKey, number> = {
+  id: 110, oscaIdNumber: 170, lastName: 160, firstName: 160, middleName: 160,
+  dob: 180, age: 85, gender: 120, civilStatus: 140, contact: 170, email: 260,
+  address: 320, spouse: 200, children: 300, monthlyIncome: 170, sourceOfIncome: 190,
+  occupation: 200, category: 190, avatarUrl: 185, birthCertificate: 180,
+  digitalSignature: 170, role: 140, createdAt: 210,
+};
+const detailColumns = fields.filter(([key]) => !['lastName', 'firstName', 'middleName'].includes(key))
+  .map(([key, label]) => [key, label, columnWidths[key]] as const);
+const detailWidth = detailColumns.reduce((sum, [, , width]) => sum + width, 0);
+const tableText = (record: Senior, key: SortKey) => display(cellValue(record, key));
+
+const htmlCell: React.CSSProperties = { padding: '8px 14px', borderBottom: `1px solid ${C.line}`, textAlign: 'left', verticalAlign: 'middle', lineHeight: '21px', overflowWrap: 'anywhere' };
+
+function SeniorTable({ records, sort, ascending, onSort, renderCell }: {
+  records: Senior[]; sort: SortKey; ascending: boolean; onSort: (key: SortKey) => void;
+  renderCell: (record: Senior, key: SortKey, label: string) => React.ReactNode;
+}) {
+  const { width, height } = useWindowDimensions();
+  const compact = width < 700;
+  const nameWidth = width < 1100 ? 120 : 160;
+  const frozenWidth = compact ? 150 : nameWidth * 3;
+  const tableHeight = Math.max(360, Math.min(820, height * 0.72));
+  const [rowHeights, setRowHeights] = useState<Record<string, number>>({});
+  const [selectedRow, setSelectedRow] = useState<string | null>(null);
+  const measureRow = (id: string, textHeight: number) => {
+    const measured = Math.max(88, Math.ceil(textHeight) + 32);
+    setRowHeights(current => measured > (current[id] || 88) ? { ...current, [id]: measured } : current);
+  };
+  const header = (key: SortKey, label: string) => (
+    <Pressable onPress={() => onSort(key)} accessibilityRole="button" accessibilityLabel={`Sort by ${label}, ${sort === key && ascending ? 'descending' : 'ascending'}`} style={t.headingButton}>
+      <Text style={t.heading}>{label}</Text>
+      <Ionicons name={sort === key ? ascending ? 'arrow-up' : 'arrow-down' : 'swap-vertical'} size={13} color={sort === key ? '#FFFFFF' : '#94B4A2'} />
+    </Pressable>
+  );
+  const identity = (record: Senior) => (
+    <View style={t.identity} onLayout={Platform.OS === 'web' ? undefined : event => measureRow(String(record.id), event.nativeEvent.layout.height)}>
+      {nameColumns.map(([key, label]) => key === 'middleName' && !record[key] ? null : (
+        <Pressable key={key} onPress={() => setSelectedRow(String(record.id))} onFocus={() => setSelectedRow(String(record.id))}
+          accessibilityRole="button" accessibilityLabel={`${label}: ${tableText(record, key)}`} accessibilityState={{ selected: selectedRow === String(record.id) }}
+          style={t.compactNameCell}>
+          <Text style={key === 'lastName' ? t.name : key === 'middleName' ? t.small : t.value}>{tableText(record, key)}</Text>
+        </Pressable>
+      ))}
+    </View>
+  );
+  const cell = (record: Senior, key: SortKey) => (
+    <View onLayout={Platform.OS === 'web' ? undefined : event => measureRow(String(record.id), event.nativeEvent.layout.height)}>
+      {renderCell(record, key, fields.find(([field]) => field === key)?.[1] || key)}
+    </View>
+  );
+
+  if (Platform.OS === 'web') {
+    return (
+      <div role="region" aria-label="Senior citizen registry. Names stay fixed when scrolling horizontally." tabIndex={0}
+        style={{ height: tableHeight, overflow: 'auto', border: `1px solid ${C.line}`, borderRadius: 18, background: C.surface, isolation: 'isolate' }}>
+        <table style={{ width: frozenWidth + detailWidth, tableLayout: 'fixed', borderCollapse: 'separate', borderSpacing: 0, fontFamily: 'InterBody, system-ui, sans-serif', fontSize: 13, color: C.ink }}>
+          <caption style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clipPath: 'inset(50%)' }}>Senior citizen registry</caption>
+          <colgroup>
+            {compact ? <col style={{ width: frozenWidth }} /> : nameColumns.map(([key]) => <col key={key} style={{ width: nameWidth }} />)}
+            {detailColumns.map(([key, , columnWidth]) => <col key={key} style={{ width: columnWidth }} />)}
+          </colgroup>
+          <thead><tr>
+            {compact ? <th scope="col" style={{ ...htmlCell, position: 'sticky', left: 0, top: 0, zIndex: 4, background: C.brandDark, color: '#FFF', boxShadow: '3px 0 6px rgba(15,51,35,0.12)' }}>{header('lastName', 'Senior citizen')}</th>
+              : nameColumns.map(([key, label], index) => <th key={key} scope="col" aria-sort={sort === key ? ascending ? 'ascending' : 'descending' : 'none'}
+                style={{ ...htmlCell, position: 'sticky', top: 0, left: index * nameWidth, zIndex: 4, background: C.brandDark, boxShadow: index === 2 ? '3px 0 6px rgba(15,51,35,0.12)' : undefined }}>{header(key, label)}</th>)}
+            {detailColumns.map(([key, label]) => <th key={key} scope="col" aria-sort={sort === key ? ascending ? 'ascending' : 'descending' : 'none'}
+              style={{ ...htmlCell, position: 'sticky', top: 0, zIndex: 3, background: C.brandDark }}>{header(key, label)}</th>)}
+          </tr></thead>
+          <tbody>{records.map((record, index) => {
+            const selected = selectedRow === String(record.id);
+            const background = selected ? '#E8F3EC' : index % 2 ? C.zebra : C.surface;
+            const focusBorder = selected ? 'inset 0 2px 0 #2B7A50, inset 0 -2px 0 #2B7A50' : '';
+            return <tr key={String(record.id)}>
+              {compact ? <td style={{ ...htmlCell, position: 'sticky', left: 0, zIndex: 2, background, boxShadow: [focusBorder, selected && 'inset 2px 0 0 #2B7A50', '3px 0 6px rgba(15,51,35,0.08)'].filter(Boolean).join(', ') }}>{identity(record)}</td>
+                : nameColumns.map(([key, label], nameIndex) => <td key={key} title={documents.has(key) ? undefined : tableText(record, key)} tabIndex={0}
+                  aria-label={`${label}: ${tableText(record, key)}${selectedRow === String(record.id) ? ', selected' : ''}`}
+                  onClick={() => setSelectedRow(String(record.id))} onFocus={() => setSelectedRow(String(record.id))}
+                  onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedRow(String(record.id)); } }}
+                  style={{ ...htmlCell, position: 'sticky', left: nameIndex * nameWidth, zIndex: 2,
+                    background, cursor: 'pointer', fontWeight: key === 'lastName' ? 700 : 500,
+                    boxShadow: [focusBorder, selected && nameIndex === 0 && 'inset 2px 0 0 #2B7A50', nameIndex === 2 && '3px 0 6px rgba(15,51,35,0.08)'].filter(Boolean).join(', ') }}>{tableText(record, key)}</td>)}
+              {detailColumns.map(([key]) => <td key={key} title={documents.has(key) ? undefined : tableText(record, key)} style={{ ...htmlCell, background, boxShadow: [focusBorder, selected && key === 'createdAt' && 'inset -2px 0 0 #2B7A50'].filter(Boolean).join(', ') }}>
+                <div style={{ maxHeight: 44, overflowY: 'auto' }}>
+                  {renderCell(record, key, fields.find(([field]) => field === key)?.[1] || key)}
+                </div>
+              </td>)}
+            </tr>;
+          })}</tbody>
+        </table>
+      </div>
+    );
+  }
+  // A single vertical scroller keeps the frozen and moving cells aligned on native.
+  return <View style={[t.nativeTable, { height: tableHeight }]}>
+    <ScrollView nestedScrollEnabled keyboardShouldPersistTaps="handled">
+      <View style={t.nativeTableRow}>
+        <View style={[t.frozenPane, { width: frozenWidth }]}>
+          <View style={[t.nativeHeader, { width: frozenWidth }]}>
+            {compact ? header('lastName', 'Senior citizen') : nameColumns.map(([key, label]) => <View key={key} style={{ width: nameWidth, paddingHorizontal: 14 }}>{header(key, label)}</View>)}
+          </View>
+          {records.map((record, index) => <View key={String(record.id)} style={[t.nativeRow, { height: rowHeights[String(record.id)] || 104, backgroundColor: index % 2 ? C.zebra : C.surface }, selectedRow === String(record.id) && t.selectedRow]}>
+            {compact ? <View style={t.nativeCell}>{identity(record)}</View> : nameColumns.map(([key, label]) => <Pressable key={key}
+              onPress={() => setSelectedRow(String(record.id))} accessibilityRole="button" accessibilityLabel={`${label}: ${tableText(record, key)}`}
+              accessibilityState={{ selected: selectedRow === String(record.id) }}
+              style={[t.nativeCell, t.nameCell, { width: nameWidth }]}>{cell(record, key)}</Pressable>)}
+          </View>)}
+        </View>
+        <ScrollView horizontal nestedScrollEnabled style={{ flex: 1 }} contentContainerStyle={{ width: detailWidth }} keyboardShouldPersistTaps="handled">
+          <View style={{ width: detailWidth }}>
+            <View style={t.nativeHeader}>{detailColumns.map(([key, label, columnWidth]) => <View key={key} style={{ width: columnWidth, paddingHorizontal: 16 }}>{header(key, label)}</View>)}</View>
+            {records.map((record, index) => <View key={String(record.id)} style={[t.nativeRow, { height: rowHeights[String(record.id)] || 104, backgroundColor: index % 2 ? C.zebra : C.surface }, selectedRow === String(record.id) && t.selectedRow]}>
+              {detailColumns.map(([key, , columnWidth]) => <View key={key} style={[t.nativeCell, { width: columnWidth }]}>{cell(record, key)}</View>)}
+            </View>)}
+          </View>
+        </ScrollView>
+      </View>
+    </ScrollView>
+  </View>;
+}
+
 export default function AdminSeniorCitizens() {
-  const { width: screenWidth, height: screenHeight } = useWindowDimensions();
+  const { width: screenWidth } = useWindowDimensions();
   const compact = screenWidth < 600;
   const router = useRouter();
   const { user, loading: authLoading } = useAuth();
@@ -130,6 +253,8 @@ export default function AdminSeniorCitizens() {
   const [previewError, setPreviewError] = useState('');
   const [sortKey, setSortKey] = useState<SortKey>('lastName');
   const [ascending, setAscending] = useState(true);
+  const [sortMenuOpen, setSortMenuOpen] = useState(false);
+  const [exporting, setExporting] = useState<'pdf' | 'xlsx' | null>(null);
   const chooseSort = (key: SortKey) => {
     if (key === sortKey) setAscending(current => !current);
     else { setSortKey(key); setAscending(true); }
@@ -166,7 +291,7 @@ export default function AdminSeniorCitizens() {
       const barangay = barangayOf(record);
       const matchesBarangay = selectedBarangay === 'All barangays'
         || (selectedBarangay === 'Unspecified barangay' ? !barangay : barangay === selectedBarangay);
-      return matchesBarangay && (!term || columns.some(([key]) => !documents.has(key)
+      return matchesBarangay && (!term || fields.some(([key]) => !documents.has(key)
         && display(cellValue(record, key)).toLowerCase().includes(term)));
     }).sort((a, b) => {
         const left = sortValue(a, sortKey);
@@ -195,6 +320,49 @@ export default function AdminSeniorCitizens() {
     }
     setPreviewError('');
     setPreview({ uri: url.startsWith('/') ? `${API_BASE_URL}${url}` : url, title, pdf: /\.pdf(?:[?#]|$)/i.test(url) });
+  };
+
+  const exportTable = async (format: 'pdf' | 'xlsx') => {
+    if (exporting || !filtered.length) return;
+    if (!user?.token) { setError('Please sign in again before exporting.'); return; }
+    setExporting(format);
+    setError('');
+    const ordered = [...nameColumns, ...fields.filter(([key]) => !['lastName', 'firstName', 'middleName'].includes(key))];
+    const rows = filtered.map(record => ordered.map(([key]): ExportCell => {
+      const value = cellValue(record, key);
+      if (key === 'digitalSignature') return { text: typeof value === 'string' && value.trim() ? 'Enrolled' : 'Not enrolled' };
+      if (documents.has(key)) {
+        let hyperlink: string | undefined;
+        if (typeof value === 'string') {
+          if (/^https?:\/\//i.test(value)) hyperlink = value;
+          else if (value.startsWith('/')) hyperlink = `${API_BASE_URL}${value}`;
+        }
+        return { text: value ? key === 'avatarUrl' ? 'View photo' : 'View file' : 'Missing', hyperlink };
+      }
+      if (key === 'children' && Array.isArray(value)) return { text: value.length ? value.map(child => {
+        const details = child && typeof child === 'object' ? child : { name: child };
+        return `${details.name || 'Name not provided'}\nBirthday: ${birthday(details.dob)}`;
+      }).join('\n\n') : '-' };
+      if (key === 'monthlyIncome' && value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value))) {
+        return { text: `PHP ${Number(value).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`, value: Number(value), kind: 'currency' };
+      }
+      if (key === 'dob' && value) {
+        const raw = String(value);
+        const slash = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+        const iso = slash ? `${slash[3]}-${slash[1].padStart(2, '0')}-${slash[2].padStart(2, '0')}` : raw.slice(0, 10);
+        return { text: birthday(value), value: iso, kind: 'date' };
+      }
+      if (key === 'createdAt' && value && Number.isFinite(Date.parse(String(value)))) {
+        return { text: new Date(String(value)).toLocaleString('en-US', { timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short' }), value: String(value), kind: 'datetime' };
+      }
+      if ((key === 'id' || key === 'age') && value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value))) return { text: String(value), value: Number(value) };
+      return { text: display(value) };
+    }));
+    try {
+      await downloadSeniorTable({ columns: ordered.map(([key, label]) => ({ key, label })), rows }, format, user.token);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not export the table.');
+    } finally { setExporting(null); }
   };
 
   const renderCell = (record: Senior, key: SortKey, label: string) => {
@@ -253,15 +421,15 @@ export default function AdminSeniorCitizens() {
       <ScrollView style={s.pageScroll} contentContainerStyle={s.pageContent} nestedScrollEnabled keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
       <View style={[s.header, compact && s.compactHeader]}>
         <Pressable onPress={() => router.back()} accessibilityRole="button" style={({ pressed }) => [s.ghostButton, pressed && s.pressed]}>
-          <Text style={s.ghostButtonText}>‹ Back</Text>
+          <Ionicons name="arrow-back" size={19} color={C.ink} />
         </Pressable>
         <View style={{ flex: 1 }}>
           <Text style={[s.title, compact && s.compactTitle]}>Senior citizens</Text>
           {!compact && <Text style={s.subtitle}>OSCA registry · age 60 and above</Text>}
         </View>
         {allowed && (
-          <Pressable onPress={() => void load()} disabled={loading} accessibilityRole="button" style={({ pressed }) => [s.primaryButton, (pressed || loading) && s.pressed]}>
-            <Text style={s.primaryButtonText}>{loading ? 'Refreshing…' : 'Refresh'}</Text>
+          <Pressable onPress={() => void load()} disabled={loading} accessibilityRole="button" accessibilityLabel="Refresh senior citizens" style={({ pressed }) => [s.refreshButton, (pressed || loading) && s.pressed]}>
+            {loading ? <ActivityIndicator color={C.brand} /> : <Ionicons name="refresh" size={19} color={C.brandDark} />}
           </Pressable>
         )}
       </View>
@@ -321,8 +489,36 @@ export default function AdminSeniorCitizens() {
           </View>
         </View>
 
+        <View style={s.sortRow}>
+          <View style={s.sortFilter}>
+            <Pressable style={s.sortSelect} onPress={() => { setSortMenuOpen(open => !open); setBarangayMenuOpen(false); }} accessibilityRole="button" accessibilityState={{ expanded: sortMenuOpen }} accessibilityLabel="Choose sort field">
+              <Ionicons name="swap-vertical" size={16} color={C.brand} />
+              <Text style={s.sortText}>Sort by {fields.find(([key]) => key === sortKey)?.[1].toLowerCase()}</Text>
+              <Ionicons name={sortMenuOpen ? 'chevron-up' : 'chevron-down'} size={14} color={C.muted} />
+            </Pressable>
+            {sortMenuOpen && <ScrollView style={s.barangayMenu} nestedScrollEnabled keyboardShouldPersistTaps="handled">
+              {fields.map(([key, label]) => <Pressable key={key} style={[s.barangayOption, sortKey === key && s.barangaySelected]} onPress={() => { chooseSort(key); setSortMenuOpen(false); }} accessibilityRole="button">
+                <Text style={s.selectValue}>{label}</Text>
+              </Pressable>)}
+            </ScrollView>}
+          </View>
+          <Pressable style={s.sortDirection} onPress={() => setAscending(current => !current)} accessibilityRole="button" accessibilityLabel={ascending ? 'Sort descending' : 'Sort ascending'}>
+            <Ionicons name={ascending ? 'arrow-up' : 'arrow-down'} size={16} color={C.brand} />
+            <Text style={s.sortText}>{ascending ? 'Ascending' : 'Descending'}</Text>
+          </Pressable>
+          <View style={s.exportRow}>
+            <Pressable onPress={() => void exportTable('pdf')} disabled={loading || !!exporting || !filtered.length} accessibilityRole="button" accessibilityLabel="Download A4 PDF table" style={({ pressed }) => [s.exportButton, (pressed || loading || !!exporting || !filtered.length) && s.pressed]}>
+              {exporting === 'pdf' ? <ActivityIndicator size="small" color="#FFF" /> : <Ionicons name="document-text-outline" size={17} color="#FFF" />}
+              <Text style={s.exportButtonText}>{exporting === 'pdf' ? 'Preparing PDF...' : 'Download PDF'}</Text>
+            </Pressable>
+            <Pressable onPress={() => void exportTable('xlsx')} disabled={loading || !!exporting || !filtered.length} accessibilityRole="button" accessibilityLabel="Download Excel table" style={({ pressed }) => [s.exportButton, s.exportButtonSecondary, (pressed || loading || !!exporting || !filtered.length) && s.pressed]}>
+              {exporting === 'xlsx' ? <ActivityIndicator size="small" color={C.brand} /> : <Ionicons name="grid-outline" size={17} color={C.brand} />}
+              <Text style={[s.exportButtonText, { color: C.brand }]}>{exporting === 'xlsx' ? 'Preparing Excel...' : 'Download Excel'}</Text>
+            </Pressable>
+          </View>
+        </View>
         <View style={s.metaRow}>
-          <Text style={s.count}>Showing {filtered.length} of {seniors.length} · Scroll sideways for all details</Text>
+          <Text style={s.count}>Showing {filtered.length} of {seniors.length}</Text>
           {hasFilters && (
             <Pressable onPress={clearFilters} accessibilityRole="button" style={({ pressed }) => [s.clearFilters, pressed && s.pressed]}>
               <Text style={s.clearFiltersText}>Clear filters</Text>
@@ -340,30 +536,7 @@ export default function AdminSeniorCitizens() {
               {hasFilters && <Pressable onPress={clearFilters} accessibilityRole="button" style={({ pressed }) => [s.primaryButton, pressed && s.pressed]}><Text style={s.primaryButtonText}>Clear filters</Text></Pressable>}
             </View>
           ) : (
-          <ScrollView horizontal style={[s.table, compact && { flex: 0, height: Math.max(420, screenHeight * 0.72) }]} contentContainerStyle={s.tableContent} nestedScrollEnabled directionalLockEnabled showsHorizontalScrollIndicator keyboardShouldPersistTaps="handled">
-            <View style={{ width: tableWidth, height: '100%' }}>
-              <View style={[s.row, s.tableHeader]}>
-                {columns.map(([key, label, width]) => {
-                  const active = sortKey === key;
-                  return (
-                    <Pressable key={key} onPress={() => chooseSort(key)} accessibilityRole="button" accessibilityLabel={`Sort by ${label}, ${active && ascending ? 'descending' : 'ascending'}`} style={({ pressed }) => [s.cell, s.columnHeading, { width }, active && s.activeHeading, pressed && s.pressed]}>
-                      <Text style={[s.heading, s.columnLabel]} numberOfLines={1}>{label}</Text>
-                      <Text style={[s.heading, !active && s.inactiveArrow]}>{active ? ascending ? '↑' : '↓' : '↕'}</Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-              <ScrollView style={s.tableBody} nestedScrollEnabled directionalLockEnabled keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator>
-                {filtered.map((record, index) => (
-                  <View key={String(record.id ?? index)} style={[s.row, index % 2 === 1 && s.alternate]}>
-                    {columns.map(([key, label, width]) => (
-                      <View key={key} style={[s.cell, s.bodyCell, { width }]}>{renderCell(record, key, label)}</View>
-                    ))}
-                  </View>
-                ))}
-              </ScrollView>
-            </View>
-          </ScrollView>
+          <SeniorTable records={filtered} sort={sortKey} ascending={ascending} onSort={chooseSort} renderCell={renderCell} />
         )}
       </>}
       </ScrollView>
@@ -409,19 +582,19 @@ const s = StyleSheet.create({
   pressed: { opacity: 0.7 },
 
   header: { flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 18 },
-  title: { fontSize: 26, fontWeight: '800', color: C.ink, letterSpacing: -0.4 },
+  title: { fontFamily: 'FraunTitle', fontSize: 26, fontWeight: '800', color: C.ink, letterSpacing: -0.4 },
   subtitle: { fontSize: 13, color: C.muted, marginTop: 2 },
-  ghostButton: { paddingVertical: 9, paddingHorizontal: 14, borderRadius: 999, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface },
+  ghostButton: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface },
   ghostButtonText: { color: C.brand, fontWeight: '700' },
   primaryButton: { paddingVertical: 10, paddingHorizontal: 18, borderRadius: 999, backgroundColor: C.brand, alignItems: 'center', alignSelf: 'flex-start' },
   primaryButtonText: { color: '#FFF', fontWeight: '700' },
 
-  statsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 16 },
+  statsRow: { flexDirection: 'row', flexWrap: 'wrap', padding: 20, backgroundColor: C.brandDark, borderRadius: 22, marginBottom: 18, gap: 16 },
   statsScroll: { flexGrow: 0, flexShrink: 0 },
   compactStats: { flexWrap: 'nowrap', gap: 8 },
-  stat: { flexGrow: 1, flexBasis: 140, backgroundColor: C.surface, borderRadius: 14, paddingVertical: 14, paddingHorizontal: 16, borderWidth: 1, borderColor: C.line, ...shadow },
-  statValue: { fontSize: 24, fontWeight: '800', color: C.brand, letterSpacing: -0.3 },
-  statLabel: { fontSize: 12, color: C.muted, marginTop: 2 },
+  stat: { flexGrow: 1, flexBasis: 140, paddingRight: 16 },
+  statValue: { fontFamily: 'FraunTitle', fontSize: 30, color: '#FFFFFF', letterSpacing: -0.3 },
+  statLabel: { fontFamily: 'InterBody', fontSize: 11, color: 'rgba(255,255,255,0.7)', marginTop: 2 },
 
   toolbar: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, alignItems: 'flex-start', zIndex: 10 },
   searchWrap: { flex: 1, minWidth: 260, flexDirection: 'row', alignItems: 'center', backgroundColor: C.surface, borderWidth: 1, borderColor: C.line, borderRadius: 12, paddingHorizontal: 12, height: 56, ...shadow },
@@ -442,7 +615,12 @@ const s = StyleSheet.create({
   barangaySelected: { backgroundColor: C.brandSoft },
   check: { color: C.brand, fontWeight: '800' },
 
-  metaRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, marginVertical: 14 },
+  exportRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', alignItems: 'center', gap: 8, marginLeft: 'auto' },
+  exportButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, minHeight: 40, paddingVertical: 9, paddingHorizontal: 14, borderRadius: 12, backgroundColor: C.brand, borderWidth: 1, borderColor: C.brand },
+  exportButtonSecondary: { backgroundColor: C.surface },
+  exportButtonText: { fontFamily: 'InterBody', fontSize: 13, fontWeight: '700', color: '#FFF' },
+
+  metaRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, marginVertical: 8 },
   count: { color: C.muted, fontSize: 13 },
   clearFilters: { paddingVertical: 6, paddingHorizontal: 12, borderRadius: 999, backgroundColor: C.brandSoft },
   clearFiltersText: { color: C.brand, fontWeight: '700', fontSize: 13 },
@@ -454,19 +632,12 @@ const s = StyleSheet.create({
   stateTitle: { fontSize: 18, fontWeight: '700', color: C.ink },
   stateText: { color: C.muted, textAlign: 'center', lineHeight: 21 },
 
-  table: { flex: 1, minHeight: 420, borderWidth: 1, borderColor: C.line, borderRadius: 16, backgroundColor: C.surface, marginBottom: 12, overflow: 'hidden', ...shadow },
-  tableContent: { width: tableWidth },
-  tableBody: { flex: 1 },
-  row: { width: tableWidth, flexDirection: 'row', flexWrap: 'nowrap', borderBottomWidth: 1, borderBottomColor: C.line },
-  tableHeader: { backgroundColor: C.brandDark, borderBottomWidth: 0 },
-  heading: { color: '#FFF', fontWeight: '700', fontSize: 13 },
-  columnHeading: { flexDirection: 'row', alignItems: 'center', gap: 8, borderRightColor: 'rgba(255,255,255,0.12)' },
-  activeHeading: { backgroundColor: C.brand },
-  columnLabel: { flex: 1 },
-  inactiveArrow: { opacity: 0.45 },
-  cell: { flexShrink: 0, paddingVertical: 14, paddingHorizontal: 14, justifyContent: 'center', borderRightWidth: 1, borderRightColor: C.line },
-  bodyCell: { alignItems: 'flex-start' },
-  alternate: { backgroundColor: C.zebra },
+  sortRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginTop: 10, zIndex: 5 },
+  sortFilter: { width: 240, maxWidth: '100%' },
+  sortSelect: { flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderColor: C.line, borderRadius: 22, backgroundColor: C.surface, paddingHorizontal: 14, paddingVertical: 10 },
+  sortDirection: { flexDirection: 'row', alignItems: 'center', gap: 6, padding: 10 },
+  sortText: { fontFamily: 'InterBody', fontSize: 12, color: C.brandDark, flexShrink: 1 },
+  refreshButton: { width: 42, height: 42, borderRadius: 14, backgroundColor: C.brandSoft, alignItems: 'center', justifyContent: 'center' },
 
   value: { color: C.ink, lineHeight: 21, fontSize: 14 },
   subValue: { color: C.muted, lineHeight: 18, fontSize: 12 },
@@ -486,4 +657,22 @@ const s = StyleSheet.create({
   previewTitle: { flex: 1, fontSize: 18, fontWeight: '700', color: C.ink },
   previewFrame: { flex: 1, borderRadius: 16, overflow: 'hidden', backgroundColor: C.surface, borderWidth: 1, borderColor: C.line },
   previewContent: { flex: 1, width: '100%' },
+});
+
+const t = StyleSheet.create({
+  headingButton: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 2 },
+  heading: { flex: 1, color: '#FFF', fontFamily: 'InterBody', fontSize: 12, fontWeight: '700' },
+  name: { color: C.ink, fontFamily: 'InterBody', fontSize: 13, fontWeight: '700', lineHeight: 21 },
+  value: { color: C.ink, fontFamily: 'InterBody', fontSize: 13, lineHeight: 21 },
+  small: { color: C.muted, fontFamily: 'InterBody', fontSize: 12, lineHeight: 18 },
+  identity: { gap: 2 },
+  nameCell: { borderWidth: 2, borderColor: 'transparent' },
+  compactNameCell: { borderWidth: 2, borderColor: 'transparent', borderRadius: 5, paddingHorizontal: 4, paddingVertical: 2 },
+  selectedRow: { borderTopColor: '#2B7A50', borderBottomColor: '#2B7A50', backgroundColor: '#E8F3EC' },
+  nativeTable: { borderWidth: 1, borderColor: C.line, borderRadius: 18, overflow: 'hidden', backgroundColor: C.surface },
+  nativeTableRow: { flexDirection: 'row' },
+  frozenPane: { borderRightWidth: 2, borderRightColor: '#BDD2C3', zIndex: 2 },
+  nativeHeader: { flexDirection: 'row', alignItems: 'center', height: 60, backgroundColor: C.brandDark },
+  nativeRow: { flexDirection: 'row', borderTopWidth: 2, borderTopColor: 'transparent', borderBottomWidth: 2, borderBottomColor: C.line },
+  nativeCell: { flexShrink: 0, paddingHorizontal: 16, paddingVertical: 16, justifyContent: 'center' },
 });

@@ -9,3 +9,6 @@ numpy==2.5.4
 google-genai>=1.14.0
 flask-cors==5.0.1
 edge-tts
+
+reportlab>=4.4,<5
+openpyxl>=3.1,<4

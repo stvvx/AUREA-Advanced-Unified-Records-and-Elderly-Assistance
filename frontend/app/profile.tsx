@@ -208,9 +208,9 @@ function Section({
   );
 }
 
-function FieldLabel({ label, required }: { label: string; required?: boolean }) {
+function FieldLabel({ label, required, missing = false }: { label: string; required?: boolean; missing?: boolean }) {
   return (
-    <Text style={styles.label}>
+    <Text style={[styles.label, missing && styles.missingText]}>
       {label}
       {required ? <Text style={{ color: C.error }}> *</Text> : null}
     </Text>
@@ -221,16 +221,19 @@ function TextField({
   label, required, style, ...inputProps
 }: TextInputProps & { label: string; required?: boolean }) {
   const [focused, setFocused] = useState(false);
+  const missing = !String(inputProps.value ?? '').trim();
   return (
     <View style={styles.field}>
-      <FieldLabel label={label} required={required} />
+      <FieldLabel label={label} required={required} missing={missing} />
       <TextInput
         {...inputProps}
         onFocus={(e) => { setFocused(true); inputProps.onFocus?.(e); }}
         onBlur={(e) => { setFocused(false); inputProps.onBlur?.(e); }}
         placeholderTextColor={C.inkFaint}
-        style={[styles.input, focused && styles.inputFocused, style]}
+        accessibilityLabel={inputProps.accessibilityLabel || `${label}${missing ? ", not provided" : ""}`}
+        style={[styles.input, focused && styles.inputFocused, style, missing && styles.inputMissing]}
       />
+      {missing && <Text style={styles.missingHint}>Not provided</Text>}
     </View>
   );
 }
@@ -240,9 +243,9 @@ function SelectField({
 }: { label: string; value: string; placeholder: string; onPress: () => void }) {
   return (
     <View style={styles.field}>
-      <FieldLabel label={label} />
+      <FieldLabel label={label} missing={!value.trim()} />
       <TouchableOpacity
-        style={[styles.input, styles.selectInput, webPointer]}
+        style={[styles.input, styles.selectInput, webPointer, !value.trim() && styles.inputMissing]}
         onPress={onPress}
         activeOpacity={0.8}
         accessibilityRole="button"
@@ -258,8 +261,8 @@ function SelectField({
 function ReadOnlyField({ label, value, icon }: { label: string; value: string; icon?: string }) {
   return (
     <View style={styles.field}>
-      <FieldLabel label={label} />
-      <View style={[styles.input, styles.readOnly]}>
+      <FieldLabel label={label} missing={!value.trim()} />
+      <View style={[styles.input, styles.readOnly, !value.trim() && styles.inputMissing]}>
         {icon ? <Ionicons name={icon as any} size={15} color={C.inkFaint} /> : null}
         <Text style={[styles.valueText, { flex: 1 }]} numberOfLines={1}>{value || '—'}</Text>
         <Ionicons name="lock-closed" size={13} color={C.inkFaint} />
@@ -975,14 +978,14 @@ export default function ProfileScreen() {
                   </View>
                 ) : (
                   <TouchableOpacity
-                    style={[styles.docMissing, webPointer]}
+                    style={[styles.docMissing, webPointer, styles.inputMissing]}
                     onPress={handleBirthCertificatePick}
                     disabled={birthcertUploading}
                     activeOpacity={0.8}
                   >
-                    <Ionicons name="alert-circle-outline" size={20} color={C.goldDark} />
+                    <Ionicons name="alert-circle-outline" size={20} color={C.error} />
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.docMissingTitle}>No birth certificate yet</Text>
+                      <Text style={[styles.docMissingTitle, styles.missingText]}>No birth certificate yet</Text>
                       <Text style={styles.docMissingSub}>Tap here to upload one from your device.</Text>
                     </View>
                   </TouchableOpacity>
@@ -1021,7 +1024,7 @@ export default function ProfileScreen() {
                           autoCapitalize="words"
                         />
                         <View style={styles.field}>
-                          <FieldLabel label="Date of birth" />
+                          <FieldLabel label="Date of birth" missing={!child.dob.trim()} />
                           {isWeb ? (
                             <input
                               type="date"
@@ -1034,11 +1037,11 @@ export default function ProfileScreen() {
                                 }
                               }}
                               max={new Date().toISOString().split('T')[0]}
-                              style={webDateStyle}
+                              style={{ ...webDateStyle, ...(!child.dob.trim() ? { borderColor: C.error, backgroundColor: C.errorSoft } : {}) }}
                             />
                           ) : (
                             <TouchableOpacity
-                              style={[styles.input, styles.selectInput]}
+                              style={[styles.input, styles.selectInput, !child.dob.trim() && styles.inputMissing]}
                               onPress={() => openChildDobPicker(child)}
                               activeOpacity={0.8}
                             >
@@ -1544,6 +1547,9 @@ const styles = StyleSheet.create({
     color: C.ink,
     ...webNoOutline,
   },
+  inputMissing: { borderColor: C.error, backgroundColor: C.errorSoft },
+  missingText: { color: C.error },
+  missingHint: { fontFamily: 'InterBody', fontSize: 11, color: C.error, marginTop: 4 },
   inputFocused: {
     borderColor: C.primaryMid,
     borderWidth: 1.5,

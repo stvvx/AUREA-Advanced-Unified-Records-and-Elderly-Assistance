@@ -21,6 +21,25 @@ class RegistrationIdTests(unittest.TestCase):
         self.assertEqual(result["middleName"], "M.")
         self.assertEqual(result["contact"], "")
 
+    def test_barangay_is_filled_from_printed_address(self):
+        for printed, expected in [
+            ('Sta. Ana', 'Santa Ana'),
+            ('Brgy. Sto. Rosario-Silangan', 'Santo Rosario-Silangan'),
+            ('Barangay Santo Rosario Kanluran', 'Santo Rosario-Kanluran'),
+            ('Brgy. Poblacion', 'Poblacion'),
+        ]:
+            with self.subTest(address=printed):
+                result = normalize_id_details({**self.details, 'barangay': '',
+                    'address': f'8-B Panday Paltok St., {printed}, Pateros'})
+                self.assertEqual(result['barangay'], expected)
+
+    def test_barangay_alias_matches_dropdown_and_explicit_label_wins(self):
+        result = normalize_id_details({**self.details, 'barangay': 'Brgy. Sta. Ana'})
+        self.assertEqual(result['barangay'], 'Santa Ana')
+        result = normalize_id_details({**self.details, 'barangay': '',
+            'address': 'San Pedro Street, Brgy. Aguho, Pateros'})
+        self.assertEqual(result['barangay'], 'Aguho')
+
     def test_rejects_non_ids_missing_fields_and_invalid_birthdays(self):
         for patch_data in [{"isSeniorCitizenId": False}, {"idNumber": ""}, {"firstName": ""},
                            {"dob": "unreadable"}, {"dob": "2020-01-01"}, {"dob": "1944-02-31"}]:

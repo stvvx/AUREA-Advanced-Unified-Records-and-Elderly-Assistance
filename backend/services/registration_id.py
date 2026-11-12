@@ -8,6 +8,7 @@ import re
 from datetime import date, datetime
 from PIL import Image
 from zoneinfo import ZoneInfo
+from services.senior_ids import barangay_from_id_address
 
 
 def normalize_id_details(raw):
@@ -15,6 +16,10 @@ def normalize_id_details(raw):
         raise ValueError("This does not appear to be a senior citizen ID. Please scan the front of your ID.")
     keys = ("firstName", "middleName", "lastName", "dob", "gender", "civilStatus", "contact", "houseNo", "street", "subdivision", "barangay", "address", "idNumber")
     details = {key: str(raw.get(key) or "").strip()[:250] for key in keys}
+    details["barangay"] = (
+        barangay_from_id_address(details["barangay"])
+        or barangay_from_id_address(details["address"])
+    )
     if not details["firstName"] or not details["lastName"] or not details["idNumber"]:
         raise ValueError("The name or ID number is unreadable. Please upload a clearer photo.")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 /.-]{0,79}", details["idNumber"]):
@@ -55,6 +60,8 @@ def scan_registration_id(image, mime_type):
         "Return ONLY a JSON object with isSeniorCitizenId (boolean) and these string fields: "
         "firstName, middleName, lastName, dob (YYYY-MM-DD), gender, civilStatus, contact, "
         "houseNo, street, subdivision, barangay, address, idNumber. "
+        "Read the barangay from the printed address even when it has no Barangay label. "
+        "For example, Sta. Ana in the address means barangay Santa Ana. "
         "Use empty strings for missing or uncertain fields. Do not invent or expand initials. "
         "Classify as a senior citizen ID only if the document explicitly identifies itself as one. "
         "Preserve name order as labeled; separate address components only when readable."
