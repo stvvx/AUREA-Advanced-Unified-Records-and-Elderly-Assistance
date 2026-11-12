@@ -1,3 +1,5 @@
+from services.senior_ids import format_senior_id
+
 """Keep the existing user API shape while senior-only fields live in seniors."""
 def with_senior_fields(rows, rest):
     if not isinstance(rows, list) or not rows:
@@ -20,6 +22,8 @@ def with_senior_fields(rows, rest):
                    "signature": profile.get("signature"), "osca_id_number": profile.get("osca_id_number"),
                    "source_of_income": profile.get("source_of_income"), "occupation": profile.get("occupation"),
                    "spouse": profile.get("spouse")}
+        if profile is not None:
+            row["osca_id_number"] = format_senior_id(row)
         result.append(row)
     return result
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -15,7 +15,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
@@ -71,6 +71,20 @@ function formatTime(isoString?: string): string {
 
 export default function ChatScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const viewportHeightRef = useRef(0);
+  const restingHeightRef = useRef(0);
+  const keyboardHeightRef = useRef(0);
+  const [keyboardOverlap, setKeyboardOverlap] = useState(0);
+
+  // Use heights in the same coordinate space. Android's keyboard screenY
+  // and measureInWindow have different status-bar origins on some devices.
+  const updateKeyboardOverlap = useCallback(() => {
+    if (Platform.OS !== 'android') return;
+    const resizedBy = Math.max(0, restingHeightRef.current - viewportHeightRef.current);
+    setKeyboardOverlap(Math.max(0, keyboardHeightRef.current - resizedBy));
+  }, []);
   const { user } = useAuth();
 
   const userRole = (user?.role || 'user').toLowerCase();
@@ -96,28 +110,30 @@ export default function ChatScreen() {
 
   const flatListRef = useRef<FlatList>(null);
 
-  // Keyboard listeners — only used to auto-scroll to the latest message.
-  // NOTE: we intentionally do NOT track keyboard height here anymore.
-  // On Android, the OS (softwareKeyboardLayoutMode: "resize") already
-  // shrinks the screen when the keyboard opens. Also adding manual
-  // paddingBottom on top of that caused the large empty gap seen above
-  // the keyboard — the two compensations were stacking.
+  // Keep the latest message visible as the keyboard opens.
   useEffect(() => {
     const showSub = Keyboard.addListener(
       Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
-      () => {
+      (event) => {
+        keyboardHeightRef.current = event.endCoordinates.height;
+        setKeyboardVisible(true);
+        requestAnimationFrame(updateKeyboardOverlap);
         setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 80);
       }
     );
     const hideSub = Keyboard.addListener(
       Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
-      () => { }
+      () => {
+        keyboardHeightRef.current = 0;
+        setKeyboardOverlap(0);
+        setKeyboardVisible(false);
+      }
     );
     return () => {
       showSub.remove();
       hideSub.remove();
     };
-  }, []);
+  }, [updateKeyboardOverlap]);
 
   // Active target senior citizen user ID
   const activeUserId = isAdmin ? selectedUser?.userId : user?.id;
@@ -455,11 +471,22 @@ export default function ChatScreen() {
         )}
       </View>
 
-      {/* Message List */}
-      <KeyboardAvoidingView
+      {/* Measure keyboard overlap outside the content that it moves. */}
+      <View
         style={{ flex: 1 }}
+        onLayout={(event) => {
+          viewportHeightRef.current = event.nativeEvent.layout.height;
+          if (!Keyboard.isVisible() && keyboardHeightRef.current === 0) {
+            restingHeightRef.current = viewportHeightRef.current;
+          }
+          updateKeyboardOverlap();
+        }}
+      >
+      <KeyboardAvoidingView
+        style={{ flex: 1, paddingBottom: Platform.OS === 'android' ? keyboardOverlap : 0 }}
+        enabled={Platform.OS === 'ios'}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? headerHeight : 0}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? headerHeight + insets.top : 0}
       >
         {loadingMessages ? (
           <View style={s.centerBox}>
@@ -483,6 +510,7 @@ export default function ChatScreen() {
         ) : (
           <FlatList
             ref={flatListRef}
+            style={{ flex: 1 }}
             data={messages}
             keyExtractor={(item) => item.id}
             renderItem={renderMessageItem}
@@ -515,7 +543,7 @@ export default function ChatScreen() {
         )}
 
         {/* Input Bar */}
-        <View style={s.inputContainer}>
+        <View style={[s.inputContainer, { paddingBottom: sp(2.5) + (keyboardVisible ? 0 : insets.bottom) }]}>
           <TextInput
             style={s.input}
             placeholder={isAdmin ? 'Type your response as OSCA Admin...' : 'Sumulat ng mensahe sa OSCA...'}
@@ -523,6 +551,9 @@ export default function ChatScreen() {
             value={inputText}
             onChangeText={setInputText}
             onFocus={() => {
+              if (!Keyboard.isVisible()) {
+                restingHeightRef.current = viewportHeightRef.current;
+              }
               setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
             }}
             multiline
@@ -543,6 +574,7 @@ export default function ChatScreen() {
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
+      </View>
     </SafeAreaView>
   );
 }
@@ -903,6 +935,7 @@ const s = StyleSheet.create({
   /* Input Container */
   inputContainer: {
     flexDirection: 'row',
+    flexShrink: 0,
     alignItems: 'center',
     paddingHorizontal: sp(3),
     paddingVertical: sp(2.5),
@@ -920,6 +953,7 @@ const s = StyleSheet.create({
     fontFamily: 'InterBody',
     fontSize: 14.5,
     color: C.ink,
+    minHeight: 44,
     maxHeight: 100,
   },
   sendBtn: {

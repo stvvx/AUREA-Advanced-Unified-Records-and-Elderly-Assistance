@@ -1,0 +1,13 @@
+# Local credentials (loaded by python-dotenv)
+.env
+.env.*
+*.env
+!.env.example
+
+# Local Python environments and generated files
+.venv*/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+tts_cache/

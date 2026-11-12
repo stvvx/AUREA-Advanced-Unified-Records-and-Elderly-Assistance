@@ -56,6 +56,7 @@ function resolveBaseUrl(): string {
     return envUrl;
   }
 
+  if (!__DEV__) return 'https://aurea-backend-1-7z1p.onrender.com';
   if (hasLanHost) return `http://${lanHost}:5000`;
   if (Platform.OS === 'android') return 'http://10.0.2.2:5000';
   return 'http://localhost:5000';

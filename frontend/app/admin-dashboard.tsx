@@ -218,7 +218,8 @@ function getBaseUrl() {
   const env = process.env.EXPO_PUBLIC_API_URL?.trim();
   if (env) {
     if (env.includes('localhost') || env.includes('127.0.0.1')) {
-      if (hasLan) return env.replace('localhost', lanHost).replace('127.0.0.1', lanHost);
+      if (!__DEV__) return 'https://aurea-backend-1-7z1p.onrender.com';
+  if (hasLan) return env.replace('localhost', lanHost).replace('127.0.0.1', lanHost);
       if (Platform.OS === 'android') return env.replace('localhost', '10.0.2.2').replace('127.0.0.1', '10.0.2.2');
     }
     return env;

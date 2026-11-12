@@ -1,3 +1,4 @@
+import { formatSeniorId } from '../lib/seniorId';
 import { Platform } from 'react-native';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
@@ -386,7 +387,7 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
     .join(' ')
     .trim() || (anyData.applicantName ? String(anyData.applicantName).trim().toUpperCase() : `USER #${data.user_id || ''}`);
 
-  const oscaId = data.osca_id_number || data.applicant?.oscaIdNumber || (data.user_id ? `SA-${String(data.user_id).padStart(4, '0')}` : 'N/A');
+  const oscaId = formatSeniorId({ id: data.user_id, address: data.residential_address || data.applicant?.address, oscaIdNumber: data.osca_id_number || data.applicant?.oscaIdNumber }) || 'N/A';
   const rrn = data.ncsc_registration_reference_number || 'N/A';
   const dobFormatted = formatDate(data.date_of_birth || (data.applicant as any)?.dob);
 

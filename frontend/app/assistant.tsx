@@ -155,7 +155,7 @@ export default function AssistantScreen() {
           setIsListening(false);
         }
       );
-    }, 500);
+    }, 200);
   };
 
   // Speak, and start listening again when finished
@@ -284,12 +284,7 @@ export default function AssistantScreen() {
       'Sandali lang po, inihahanda ni Lolo Aurea ang sagot...'
     );
 
-    // filler: plain speak, no resume
-    speechEngine.speak(
-      'Sandali lang po, inihahanda ko ang sagot.',
-      () => setIsSpeaking(true),
-      () => setIsSpeaking(false)
-    );
+    // Send the AI request immediately; avoid a competing TTS request.
 
     try {
       const data = await sendLoloMessage({

@@ -1,3 +1,4 @@
+import { API_BASE_URL } from '../services/loloApi';
 /**
  * app/memories.tsx — LOLO AUREA Long-Term Memory Manager
  *
@@ -78,14 +79,8 @@ const CATEGORY_CONFIG: Record<
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const BASE_URL =
-  process.env.EXPO_PUBLIC_API_URL || 'http://localhost:5000';
-
 function getApiUrl(): string {
-  if (Platform.OS === 'android' && BASE_URL.includes('localhost')) {
-    return BASE_URL.replace('localhost', '10.0.2.2');
-  }
-  return BASE_URL;
+  return API_BASE_URL;
 }
 
 async function fetchMemories(userId: number): Promise<Memory[]> {

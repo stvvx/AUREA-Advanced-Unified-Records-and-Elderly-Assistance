@@ -21,7 +21,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import Toast from '../components/Toast';
-import { registerUser } from '../lib/authApi';
+import { registerUser, scanSeniorId } from '../lib/authApi';
+import * as ImagePicker from 'expo-image-picker';
+import { File } from 'expo-file-system';
 import { useAuth } from '../context/AuthContext';
 
 // ---------------------------------------------------------------------------
@@ -282,6 +284,12 @@ export default function RegisterScreen() {
   const { login } = useAuth();
   const scrollRef = useRef<React.ElementRef<typeof ScrollView>>(null);
 
+  const [idChoice, setIdChoice] = useState<'existing' | 'none' | null>(null);
+  const [scanToken, setScanToken] = useState('');
+  const [scannedIdNumber, setScannedIdNumber] = useState('');
+  const [scannedAddress, setScannedAddress] = useState('');
+  const [idPhoto, setIdPhoto] = useState<string | null>(null);
+  const [scanning, setScanning] = useState(false);
   const [step, setStep] = useState(0);
   const [form, setForm] = useState<Record<string, string>>({});
   const [showPassword, setShowPassword] = useState(false);
@@ -385,7 +393,7 @@ export default function RegisterScreen() {
   };
 
   const handleBack = () => {
-    if (step === 0) { router.back(); return; }
+    if (step === 0) { setIdChoice(null); setScanToken(''); return; }
     setErrorKeys([]);
     setStep((s) => s - 1);
     scrollTop();
@@ -403,6 +411,8 @@ export default function RegisterScreen() {
     setLoading(true);
     try {
       const data = await registerUser({
+        hasExistingSeniorId: idChoice === 'existing',
+        seniorIdScanToken: idChoice === 'existing' ? scanToken : undefined,
         firstName: form.firstName.trim(),
         middleName: form.middleName?.trim() ?? '',
         lastName: form.lastName.trim(),
@@ -434,6 +444,71 @@ export default function RegisterScreen() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const scanIdPhoto = async (camera: boolean) => {
+    if (scanning) return;
+    try {
+      let photoUri: string;
+      let imageBase64: string;
+      let mimeType: string;
+      if (camera) {
+        if (Platform.OS !== 'web') {
+          const permission = await ImagePicker.requestCameraPermissionsAsync();
+          if (!permission.granted) {
+            showToast('Allow camera access in Settings to scan your ID, or use Upload ID photo.', 'error');
+            return;
+          }
+        }
+        const result = await ImagePicker.launchCameraAsync({
+          mediaTypes: ['images'], quality: 0.8, base64: true,
+        });
+        if (result.canceled || !result.assets[0]) return;
+        const asset = result.assets[0];
+        photoUri = asset.uri;
+        imageBase64 = asset.base64 || await new File(asset.uri).base64();
+        mimeType = asset.mimeType || 'image/jpeg';
+      } else {
+        // Read the image inside the picker while it holds access to the selected photo.
+        const result = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ['images'],
+          allowsMultipleSelection: false,
+          quality: 0.8,
+          base64: true,
+        });
+        if (result.canceled || !result.assets[0]) return;
+        const asset = result.assets[0];
+        if (asset.fileSize && asset.fileSize > 8_000_000) {
+          showToast('Please choose an ID photo smaller than 8 MB.', 'error');
+          return;
+        }
+        photoUri = asset.uri;
+        if (!asset.base64) {
+          throw new Error('The selected photo could not be read. Please select it again or choose another photo.');
+        }
+        imageBase64 = asset.base64;
+        mimeType = asset.mimeType || 'image/jpeg';
+      }
+      if (!imageBase64) throw new Error('Unable to read the photo. Please choose another image.');
+      setIdPhoto(photoUri);
+      setScanning(true);
+      const { details, scanToken: token } = await scanSeniorId(imageBase64, mimeType);
+      setForm(previous => ({ ...previous, firstName: details.firstName, middleName: details.middleName,
+        lastName: details.lastName, dob: details.dob, contact: details.contact }));
+      const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const barangay = BARANGAYS.find(name => normalize(name) === normalize(details.barangay)) || '';
+      setAddress({ houseNo: details.houseNo, street: details.street, subdivision: details.subdivision, barangay });
+      setGender(GENDERS.find(value => value.toLowerCase() === details.gender.toLowerCase()) || '');
+      setCivilStatus(CIVIL_STATUSES.find(value => value.toLowerCase() === details.civilStatus.toLowerCase()) || '');
+      setScannedIdNumber(details.idNumber);
+      setScannedAddress(details.address);
+      setScanToken(token);
+      setStep(0);
+      setErrorKeys([]);
+      showToast('ID details copied. Review every field and complete the missing information.', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Could not scan your ID. Please try again.', 'error');
+    } finally { setScanning(false); }
   };
 
   const renderField = (field: Field) => {
@@ -516,6 +591,46 @@ export default function RegisterScreen() {
 
   const current = STEPS[step];
   const fullName = [form.firstName, form.middleName, form.lastName].map((p) => p?.trim()).filter(Boolean).join(' ');
+
+  if (idChoice === null || (idChoice === 'existing' && !scanToken)) {
+    return (
+      <View style={[styles.safe, { paddingTop: insets.top }]}>
+        <StatusBar barStyle="dark-content" />
+        <Toast visible={toast.visible} message={toast.message} type={toast.type} onHide={() => setToast(t => ({ ...t, visible: false }))} />
+        <ScrollView contentContainerStyle={styles.container}>
+          <View style={styles.content}>
+            <TouchableOpacity disabled={scanning} onPress={() => idChoice ? setIdChoice(null) : router.back()} accessibilityRole="button">
+              <Text style={styles.loginBtnText}>Back</Text>
+            </TouchableOpacity>
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>{idChoice === 'existing' ? 'Scan your senior citizen ID' : 'Do you have a senior citizen ID?'}</Text>
+              <Text style={styles.sectionSubtitle}>{idChoice === 'existing'
+                ? 'Take a clear photo of the front of your ID, or upload an existing photo. We will read the details and check whether this ID is already linked to an AUREA account.'
+                : 'Choose an option before filling out your registration form.'}</Text>
+              {idChoice === null ? <>
+                <TouchableOpacity style={[styles.submitBtn, { marginTop: 20 }]} onPress={() => setIdChoice('existing')} accessibilityRole="button">
+                  <Text style={styles.submitText}>I have a senior citizen ID</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.submitBtn, { marginTop: 12 }]} onPress={() => { setIdChoice('none'); setScanToken(''); setScannedIdNumber(''); setScannedAddress(''); setForm({}); setAddress({ barangay: '', houseNo: '', street: '', subdivision: '' }); setGender(''); setCivilStatus(''); setStep(0); setErrorKeys([]); }} accessibilityRole="button">
+                  <Text style={styles.submitText}>I do not have an ID yet</Text>
+                </TouchableOpacity>
+              </> : <>
+                {idPhoto && <Image source={{ uri: idPhoto }} style={{ width: '100%', height: 200, marginTop: 16 }} resizeMode="contain" accessibilityLabel="Selected senior citizen ID" />}
+                {scanning && <View style={{ marginTop: 16 }}><ActivityIndicator color={colors.primary} /><Text style={styles.helperText}>Reading ID and checking existing records?</Text></View>}
+                <TouchableOpacity style={[styles.submitBtn, { marginTop: 20, opacity: scanning ? 0.6 : 1 }]} disabled={scanning} onPress={() => scanIdPhoto(true)} accessibilityRole="button">
+                  <Text style={styles.submitText}>Scan with camera</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.submitBtn, { marginTop: 12, opacity: scanning ? 0.6 : 1 }]} disabled={scanning} onPress={() => scanIdPhoto(false)} accessibilityRole="button">
+                  <Text style={styles.submitText}>Upload ID photo</Text>
+                </TouchableOpacity>
+                <Text style={[styles.helperText, { marginTop: 16 }]}>Your photo is sent for text extraction. Reading a card does not confirm its official authenticity. You can review and correct the extracted details before submitting.</Text>
+              </>}
+            </View>
+          </View>
+        </ScrollView>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.safe}>
@@ -601,6 +716,14 @@ export default function RegisterScreen() {
               </View>
             )}
 
+            {idChoice === 'existing' && step === 0 && (
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>ID details copied: {scannedIdNumber}</Text>
+                <Text style={styles.sectionSubtitle}>Review your name and birthday, then check your address on the next step. Complete any missing fields.</Text>
+                {!!scannedAddress && <Text style={styles.helperText}>Address read from ID: {scannedAddress}</Text>}
+                <TouchableOpacity onPress={() => { setScanToken(''); setIdPhoto(null); }} accessibilityRole="button"><Text style={styles.loginBtnText}>Scan another photo</Text></TouchableOpacity>
+              </View>
+            )}
             {/* Current step card */}
             <View style={styles.section}>
               <View style={styles.sectionHeader}>

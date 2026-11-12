@@ -1,3 +1,4 @@
+import { formatSeniorId } from '../lib/seniorId';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -23,7 +24,6 @@ import { useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
-import QRCode from 'react-native-qrcode-svg';
 import { WebView } from 'react-native-webview';
 import { useAuth } from '../context/AuthContext';
 import { SENIOR_CATEGORIES } from '../data/seniorCategories';
@@ -314,9 +314,7 @@ export default function ProfileScreen() {
   const { user, updateProfile, logout } = useAuth();
   const [loading, setLoading] = useState(false);
   const [profileOscaId, setProfileOscaId] = useState<{ userId: number; value: string } | null>(null);
-  const oscaIdNumber = (profileOscaId?.userId === user?.id ? profileOscaId?.value : '')
-    || user?.oscaIdNumber?.trim()
-    || (user?.id ? `SA-${String(user.id).padStart(4, '0')}` : '');
+  const oscaIdNumber = formatSeniorId({ ...user, oscaIdNumber: (profileOscaId?.userId === user?.id ? profileOscaId?.value : '') || user?.oscaIdNumber });
   const [avatarUri, setAvatarUri] = useState<string | null>(user?.profilePhoto ?? user?.avatarUrl ?? null);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [genderOpen, setGenderOpen] = useState(false);
@@ -754,27 +752,10 @@ export default function ProfileScreen() {
               {canHaveSeniorQr ? (
                 <View style={[styles.qrCard, shadow(C.ink, 0.08, 16, 4)]}>
                   <View style={styles.qrHeader}>
-                    <Ionicons name="qr-code-outline" size={18} color={C.primaryDark} />
+                    <Ionicons name="card-outline" size={18} color={C.primaryDark} />
                     <Text style={styles.qrTitle}>Digital ID</Text>
                   </View>
-                  <Text style={styles.qrDesc}>Show this code to confirm your Senior Citizen status.</Text>
-                  <View style={styles.qrWrap}>
-                    <QRCode
-                      value={JSON.stringify({
-                        id: user.id,
-                        name: `${user.firstName} ${user.lastName}`,
-                        dob: user.dob,
-                        role: user.role,
-                      })}
-                      size={148}
-                      color={C.ink}
-                      backgroundColor={C.white}
-                    />
-                  </View>
-                  <View style={styles.verifiedPill}>
-                    <Ionicons name="shield-checkmark" size={14} color={C.primary} />
-                    <Text style={styles.verifiedText}>OSCA verified</Text>
-                  </View>
+                  <Text style={styles.qrDesc}>View your Senior Citizen ID card and QR code.</Text>
                   <TouchableOpacity
                     style={[styles.viewIdBtn, webPointer]}
                     onPress={() => router.push('/digital-id')}
@@ -1495,25 +1476,6 @@ const styles = StyleSheet.create({
     marginBottom: sp(4),
     paddingHorizontal: sp(2),
   },
-  qrWrap: {
-    padding: 16,
-    backgroundColor: C.white,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: C.line,
-  },
-  verifiedPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    backgroundColor: C.primarySoft,
-    borderRadius: 20,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    marginTop: sp(3),
-    marginBottom: sp(3),
-  },
-  verifiedText: { fontFamily: 'InterBody', fontWeight: '600', fontSize: 12, color: C.primaryDark },
   viewIdBtn: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -1,3 +1,4 @@
+import { formatSeniorId } from '../lib/seniorId';
 import React, { useEffect, useState, useRef } from 'react';
 import {
   View,
@@ -18,7 +19,8 @@ import {
 import * as ScreenOrientation from 'expo-screen-orientation';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
+import { loadServiceSnapshot, type ServiceSnapshot } from '../services/seniorQr';
 import QRCode from 'react-native-qrcode-svg';
 import Svg, {
   Path,
@@ -133,10 +135,6 @@ function formatIssueDate(createdAt?: string): string {
   }
 }
 
-function formatIdNumber(id?: number): string {
-  if (!id) return 'SA-1947';
-  return `SA-${String(id).padStart(4, '0')}`;
-}
 
 function getAge(dob?: string): number | null {
   if (!dob) return null;
@@ -164,6 +162,7 @@ function getAge(dob?: string): number | null {
 
 export default function DigitalIdScreen() {
   const router = useRouter();
+  const { width: screenWidth } = useWindowDimensions();
   const { user } = useAuth();
   const [activeSide, setActiveSide] = useState<'front' | 'back'>('front');
   const [copiedToast, setCopiedToast] = useState(false);
@@ -180,9 +179,23 @@ export default function DigitalIdScreen() {
     avatarUrl: string | null;
     signature: string | null;
     id: number;
+    oscaIdNumber?: string;
     createdAt?: string;
   } | null>(null);
   const [loading, setLoading] = useState(true);
+  const [services, setServices] = useState<ServiceSnapshot | null>(null);
+
+  useFocusEffect(React.useCallback(() => {
+    if (!user?.id) return;
+    const controller = new AbortController();
+    let active = true;
+    const refresh = () => loadServiceSnapshot(user.id, controller.signal).then(snapshot => {
+      if (active) setServices(snapshot);
+    });
+    void refresh();
+    const interval = setInterval(() => { void refresh(); }, 60000);
+    return () => { active = false; controller.abort(); clearInterval(interval); };
+  }, [user?.id]));
 
   useEffect(() => {
     if (!user?.id) {
@@ -203,6 +216,7 @@ export default function DigitalIdScreen() {
           avatarUrl: p.avatarUrl ?? p.profilePhoto ?? null,
           signature: p.signature ?? p.digitalSignature ?? null,
           id: p.id,
+          oscaIdNumber: p.oscaIdNumber,
           createdAt: p.createdAt,
         });
       })
@@ -220,6 +234,7 @@ export default function DigitalIdScreen() {
             avatarUrl: user.avatarUrl ?? user.profilePhoto ?? null,
             signature: (user as any).signature ?? (user as any).digitalSignature ?? null,
             id: user.id,
+            oscaIdNumber: user.oscaIdNumber,
           });
         }
       })
@@ -275,20 +290,30 @@ export default function DigitalIdScreen() {
 
   const dobDisplay = formatDobLong(profile?.dob || '');
   const genderDisplay = profile?.gender ? profile.gender.charAt(0).toUpperCase() + profile.gender.slice(1) : 'Female';
-  const idNumberDisplay = formatIdNumber(profile?.id);
+  const idNumberDisplay = formatSeniorId(profile);
   const issueDateDisplay = formatIssueDate(profile?.createdAt);
 
-  const qrPayload = JSON.stringify({
-    idNumber: idNumberDisplay,
-    name: fullNameUpper,
-    dob: dobDisplay,
-    gender: genderDisplay,
-    municipality: 'Pateros, Metro Manila',
-    office: 'Office of the Senior Citizens Affairs (OSCA)',
-    republicAct: 'RA 9994',
-    dateIssued: issueDateDisplay,
-    status: 'VALID',
-  });
+  const serviceSnapshot = services?.userId === user.id ? services : null;
+  const pendingLines = serviceSnapshot?.lines || ['Service statuses: loading / unavailable'];
+  // Plain text displays cleanly in standard phone QR scanners.
+  const qrPayload = [
+    'PATEROS SENIOR CITIZEN ID',
+    'ID STATUS: VALID',
+    '',
+    `ID No.: ${idNumberDisplay}`,
+    `Name: ${fullNameUpper}`,
+    `Date of birth: ${dobDisplay}`,
+    `Sex: ${genderDisplay}`,
+    `Address: ${profile?.address || user.address || 'Not provided'}`,
+    `Date issued: ${issueDateDisplay}`,
+    'Issuer: OSCA, Municipality of Pateros',
+    '',
+    'PENDING / UPCOMING SERVICES',
+    ...pendingLines,
+    '',
+    serviceSnapshot ? `Services checked: ${serviceSnapshot.checkedAt} (PHT)` : 'Services have not been checked yet.',
+    'Service statuses are a snapshot; confirm current records with OSCA.',
+  ].join('\n');
 
   const handleShare = async () => {
     try {
@@ -547,6 +572,11 @@ export default function DigitalIdScreen() {
                         <QRCode
                           value={qrPayload}
                           size={44}
+                          logo={require('../assets/images/image copy 2.png')}
+                          logoSize={8}
+                          logoMargin={1}
+                          logoBackgroundColor="#FFFFFF"
+                          ecl="H"
                           color={C.oscaGreenDark}
                           backgroundColor="#FFFFFF"
                         />
@@ -746,7 +776,13 @@ export default function DigitalIdScreen() {
                 <View style={s.qrWrapper}>
                   <QRCode
                     value={qrPayload}
-                    size={160}
+                    size={Math.max(120, Math.min(220, screenWidth - 112))}
+                    logo={require('../assets/images/image copy 2.png')}
+                    logoSize={Math.max(120, Math.min(220, screenWidth - 112)) * 0.18}
+                    logoMargin={3}
+                    logoBackgroundColor="#FFFFFF"
+                    ecl="H"
+                    quietZone={8}
                     color={C.oscaGreenDark}
                     backgroundColor="#FFFFFF"
                   />
@@ -760,8 +796,11 @@ export default function DigitalIdScreen() {
                   <Text style={s.qrDetailsIdVal}>{idNumberDisplay}</Text>
 
                   <Text style={s.qrScanNote}>
-                    Scan using any OSCA QR scanner or merchant terminal to verify authenticity.
+                    Scan to view cardholder details, ID status, and pending services. Service statuses reflect the last update shown below.
                   </Text>
+                  <Text style={[s.qrDetailsIdLabel, { marginTop: 12 }]}>PENDING / UPCOMING SERVICES</Text>
+                  {pendingLines.map((line, index) => <Text key={index} style={s.qrScanNote}>{line}</Text>)}
+                  {serviceSnapshot && <Text style={s.qrScanNote}>Updated {serviceSnapshot.checkedAt} (PHT)</Text>}
                 </View>
               </View>
             </View>
@@ -850,36 +889,7 @@ export default function DigitalIdScreen() {
 // Signature Display Component for the Card
 // ─────────────────────────────────────────────────────────────────────────────
 function SignatureDisplay({ signature }: { signature?: string | null }) {
-  if (!signature) {
-    // Default placeholder flourish
-    return (
-      <View style={s.sigContainer}>
-        <Svg width="105" height="22" viewBox="0 0 120 30">
-          <Path
-            d="M 5 22 Q 15 4, 25 18 T 42 12 Q 55 24, 70 8 T 92 16 Q 105 10, 115 18"
-            fill="none"
-            stroke="#0F2B48"
-            strokeWidth="2"
-            strokeLinecap="round"
-          />
-          <Path
-            d="M 12 16 Q 28 8, 38 24"
-            fill="none"
-            stroke="#0F2B48"
-            strokeWidth="1.6"
-            strokeLinecap="round"
-          />
-          <Path
-            d="M 85 18 Q 98 4, 108 20"
-            fill="none"
-            stroke="#0F2B48"
-            strokeWidth="1.5"
-            strokeLinecap="round"
-          />
-        </Svg>
-      </View>
-    );
-  }
+  if (!signature?.trim()) return null;
 
   // Check if signature is JSON with vectorized strokes
   try {
@@ -920,20 +930,7 @@ function SignatureDisplay({ signature }: { signature?: string | null }) {
     }
   }
 
-  // Fallback flourish
-  return (
-    <View style={s.sigContainer}>
-      <Svg width="105" height="22" viewBox="0 0 120 30">
-        <Path
-          d="M 5 22 Q 15 4, 25 18 T 42 12 Q 55 24, 70 8 T 92 16 Q 105 10, 115 18"
-          fill="none"
-          stroke="#0F2B48"
-          strokeWidth="2"
-          strokeLinecap="round"
-        />
-      </Svg>
-    </View>
-  );
+  return null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1813,19 +1810,25 @@ const s = StyleSheet.create({
   },
   actionPill: {
     flex: 1,
+    minWidth: 0,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
     backgroundColor: C.white,
     paddingVertical: 11,
+    paddingHorizontal: 12,
+    minHeight: 48,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: C.line,
   },
   actionPillText: {
+    flexShrink: 1,
+    textAlign: 'center',
     fontFamily: 'Poppins_600SemiBold',
     fontSize: 12,
+    lineHeight: 18,
     color: C.inkSoft,
   },
 

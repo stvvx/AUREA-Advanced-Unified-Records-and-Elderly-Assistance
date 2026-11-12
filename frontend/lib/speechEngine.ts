@@ -106,6 +106,10 @@ private handsFreeRecorder: AudioRecorder | null = null;
   // Prevent old TTS requests from playing
   private speechRequestId = 0;
 
+  // Keep repeated phrases off the network without retaining unbounded audio.
+  private speechAudioCache = new Map<string, any>();
+  private speechAudioCacheBytes = 0;
+
   // Native recording
   private nativeRecording: AudioRecorder | null = null;
 
@@ -554,83 +558,86 @@ private handsFreeRecorder: AudioRecorder | null = null;
       // BACKEND
       // -----------------------------------------------------------------------
 
-      /*
-       * WEB:
-       *   Flask is running on this same PC.
-       *
-       * NATIVE:
-       *   Phone needs the PC's LAN IP.
-       */
-
-      const backendUrl =
-        this.isWeb
-          ? 'http://127.0.0.1:5000'
-          : API_BASE_URL;
+      const backendUrl = API_BASE_URL;
 
       console.log(
         '[LOLO TTS] Backend:',
         backendUrl
       );
 
-      const response = await fetch(
-        `${backendUrl}/api/lolo/speech/tts`,
-        {
-          method: 'POST',
+      const cacheKey = JSON.stringify([backendUrl, text, rate, pitch, language]);
+      let result = this.speechAudioCache.get(cacheKey);
+      if (!result) {
+        const response = await fetch(
+          `${backendUrl}/api/lolo/speech/tts`,
+          {
+            method: 'POST',
 
-          headers: {
-            'Content-Type':
-              'application/json',
-          },
+            headers: {
+              'Content-Type':
+                'application/json',
+            },
 
-          body: JSON.stringify({
-            text,
+            body: JSON.stringify({
+              text,
 
-            language:
-              language || 'fil',
+              language:
+                language || 'fil',
 
-            speechRate:
-              rate,
+              speechRate:
+                rate,
 
-            speechPitch:
-              pitch,
-          }),
+              speechPitch:
+                pitch,
+            }),
+          }
+        );
+
+        console.log(
+          '[LOLO TTS] Flask status:',
+          response.status
+        );
+
+        try {
+          result =
+            await response.json();
+        } catch {
+          throw new Error(
+            'Flask returned invalid JSON.'
+          );
         }
-      );
 
-      console.log(
-        '[LOLO TTS] Flask status:',
-        response.status
-      );
+        if (
+          !response.ok ||
+          !result.success
+        ) {
+          throw new Error(
+            result.error ||
+              `TTS request failed: ${response.status}`
+          );
+        }
 
-      let result: any;
-
-      try {
-        result =
-          await response.json();
-      } catch {
-        throw new Error(
-          'Flask returned invalid JSON.'
-        );
-      }
-
-      if (
-        !response.ok ||
-        !result.success
-      ) {
-        throw new Error(
-          result.error ||
-            `TTS request failed: ${response.status}`
-        );
-      }
-
-      if (
-        !result.audioBase64 ||
-        typeof result.audioBase64 !==
-          'string'
-      ) {
-        throw new Error(
-          'ElevenLabs returned no audio.'
-        );
+        if (
+          !result.audioBase64 ||
+          typeof result.audioBase64 !==
+            'string'
+        ) {
+          throw new Error(
+            'ElevenLabs returned no audio.'
+          );
+        }
+        const bytes = result.audioBase64.length;
+        const maxBytes = 4 * 1024 * 1024;
+        if (bytes <= maxBytes) {
+          while (this.speechAudioCache.size >= 8 || this.speechAudioCacheBytes + bytes > maxBytes) {
+            const oldest = this.speechAudioCache.keys().next().value;
+            if (oldest === undefined) break;
+            this.speechAudioCacheBytes -= this.speechAudioCache.get(oldest).audioBase64.length;
+            this.speechAudioCache.delete(oldest);
+          }
+          this.speechAudioCache.set(cacheKey, result);
+          this.speechAudioCacheBytes += bytes;
+        }
       }
 
       console.log(
@@ -1359,7 +1366,7 @@ if (!sound.isLoaded) {
 
     const POLL_MS = 100;
     const MIN_VOICED_MS = 300;
-    const SILENCE_END_MS = 1300;
+    const SILENCE_END_MS = 800;
     const IDLE_RESTART_MS = 10000;
     const MAX_UTTERANCE_MS = 20000;
 

@@ -2,6 +2,8 @@ import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 
 type RegisterPayload = {
+  hasExistingSeniorId?: boolean;
+  seniorIdScanToken?: string;
   firstName: string;
   middleName?: string;
   lastName: string;
@@ -65,6 +67,7 @@ const normalizeBaseUrl = () => {
     return envUrl;
   }
 
+  if (!__DEV__) return 'https://aurea-backend-1-7z1p.onrender.com';
   if (hasLanHost) return `http://${lanHost}:5000`;
   if (Platform.OS === 'android') return 'http://10.0.2.2:5000';
   return 'http://localhost:5000';
@@ -85,7 +88,7 @@ async function request<T>(path: string, body: unknown): Promise<T> {
     });
   } catch {
     throw new Error(
-      `Cannot reach API server at ${API_BASE_URL}. Ensure your phone and computer are on the same Wi-Fi and backend is running on port 5000.`
+      `Cannot reach API server at ${API_BASE_URL}. Check your internet connection and that the backend is available.`
     );
   }
 
@@ -145,7 +148,7 @@ export async function getUser(userId: number): Promise<{ user: UserProfile }> {
     });
   } catch {
     throw new Error(
-      `Cannot reach API server at ${API_BASE_URL}. Ensure your phone and computer are on the same Wi-Fi and backend is running on port 5000.`
+      `Cannot reach API server at ${API_BASE_URL}. Check your internet connection and that the backend is available.`
     );
   }
 
@@ -208,7 +211,7 @@ export async function updateUser(
     });
   } catch {
     throw new Error(
-      `Cannot reach API server at ${API_BASE_URL}. Ensure your phone and computer are on the same Wi-Fi and backend is running on port 5000.`
+      `Cannot reach API server at ${API_BASE_URL}. Check your internet connection and that the backend is available.`
     );
   }
 
@@ -232,7 +235,7 @@ export async function uploadAvatar(
     });
   } catch {
     throw new Error(
-      `Cannot reach API server at ${API_BASE_URL}. Ensure your phone and computer are on the same Wi-Fi and backend is running on port 5000.`
+      `Cannot reach API server at ${API_BASE_URL}. Check your internet connection and that the backend is available.`
     );
   }
 
@@ -352,4 +355,14 @@ export async function revokeUserSession(token: string): Promise<void> {
     });
     if (!response.ok && response.status !== 401) throw new Error('Could not end your session. Please try again.');
   } finally { clearTimeout(timeout); }
+}
+
+export type ScannedSeniorId = {
+  firstName: string; middleName: string; lastName: string; dob: string;
+  gender: string; civilStatus: string; contact: string; idNumber: string;
+  houseNo: string; street: string; subdivision: string; barangay: string; address: string;
+};
+
+export async function scanSeniorId(image: string, mimeType: string): Promise<{ details: ScannedSeniorId; scanToken: string }> {
+  return request('/api/auth/scan-senior-id', { image, mimeType });
 }

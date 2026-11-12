@@ -11,6 +11,8 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request
+from itsdangerous import URLSafeTimedSerializer, BadSignature
+from services.registration_id import scan_registration_id
 from werkzeug.security import check_password_hash, generate_password_hash
 
 import face_verifier
@@ -56,6 +58,38 @@ FACE_VERIFICATION_EXEMPT_ROLES = {
 _table_ready = False
 
 app = Flask(__name__)
+registration_id_signer = URLSafeTimedSerializer(
+    os.environ.get("SECRET_KEY") or SUPABASE_SERVICE_ROLE_KEY or secrets.token_hex(32),
+    salt="registration-id-scan",
+)
+
+
+def registered_senior_id(id_number):
+    return bool(supabase_rest("GET", "seniors", params={
+        "osca_id_number": f"eq.{id_number}", "select": "id", "limit": "1",
+    }))
+
+
+@app.route("/api/auth/scan-senior-id", methods=["POST"])
+def scan_senior_id():
+    data = request.get_json(silent=True) or {}
+    try:
+        details = scan_registration_id(data.get("image"), data.get("mimeType", "image/jpeg"))
+        try:
+            already_registered = registered_senior_id(details["idNumber"])
+        except Exception:
+            return jsonify({"message": "Your ID was read, but account records could not be checked. Please try again shortly."}), 503
+        if already_registered:
+            return jsonify({"message": "This senior citizen ID is already linked to an account. Please log in or contact OSCA."}), 409
+        return jsonify({"details": details, "scanToken": registration_id_signer.dumps(details)}), 200
+    except ValueError as exc:
+        return jsonify({"message": str(exc)}), 400
+    except RuntimeError as exc:
+        return jsonify({"message": str(exc)}), 503
+    except Exception:
+        app.logger.exception("Registration ID scanning failed")
+        return jsonify({"message": "Could not read your ID photo. Please try again with a clearer image."}), 503
+
 
 
 def requires_face_verification(role: str | None) -> bool:
@@ -296,6 +330,18 @@ def register():
 
     data = request.get_json(silent=True) or {}
 
+    scanned_id = None
+    if data.get("hasExistingSeniorId"):
+        try:
+            scanned_id = registration_id_signer.loads(data.get("seniorIdScanToken", ""), max_age=7200)
+        except BadSignature:
+            return jsonify({"message": "Please scan your senior citizen ID again before registering."}), 400
+        try:
+            if registered_senior_id(scanned_id["idNumber"]):
+                return jsonify({"message": "This ID is already linked to an account. Please log in or contact OSCA."}), 409
+        except Exception:
+            return jsonify({"message": "Unable to check existing ID records. Please try again."}), 503
+
     address = normalize_address(data)
 
     required = [
@@ -412,6 +458,17 @@ def register():
         }), 500
 
     user = created[0] if created else {}
+    if scanned_id and user.get("id"):
+        try:
+            profiles = supabase_rest("GET", "seniors", params={"user_id": f"eq.{user['id']}", "select": "id", "limit": "1"})
+            if not profiles:
+                raise RuntimeError("No linked senior profile")
+            supabase_rest("PATCH", "seniors", params={"user_id": f"eq.{user['id']}"},
+                          payload={"osca_id_number": scanned_id["idNumber"]})
+        except Exception:
+            # Undo this newly created account so registration can be retried safely.
+            supabase_rest("DELETE", SUPABASE_USERS_TABLE, params={"id": f"eq.{user['id']}"})
+            return jsonify({"message": "Could not attach your existing ID. Please contact OSCA or try again."}), 503
 
     return jsonify({
         "message": "Account created successfully.",

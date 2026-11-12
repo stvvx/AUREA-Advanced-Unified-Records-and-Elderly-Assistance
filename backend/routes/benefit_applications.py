@@ -6,6 +6,7 @@ from datetime import date, datetime
 from flask import Blueprint, jsonify, request
 import requests
 
+from services.senior_ids import format_senior_id
 from config import Config
 from services.memory_service import _supabase
 
@@ -228,7 +229,7 @@ def create_benefit_application():
 
     payload = {field: data[field] for field in APPLICANT_FIELDS if field in data}
     payload["user_id"] = user_id
-    payload["osca_id_number"] = f"SA-{user_id:04d}"
+    payload["osca_id_number"] = format_senior_id({**profile, "id": user_id})
     payload["benefit_type"] = benefit_type
     payload["benefit_milestone"] = birthday_benefit_milestone(date_of_birth)
     profile_birth_certificate = (

@@ -1,3 +1,4 @@
+import { formatSeniorId } from '../lib/seniorId';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View,
@@ -112,10 +113,6 @@ function calculateAgeFromDob(dob?: string): string {
   return String(Math.max(age, 0));
 }
 
-function formatDigitalIdNumber(id?: number): string {
-  if (!id) return 'SA-1947';
-  return `SA-${String(id).padStart(4, '0')}`;
-}
 
 function classifySeniorBenefit(dob?: string): 'Octogenarian' | 'Nonagenarian' | 'Centenarian' | null {
   const age = Number(calculateAgeFromDob(dob));
@@ -264,7 +261,7 @@ function BenefitApplicationForm({ onBirthdaySubmitted }: { onBirthdaySubmitted?:
   });
   const [financialAidForm, setFinancialAidForm] = useState({
     benefitType: classifySeniorBenefit(user?.dob),
-    oscaIdNumber: formatDigitalIdNumber(user?.id),
+    oscaIdNumber: formatSeniorId(user),
     lastName: user?.lastName ?? '',
     givenName: user?.firstName ?? '',
     middleName: user?.middleName ?? '',
@@ -405,7 +402,7 @@ function BenefitApplicationForm({ onBirthdaySubmitted }: { onBirthdaySubmitted?:
           lastName: profile.lastName ?? user.lastName,
           givenName: profile.firstName ?? user.firstName,
           middleName: profile.middleName ?? user.middleName ?? '',
-          oscaIdNumber: formatDigitalIdNumber(user.id),
+          oscaIdNumber: formatSeniorId(user),
           dateOfBirth: profile.dob ?? user.dob ?? '',
           permanentAddressPhilippines: profile.address ?? user.address ?? '',
           sex: profile.gender ?? user.gender ?? '',
@@ -440,7 +437,7 @@ function BenefitApplicationForm({ onBirthdaySubmitted }: { onBirthdaySubmitted?:
 
   const displayedAge = calculateAgeFromDob(financialAidForm.dateOfBirth);
   const displayedBenefitType = classifySeniorBenefit(financialAidForm.dateOfBirth);
-  const oscaIdNumber = formatDigitalIdNumber(user?.id);
+  const oscaIdNumber = formatSeniorId(user);
   const fullBodyPictureSubmitted = Boolean(fullBodyPicture);
   const endorsedListSubmitted = Boolean(endorsedListFile);
 
