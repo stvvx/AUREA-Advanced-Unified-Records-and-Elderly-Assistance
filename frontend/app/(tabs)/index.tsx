@@ -207,6 +207,25 @@ export default function DashboardScreen() {
   const [bannerIndex, setBannerIndex] = React.useState(0);
   const [unreadChatCount, setUnreadChatCount] = React.useState(0);
   const displayedUnreadChatCount = user?.id ? unreadChatCount : 0;
+  const missingProfileFields = React.useMemo(() => {
+    if (!user) return [];
+    return [
+      [user.firstName, 'first name'],
+      [user.lastName, 'last name'],
+      [user.email, 'email address'],
+      [user.dob, 'date of birth'],
+      [user.category && user.category !== 'Not Specified' ? user.category : '', 'senior citizen category'],
+      [user.gender, 'gender'],
+      [user.civilStatus, 'civil status'],
+      [user.sourceOfIncome, 'source of income'],
+      [user.sourceOfIncome === 'Working' ? user.occupation : 'provided', 'type of work'],
+      [user.spouse, 'spouse name'],
+      [user.monthlyIncome, 'monthly income'],
+      [user.contact, 'contact number'],
+      [user.address, 'address'],
+      [user.birthcert, 'birth certificate'],
+    ].filter(([value]) => !String(value ?? '').trim()).map(([, label]) => label);
+  }, [user]);
 
   React.useEffect(() => {
     if (!user?.id) {
@@ -497,6 +516,27 @@ export default function DashboardScreen() {
               <Text style={s.greetingMetaText}>{today}</Text>
             </View>
           </View>
+
+          {user && missingProfileFields.length > 0 && (
+            <TouchableOpacity
+              style={[s.profileAlert, webPointer]}
+              onPress={() => router.push('/profile')}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel={`Complete profile. ${missingProfileFields.length} missing fields.`}
+            >
+              <View style={s.profileAlertIcon}>
+                <Ionicons name="alert-circle" size={22} color={C.danger} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={s.profileAlertTitle}>Complete your profile</Text>
+                <Text style={s.profileAlertText} numberOfLines={2}>
+                  {missingProfileFields.length} missing {missingProfileFields.length === 1 ? 'detail' : 'details'}: {missingProfileFields.join(', ')}.
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color={C.danger} />
+            </TouchableOpacity>
+          )}
 
           {/* ── Search ── */}
           <View style={s.searchWrap}>
@@ -922,6 +962,27 @@ const s = StyleSheet.create({
     color: C.inkSoft,
   },
   metaDot: { width: 3, height: 3, borderRadius: 2, backgroundColor: C.inkFaint },
+  profileAlert: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: '#FCE8E6',
+    borderWidth: 1,
+    borderColor: '#E7AAA2',
+    borderRadius: 18,
+    padding: 14,
+    marginBottom: sp(4),
+  },
+  profileAlertIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+  },
+  profileAlertTitle: { fontFamily: 'InterBody', fontSize: 15, fontWeight: '700', color: C.danger },
+  profileAlertText: { fontFamily: 'InterBody', fontSize: 12.5, lineHeight: 18, color: C.inkSoft, marginTop: 2 },
 
   // Search
   searchWrap: { marginBottom: sp(5) },

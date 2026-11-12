@@ -239,17 +239,18 @@ function TextField({
 }
 
 function SelectField({
-  label, value, placeholder, onPress,
-}: { label: string; value: string; placeholder: string; onPress: () => void }) {
+  label, value, placeholder, onPress, missing,
+}: { label: string; value: string; placeholder: string; onPress: () => void; missing?: boolean }) {
+  const isMissing = missing ?? !value.trim();
   return (
     <View style={styles.field}>
-      <FieldLabel label={label} missing={!value.trim()} />
+      <FieldLabel label={label} missing={isMissing} />
       <TouchableOpacity
-        style={[styles.input, styles.selectInput, webPointer, !value.trim() && styles.inputMissing]}
+        style={[styles.input, styles.selectInput, webPointer, isMissing && styles.inputMissing]}
         onPress={onPress}
         activeOpacity={0.8}
         accessibilityRole="button"
-        accessibilityLabel={`${label}: ${value || placeholder}`}
+        accessibilityLabel={`${label}: ${isMissing ? `not provided, ${placeholder}` : value}`}
       >
         <Text style={value ? styles.valueText : styles.placeholderText}>{value || placeholder}</Text>
         <Ionicons name="chevron-down" size={16} color={C.inkFaint} />
@@ -828,6 +829,7 @@ export default function ProfileScreen() {
                   label="Senior citizen category"
                   value={form.category}
                   placeholder="Select health or mobility category"
+                  missing={!form.category.trim() || form.category === 'Not Specified'}
                   onPress={() => setCategoryOpen(true)}
                 />
                 <Text style={styles.qrDesc}>Select the primary condition that best describes your current health or mobility.</Text>
