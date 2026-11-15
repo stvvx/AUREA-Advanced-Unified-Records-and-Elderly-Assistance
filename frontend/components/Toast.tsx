@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { Animated, Text, StyleSheet, Platform } from 'react-native';
+import { Modal, Pressable, ScrollView, Text, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -13,78 +13,56 @@ type Props = {
   onHide?: () => void;
 };
 
-const CONFIG: Record<ToastType, { bg: string; icon: string; color: string }> = {
-  success: { bg: '#1B5E3F', icon: 'checkmark-circle', color: '#FFFFFF' },
-  error:   { bg: '#C62828', icon: 'alert-circle',      color: '#FFFFFF' },
+const CONFIG = {
+  success: { bg: '#1B5E3F', icon: 'checkmark-circle' as const },
+  error: { bg: '#B71C1C', icon: 'alert-circle' as const },
 };
 
-export default function Toast({
-  visible,
-  message,
-  type = 'success',
-  duration = 3000,
-  onHide,
-}: Props) {
+export default function Toast({ visible, message, type = 'success', duration = 6000, onHide }: Props) {
   const insets = useSafeAreaInsets();
-  const opacity = useRef(new Animated.Value(0)).current;
-  const translateY = useRef(new Animated.Value(-20)).current;
+  const hideCallback = useRef(onHide);
 
   useEffect(() => {
-    if (!visible) return;
+    hideCallback.current = onHide;
+  }, [onHide]);
 
-    Animated.parallel([
-      Animated.spring(translateY, { toValue: 0, useNativeDriver: true, speed: 20 }),
-      Animated.timing(opacity, { toValue: 1, duration: 220, useNativeDriver: true }),
-    ]).start();
-
-    const timer = setTimeout(() => {
-      Animated.parallel([
-        Animated.timing(translateY, { toValue: -20, duration: 200, useNativeDriver: true }),
-        Animated.timing(opacity, { toValue: 0, duration: 200, useNativeDriver: true }),
-      ]).start(() => onHide?.());
-    }, duration);
-
+  useEffect(() => {
+    if (!visible || duration <= 0) return;
+    const timer = setTimeout(() => hideCallback.current?.(), duration);
     return () => clearTimeout(timer);
-  }, [duration, onHide, opacity, translateY, visible]);
+  }, [visible, message, duration]);
 
-  if (!visible) return null;
-
-  const { bg, icon, color } = CONFIG[type];
+  const { bg, icon } = CONFIG[type];
 
   return (
-    <Animated.View
-      style={[
-        styles.toast,
-        { backgroundColor: bg, top: insets.top + 12, opacity, transform: [{ translateY }] },
-      ]}
-    >
-      <Ionicons name={icon as any} size={20} color={color} />
-      <Text style={[styles.message, { color }]}>{message}</Text>
-    </Animated.View>
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onHide} statusBarTranslucent>
+      <View style={[styles.overlay, {
+        paddingTop: insets.top + 24,
+        paddingBottom: insets.bottom + 24,
+        paddingLeft: insets.left + 24,
+        paddingRight: insets.right + 24,
+      }]}>
+        <View style={styles.alert} accessibilityViewIsModal>
+          <ScrollView contentContainerStyle={styles.content} bounces={false}>
+            <Ionicons name={icon} size={56} color={bg} accessible={false} />
+            <Text style={styles.message} accessibilityRole="alert" accessibilityLiveRegion="assertive">{message}</Text>
+          </ScrollView>
+          <Pressable onPress={onHide} accessibilityRole="button" accessibilityLabel="OK, dismiss message"
+            style={({ pressed }) => [styles.button, { backgroundColor: bg }, pressed && styles.pressed]}>
+            <Text style={styles.buttonText}>OK</Text>
+          </Pressable>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
 const styles = StyleSheet.create({
-  toast: {
-    position: 'absolute',
-    left: 16,
-    right: 16,
-    zIndex: 999,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    borderRadius: 14,
-    ...Platform.select({
-      ios: { shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
-      android: { elevation: 8 },
-    }),
-  },
-  message: {
-    flex: 1,
-    fontFamily: 'InterBody',
-    fontSize: 14,
-    fontWeight: '600',
-  },
+  overlay: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.4)' },
+  alert: { width: '100%', maxWidth: 560, maxHeight: '100%', flexShrink: 1, backgroundColor: '#FFFFFF', borderRadius: 24, padding: 24, gap: 24 },
+  content: { alignItems: 'center', gap: 20 },
+  message: { fontFamily: 'InterBody', fontSize: 24, lineHeight: 34, fontWeight: '700', color: '#13201A', textAlign: 'center', width: '100%' },
+  button: { minHeight: 60, borderRadius: 14, alignItems: 'center', justifyContent: 'center', padding: 14 },
+  buttonText: { fontFamily: 'InterBody', fontSize: 22, lineHeight: 30, fontWeight: '700', color: '#FFFFFF' },
+  pressed: { opacity: 0.8 },
 });
