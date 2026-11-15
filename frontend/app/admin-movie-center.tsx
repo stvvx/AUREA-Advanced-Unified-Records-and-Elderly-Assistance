@@ -213,7 +213,7 @@ export default function AdminMovieCenter() {
   const role = String(user?.role ?? '').toLowerCase();
 
   const isFullAdmin = ['osca admin', 'super admin'].includes(role);
-  const canManageScreenings = isFullAdmin || role === 'osca staff';
+  const canManageScreenings = isFullAdmin || role === 'osca admin';
   const canManageReservations = canManageScreenings;
   const isReadOnly = ['med admin', 'health center'].includes(role);
 

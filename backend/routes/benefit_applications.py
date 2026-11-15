@@ -1,4 +1,5 @@
 import base64
+import logging
 import mimetypes
 import re
 from datetime import date, datetime
@@ -15,6 +16,7 @@ benefit_applications_bp = Blueprint(
     __name__,
     url_prefix="/api/benefit-applications",
 )
+logger = logging.getLogger(__name__)
 
 APPLICANT_FIELDS = {
     "ncsc_registration_reference_number",
@@ -503,6 +505,27 @@ def update_admin_benefit_application(application_id: str):
         return jsonify({"success": False, "error": str(exc)}), 500
 
     application = updated[0] if isinstance(updated, list) and updated else updated
+    try:
+        action = "reviewed birthday benefit application"
+        if payload.get("benefit_status") == "Released":
+            action = "released birthday benefit"
+        elif payload.get("benefit_status") == "Approved":
+            action = "approved birthday benefit"
+        _supabase("POST", "audit_logs", payload={
+            "actor_user_id": payload.get("validated_by"),
+            "actor_name": None,
+            "action": action,
+            "entity_type": "birthday_benefit",
+            "entity_id": str(application_id),
+            "details": {
+                "validation_status": payload.get("validation_status"),
+                "benefit_status": payload.get("benefit_status"),
+                "benefit_amount": payload.get("benefit_amount"),
+            },
+        })
+    except Exception:
+        # Audit failures must not undo a successful benefit review.
+        logger.exception("Could not write audit log for birthday benefit %s", application_id)
     return jsonify({"success": True, "application": application}), 200
 
 

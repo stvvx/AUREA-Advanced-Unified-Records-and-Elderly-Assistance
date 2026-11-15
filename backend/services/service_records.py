@@ -23,7 +23,7 @@ def service_records(rest, users_table="users"):
         for row in rows:
             user = users.get(str(row.get("user_id")), {})
             if str(user.get("role", "user")).strip().lower() in {
-                "admin", "osca admin", "super admin", "med admin", "osca staff", "health center"
+                "admin", "osca admin", "super admin", "med admin", "health center"
             }:
                 continue
             screening = screenings.get(str(row.get("screening_id")), {})

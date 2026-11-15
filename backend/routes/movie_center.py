@@ -19,7 +19,7 @@ movie_center_bp = Blueprint(
 )
 
 FULL_ADMIN_ROLES = {"osca admin", "super admin"}
-STAFF_ROLES = FULL_ADMIN_ROLES | {"osca staff"}
+STAFF_ROLES = FULL_ADMIN_ROLES | {"osca admin"}
 READ_ALL_ROLES = STAFF_ROLES | {"med admin", "health center"}
 VALID_RESERVATION_STATUSES = {"Pending", "Confirmed", "Cancelled"}
 

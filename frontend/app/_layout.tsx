@@ -49,11 +49,13 @@ export default function RootLayout() {
         <Stack.Screen name="register" options={{ headerShown: false }} />
         <Stack.Screen name="profile" options={{ headerShown: false }} />
         <Stack.Screen name="chat" options={{ headerShown: false }} />
+        <Stack.Screen name="forum" options={{ headerShown: false }} />
         <Stack.Screen name="digital-id" options={{ headerShown: false }} />
         <Stack.Screen name="benefit-selection" options={{ headerShown: false }} />
         <Stack.Screen name="benefit-application" options={{ headerShown: false }} />
         <Stack.Screen name="movie-book" options={{ headerShown: false }} />
         <Stack.Screen name="admin-dashboard" options={{ headerShown: false }} />
+        <Stack.Screen name="admin-management" options={{ headerShown: false }} />
         <Stack.Screen name="admin-senior-citizens" options={{ headerShown: false }} />
         <Stack.Screen name="admin-records" options={{ headerShown: false }} />
         <Stack.Screen name="admin-benefits" options={{ headerShown: false }} />

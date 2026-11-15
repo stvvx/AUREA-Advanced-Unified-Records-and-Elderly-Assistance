@@ -217,10 +217,11 @@ export default function FaceVerificationScreen() {
 
   // Request camera permissions on mount
   useEffect(() => {
+    if (!faceVerificationRequired) return;
     if (Platform.OS !== 'web' && !permission?.granted) {
       requestPermission();
     }
-  }, [permission, requestPermission]);
+  }, [faceVerificationRequired, permission, requestPermission]);
 
   useEffect(() => {
     return () => {

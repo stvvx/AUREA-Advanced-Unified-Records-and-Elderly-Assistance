@@ -49,7 +49,7 @@ PORT = int(os.environ.get("PORT", "5000"))
 
 FACE_VERIFICATION_EXEMPT_ROLES = {
     "osca admin",
-    "osca staff",
+
     "med admin",
     "health center",
     "super admin",
@@ -912,6 +912,8 @@ def _serialize_user(u: dict) -> dict:
         "signature": sig,
         "digitalSignature": sig,
         "role": u.get("role") or "user",
+        "status": u.get("status") or "Active",
+        "accountStatus": u.get("status") or "Active",
         "createdAt": u.get("created_at") or "",
         "oscaIdNumber": u.get("osca_id_number") or "",
         "spouse": u.get("spouse") or "",
@@ -1286,6 +1288,37 @@ def save_digital_signature(user_id):
 # ---------------------------------------------------------------------------
 
 ADMIN_ROLES = {"osca admin", "med admin", "super admin"}
+MANAGED_ROLES = {"user", "senior", "senior citizen", "osca admin", "med admin", "health center", "super admin"}
+
+
+def write_audit_log(actor, action, entity_type, entity_id=None, details=None):
+    actor_name = " ".join(filter(None, [actor.get("firstName"), actor.get("lastName")])) or actor.get("email")
+    try:
+        supabase_rest("POST", "audit_logs", payload={
+            "actor_user_id": actor.get("id"),
+            "actor_name": actor_name,
+            "action": action,
+            "entity_type": entity_type,
+            "entity_id": str(entity_id) if entity_id is not None else None,
+            "details": details or {},
+        })
+    except RuntimeError:
+        app.logger.exception("Could not write audit log for %s", action)
+
+
+def fetch_admin_rows(table, select="*"):
+    return supabase_rest("GET", table, params={"select": select, "order": "created_at.desc"})
+
+
+def require_admin_session(allowed_roles=ADMIN_ROLES):
+    session, status = current_session()
+    if status != 200:
+        return None, (session, status)
+    user = session.get_json().get("user", {})
+    role = str(user.get("role") or "").strip().lower()
+    if role not in allowed_roles:
+        return None, (jsonify({"message": "Administrator access is required."}), 403)
+    return user, None
 
 
 @app.route("/api/admin/service-records", methods=["GET", "OPTIONS"])
@@ -1337,6 +1370,9 @@ def export_senior_table():
 def admin_users():
     if request.method == "OPTIONS":
         return ("", 204)
+    actor, error = require_admin_session({"osca admin", "super admin"})
+    if error:
+        return error
     try:
         ensure_users_table()
         # Fetch every page and serialize only public profile fields. Selecting all
@@ -1356,16 +1392,425 @@ def admin_users():
         return jsonify({"message": str(exc)}), 500
 
 
+@app.route("/api/admin/users/<int:user_id>", methods=["PATCH", "DELETE", "OPTIONS"])
+def manage_admin_user(user_id):
+    if request.method == "OPTIONS":
+        return ("", 204)
+    actor, error = require_admin_session({"super admin"})
+    if error:
+        return error
+    if actor.get("id") == user_id:
+        return jsonify({"message": "You cannot deactivate, change, or delete your own account."}), 400
+    try:
+        current = supabase_rest("GET", SUPABASE_USERS_TABLE, params={"select": "*", "id": f"eq.{user_id}", "limit": "1"})
+        if not current:
+            return jsonify({"message": "User not found."}), 404
+        target = current[0]
+        if request.method == "DELETE":
+            supabase_rest("DELETE", SUPABASE_USERS_TABLE, params={"id": f"eq.{user_id}"})
+            write_audit_log(actor, "deleted user account", "user", user_id, {"email": target.get("email")})
+            return jsonify({"message": "User account deleted."}), 200
+        data = request.get_json(silent=True) or {}
+        payload = {}
+        if "status" in data:
+            status = str(data["status"]).strip()
+            if status not in {"Active", "Inactive", "Suspended"}:
+                return jsonify({"message": "Invalid account status."}), 400
+            payload["status"] = status
+        if "role" in data:
+            role = str(data["role"]).strip().lower()
+            if role not in MANAGED_ROLES:
+                return jsonify({"message": "Invalid user role."}), 400
+            payload["role"] = role
+        if not payload:
+            return jsonify({"message": "No account changes were provided."}), 400
+        updated = supabase_rest("PATCH", SUPABASE_USERS_TABLE, params={"id": f"eq.{user_id}"},
+                                payload=payload)
+        write_audit_log(actor, "updated user account", "user", user_id, {
+            "email": target.get("email"), "changes": payload,
+        })
+        return jsonify({"user": _serialize_user(updated[0] if updated else {**target, **payload})}), 200
+    except RuntimeError as exc:
+        return jsonify({"message": str(exc)}), 500
+
+
 @app.route("/api/admin/transactions", methods=["GET", "OPTIONS"])
 def admin_transactions():
     if request.method == "OPTIONS":
         return ("", 204)
+    _, error = require_admin_session({"super admin"})
+    if error:
+        return error
     try:
-        result = supabase_rest(
-            "GET", "transactions",
-            params={"select": "*", "order": "created_at.desc"},
-        )
-        return jsonify({"transactions": result}), 200
+        category = str(request.args.get("category") or "all").strip().lower()
+        birthday = supabase_rest("GET", "octogenarian_benefit_applications", params={
+            "select": "id,benefit_type,benefit_status,validation_status,created_at",
+            "order": "created_at.desc",
+        })
+        cinema = supabase_rest("GET", "movie_reservations", params={
+            "select": "id,status,created_at,screening_id",
+            "order": "created_at.desc",
+        })
+        records = []
+        if category in {"all", "birthday"}:
+            records.extend([{**row, "category": "birthday"} for row in birthday])
+        if category in {"all", "cinema"}:
+            records.extend([{**row, "category": "cinema"} for row in cinema])
+        records.sort(key=lambda row: row.get("created_at") or "", reverse=True)
+        stats = {
+            "total": len(records),
+            "completed": sum(1 for row in records if str(row.get("benefit_status") or row.get("status") or "").lower() in {"released", "confirmed", "completed"}),
+            "pending": sum(1 for row in records if str(row.get("benefit_status") or row.get("status") or "").lower() in {"pending", "for processing"}),
+            "byCategory": {
+                "birthday": sum(1 for row in records if row["category"] == "birthday"),
+                "cinema": sum(1 for row in records if row["category"] == "cinema"),
+            },
+        }
+        return jsonify({"transactions": records, "stats": stats, "category": category}), 200
+    except RuntimeError as exc:
+        return jsonify({"message": str(exc)}), 500
+
+
+@app.route("/api/admin/feedback", methods=["GET", "OPTIONS"])
+def admin_feedback():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    _, error = require_admin_session({"super admin"})
+    if error:
+        return error
+    try:
+        return jsonify({"feedback": supabase_rest("GET", "service_feedback", params={
+            "select": "*,users(first_name,last_name,email)",
+            "order": "created_at.desc",
+        })}), 200
+    except RuntimeError as exc:
+        return jsonify({"message": str(exc)}), 500
+
+
+@app.route("/api/announcements", methods=["GET", "POST", "OPTIONS"])
+def announcements():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    if request.method == "GET":
+        try:
+            return jsonify({"announcements": supabase_rest("GET", "announcements", params={
+                "select": "*", "published": "eq.true", "order": "created_at.desc",
+            })}), 200
+        except RuntimeError as exc:
+            return jsonify({"message": str(exc)}), 503
+
+    user, error = require_admin_session({"osca admin", "super admin"})
+    if error:
+        return error
+    payload = request.get_json(silent=True) or {}
+    title = str(payload.get("title") or "").strip()
+    body = str(payload.get("body") or "").strip()
+    image_url = payload.get("image_url")
+    if image_url is not None:
+        image_url = str(image_url).strip() or None
+    if image_url and len(image_url) > 3_000_000:
+        return jsonify({"message": "Announcement images must be smaller than 2 MB."}), 400
+    if not title or len(title) > 160 or not body or len(body) > 5000:
+        return jsonify({"message": "Enter a title and announcement text within the allowed limits."}), 400
+    try:
+        created = supabase_rest("POST", "announcements", payload={
+            "title": title, "body": body, "image_url": image_url, "published": bool(payload.get("published", True)),
+            "created_by": user["id"],
+        })
+        return jsonify({"announcement": created[0] if isinstance(created, list) and created else created}), 201
+    except RuntimeError as exc:
+        return jsonify({"message": str(exc)}), 503
+
+
+@app.route("/api/announcements/<announcement_id>", methods=["PATCH", "DELETE", "OPTIONS"])
+def update_announcement(announcement_id):
+    if request.method == "OPTIONS":
+        return ("", 204)
+    user, error = require_admin_session({"osca admin", "super admin"})
+    if error:
+        return error
+    try:
+        if request.method == "DELETE":
+            supabase_rest("DELETE", "announcements", params={"id": f"eq.{announcement_id}"})
+            return jsonify({"message": "Announcement deleted."}), 200
+        payload = request.get_json(silent=True) or {}
+        update = {}
+        if "title" in payload:
+            update["title"] = str(payload.get("title") or "").strip()
+        if "body" in payload:
+            update["body"] = str(payload.get("body") or "").strip()
+        if "image_url" in payload:
+            image_url = payload.get("image_url")
+            update["image_url"] = str(image_url).strip() if image_url else None
+            if update["image_url"] and len(update["image_url"]) > 3_000_000:
+                return jsonify({"message": "Announcement images must be smaller than 2 MB."}), 400
+        if "published" in payload:
+            update["published"] = bool(payload["published"])
+        if not update or (not update.get("title", "valid") or not update.get("body", "valid")):
+            return jsonify({"message": "Provide valid announcement fields."}), 400
+        update["updated_at"] = datetime.now(timezone.utc).isoformat()
+        updated = supabase_rest("PATCH", "announcements", params={"id": f"eq.{announcement_id}"}, payload=update)
+        return jsonify({"announcement": updated[0] if isinstance(updated, list) and updated else updated}), 200
+    except RuntimeError as exc:
+        return jsonify({"message": str(exc)}), 503
+
+
+@app.route("/api/feedback", methods=["POST", "OPTIONS"])
+def submit_service_feedback():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    session_response, session_status = current_session()
+    if session_status != 200:
+        return session_response, session_status
+    session_user = (session_response.get_json(silent=True) or {}).get("user") or {}
+    payload = request.get_json(silent=True) or {}
+    try:
+        rating = int(payload.get("rating"))
+    except (TypeError, ValueError):
+        return jsonify({"message": "Choose a rating from 1 to 5 stars."}), 400
+    comments = str(payload.get("comments") or "").strip()
+    if rating < 1 or rating > 5:
+        return jsonify({"message": "Choose a rating from 1 to 5 stars."}), 400
+    if not comments or len(comments) > 2000:
+        return jsonify({"message": "Enter feedback between 1 and 2000 characters."}), 400
+    try:
+        rows = supabase_rest("POST", "service_feedback", payload={
+            "user_id": session_user.get("id"),
+            "service_key": "system",
+            "service_record_id": str(payload.get("service_record_id") or f"dashboard-{int(datetime.now(timezone.utc).timestamp() * 1000)}"),
+            "rating": rating,
+            "comments": comments,
+        })
+        return jsonify({"feedback": rows[0] if isinstance(rows, list) and rows else rows}), 201
+    except RuntimeError as exc:
+        return jsonify({"message": str(exc)}), 503
+
+
+@app.route("/api/admin/audit-logs", methods=["GET", "OPTIONS"])
+def admin_audit_logs():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    _, error = require_admin_session({"super admin"})
+    if error:
+        return error
+    try:
+        return jsonify({"logs": supabase_rest("GET", "audit_logs", params={
+            "select": "*", "order": "created_at.desc",
+        })}), 200
+    except RuntimeError as exc:
+        if "audit_logs" in str(exc):
+            app.logger.warning("Audit log table is unavailable; returning an empty audit log.")
+            return jsonify({"logs": []}), 200
+        return jsonify({"message": str(exc)}), 500
+
+
+@app.route("/api/issues", methods=["GET", "POST", "OPTIONS"])
+def issue_reports():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    user, error = require_admin_session(ADMIN_ROLES) if request.method == "GET" else require_admin_session(
+        {"user", "senior", "senior citizen", *ADMIN_ROLES}
+    )
+    if error:
+        return error
+    try:
+        if request.method == "POST":
+            data = request.get_json(silent=True) or {}
+            subject = str(data.get("subject") or "").strip()
+            description = str(data.get("description") or "").strip()
+            category = str(data.get("category") or "general").strip()[:40]
+            if len(subject) < 3 or not description:
+                return jsonify({"message": "Subject and description are required."}), 400
+            created = supabase_rest("POST", "issue_reports", payload={
+                "user_id": user["id"], "category": category or "general",
+                "subject": subject[:160], "description": description[:5000],
+            })
+            return jsonify({"issue": created[0] if created else {}}), 201
+        role = str(user.get("role") or "").lower()
+        params = {"select": "*,users(first_name,last_name,email)", "order": "created_at.desc"}
+        if role not in ADMIN_ROLES:
+            params["user_id"] = f"eq.{user['id']}"
+        return jsonify({"issues": supabase_rest("GET", "issue_reports", params=params)}), 200
+    except RuntimeError as exc:
+        if "issue_reports" in str(exc):
+            app.logger.warning("Issue reports table is unavailable; returning an empty issue list.")
+            return jsonify({"issues": []}), 200
+        return jsonify({"message": str(exc)}), 500
+
+
+@app.route("/api/admin/issues/<issue_id>", methods=["PATCH", "OPTIONS"])
+def update_issue(issue_id):
+    if request.method == "OPTIONS":
+        return ("", 204)
+    _, error = require_admin_session({"super admin"})
+    if error:
+        return error
+    status = str((request.get_json(silent=True) or {}).get("status") or "").strip()
+    if status not in {"open", "in_progress", "resolved", "closed"}:
+        return jsonify({"message": "Invalid issue status."}), 400
+    try:
+        updated = supabase_rest("PATCH", "issue_reports", params={"id": f"eq.{issue_id}"},
+                                payload={"status": status, "updated_at": datetime.utcnow().isoformat()})
+        return jsonify({"issue": updated[0] if updated else {}}), 200
+    except RuntimeError as exc:
+        return jsonify({"message": str(exc)}), 500
+
+
+@app.route("/api/community/posts", methods=["GET", "POST", "OPTIONS"])
+def community_posts():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    user, error = require_admin_session({"user", "senior", "senior citizen", *ADMIN_ROLES})
+    if error:
+        return error
+    try:
+        if request.method == "POST":
+            data = request.get_json(silent=True) or {}
+            title = str(data.get("title") or "").strip()
+            body = str(data.get("body") or "").strip()
+            if not body:
+                return jsonify({"message": "A message is required."}), 400
+            if not title:
+                title = "Community post"
+            created = supabase_rest("POST", "community_posts", payload={
+                "user_id": user["id"], "title": title[:160], "body": body[:5000],
+            })
+            return jsonify({"post": created[0] if created else {}}), 201
+        posts = supabase_rest("GET", "community_posts", params={
+            "select": "*", "order": "created_at.desc",
+        })
+        if isinstance(posts, dict):
+            posts = [posts]
+        if not isinstance(posts, list):
+            raise RuntimeError("Community posts returned an invalid response.")
+        posts = [
+            post for post in posts
+            if isinstance(post, dict) and post.get("id")
+            and str(post.get("status") or "published") == "published"
+        ]
+        for post in posts:
+            post_id = post["id"]
+            try:
+                post["comments"] = supabase_rest("GET", "community_comments", params={
+                    "select": "*,users(first_name,last_name)", "post_id": f"eq.{post_id}",
+                    "order": "created_at.asc",
+                })
+            except RuntimeError as exc:
+                app.logger.warning("Community comments unavailable: %s", exc)
+                post["comments"] = []
+            try:
+                likes = supabase_rest("GET", "community_post_likes", params={
+                    "select": "user_id", "post_id": f"eq.{post_id}",
+                })
+            except RuntimeError as exc:
+                app.logger.warning("Community likes unavailable: %s", exc)
+                likes = []
+            if isinstance(likes, dict):
+                likes = [likes]
+            if not isinstance(likes, list):
+                likes = []
+            post["likes_count"] = len(likes)
+            post["liked_by_me"] = any(row.get("user_id") == user["id"] for row in likes)
+        return jsonify({"posts": posts}), 200
+    except RuntimeError as exc:
+        return jsonify({"message": str(exc)}), 500
+
+
+def community_user_can_edit(table, item_id, user_id):
+    rows = supabase_rest("GET", table, params={"id": f"eq.{item_id}", "select": "user_id", "limit": "1"})
+    return bool(rows and rows[0].get("user_id") == user_id)
+
+
+@app.route("/api/community/posts/<post_id>", methods=["PATCH", "DELETE", "OPTIONS"])
+def update_community_post(post_id):
+    if request.method == "OPTIONS":
+        return ("", 204)
+    user, error = require_admin_session({"user", "senior", "senior citizen", *ADMIN_ROLES})
+    if error:
+        return error
+    try:
+        if not community_user_can_edit("community_posts", post_id, user["id"]):
+            return jsonify({"message": "You can only change your own posts."}), 403
+        if request.method == "DELETE":
+            supabase_rest("DELETE", "community_posts", params={"id": f"eq.{post_id}"})
+            return jsonify({"message": "Post deleted."}), 200
+        body = str((request.get_json(silent=True) or {}).get("body") or "").strip()
+        if not body:
+            return jsonify({"message": "A message is required."}), 400
+        updated = supabase_rest("PATCH", "community_posts", params={"id": f"eq.{post_id}"}, payload={
+            "body": body[:5000], "updated_at": datetime.now(timezone.utc).isoformat(),
+        })
+        return jsonify({"post": updated[0] if updated else {}}), 200
+    except RuntimeError as exc:
+        return jsonify({"message": str(exc)}), 500
+
+
+@app.route("/api/community/posts/<post_id>/comments", methods=["POST", "OPTIONS"])
+def create_community_comment(post_id):
+    if request.method == "OPTIONS":
+        return ("", 204)
+    user, error = require_admin_session({"user", "senior", "senior citizen", *ADMIN_ROLES})
+    if error:
+        return error
+    body = str((request.get_json(silent=True) or {}).get("body") or "").strip()
+    if not body:
+        return jsonify({"message": "A comment is required."}), 400
+    try:
+        created = supabase_rest("POST", "community_comments", payload={
+            "post_id": post_id, "user_id": user["id"], "body": body[:2000],
+        })
+        return jsonify({"comment": created[0] if created else {}}), 201
+    except RuntimeError as exc:
+        return jsonify({"message": str(exc)}), 500
+
+
+@app.route("/api/community/comments/<comment_id>", methods=["PATCH", "DELETE", "OPTIONS"])
+def update_community_comment(comment_id):
+    if request.method == "OPTIONS":
+        return ("", 204)
+    user, error = require_admin_session({"user", "senior", "senior citizen", *ADMIN_ROLES})
+    if error:
+        return error
+    try:
+        if not community_user_can_edit("community_comments", comment_id, user["id"]):
+            return jsonify({"message": "You can only change your own comments."}), 403
+        if request.method == "DELETE":
+            supabase_rest("DELETE", "community_comments", params={"id": f"eq.{comment_id}"})
+            return jsonify({"message": "Comment deleted."}), 200
+        body = str((request.get_json(silent=True) or {}).get("body") or "").strip()
+        if not body:
+            return jsonify({"message": "A comment is required."}), 400
+        updated = supabase_rest("PATCH", "community_comments", params={"id": f"eq.{comment_id}"}, payload={
+            "body": body[:2000], "updated_at": datetime.now(timezone.utc).isoformat(),
+        })
+        return jsonify({"comment": updated[0] if updated else {}}), 200
+    except RuntimeError as exc:
+        return jsonify({"message": str(exc)}), 500
+
+
+@app.route("/api/community/posts/<post_id>/like", methods=["POST", "OPTIONS"])
+def toggle_community_like(post_id):
+    if request.method == "OPTIONS":
+        return ("", 204)
+    user, error = require_admin_session({"user", "senior", "senior citizen", *ADMIN_ROLES})
+    if error:
+        return error
+    try:
+        existing = supabase_rest("GET", "community_post_likes", params={
+            "post_id": f"eq.{post_id}", "user_id": f"eq.{user['id']}", "select": "post_id",
+        })
+        if existing:
+            supabase_rest("DELETE", "community_post_likes", params={
+                "post_id": f"eq.{post_id}", "user_id": f"eq.{user['id']}",
+            })
+            liked = False
+        else:
+            supabase_rest("POST", "community_post_likes", payload={"post_id": post_id, "user_id": user["id"]})
+            liked = True
+        likes = supabase_rest("GET", "community_post_likes", params={
+            "post_id": f"eq.{post_id}", "select": "user_id",
+        })
+        return jsonify({"liked": liked, "likes_count": len(likes)}), 200
     except RuntimeError as exc:
         return jsonify({"message": str(exc)}), 500
 

@@ -2,6 +2,7 @@ import React from 'react';
 import {
   View,
   Text,
+  ActivityIndicator,
   ScrollView,
   StyleSheet,
   StatusBar,
@@ -9,8 +10,10 @@ import {
   Pressable,
   TextInput,
   Image,
+  Modal,
   useWindowDimensions,
   Platform,
+  Linking,
   NativeSyntheticEvent,
   NativeScrollEvent,
 } from 'react-native';
@@ -22,6 +25,7 @@ import { useAuth } from '../../context/AuthContext';
 import Toast from '../../components/Toast';
 import { BENEFIT_ITEMS } from '../../data/benefits';
 import { fetchUnreadCount } from '../../services/chatApi';
+import Constants from 'expo-constants';
 
 function shadow(color: string, opacity: number, radius = 14, height = 6) {
   return Platform.select({
@@ -59,6 +63,30 @@ const sp = (n: number) => n * 4;
 
 const HERO_IMAGE = require('../../assets/images/pateros_hero.jpg');
 const PATEROS_LOGO = require('../../assets/images/pateros-logo.png');
+
+type Announcement = { id: string; title: string; body: string; image_url?: string | null; created_at?: string };
+
+function apiBase() {
+  const hostUri =
+    Constants.expoConfig?.hostUri ||
+    (Constants as { manifest2?: { extra?: { expoClient?: { hostUri?: string } } } }).manifest2?.extra?.expoClient?.hostUri ||
+    '';
+  const host = hostUri.split(':')[0];
+  const hasLanHost = /^\d{1,3}(\.\d{1,3}){3}$/.test(host);
+  const env = process.env.EXPO_PUBLIC_API_URL?.trim();
+  if (env) {
+    if ((env.includes('localhost') || env.includes('127.0.0.1')) && hasLanHost) {
+      return env.replace('localhost', host).replace('127.0.0.1', host);
+    }
+    if ((env.includes('localhost') || env.includes('127.0.0.1')) && Platform.OS === 'android') {
+      return env.replace('localhost', '10.0.2.2').replace('127.0.0.1', '10.0.2.2');
+    }
+    return env;
+  }
+  if (!__DEV__) return 'https://aurea-backend-1-7z1p.onrender.com';
+  if (hasLanHost) return `http://${host}:5000`;
+  return Platform.OS === 'android' ? 'http://10.0.2.2:5000' : 'http://localhost:5000';
+}
 
 const BANNERS = [
   {
@@ -135,6 +163,23 @@ const HOW_TO_USE_STEPS = [
   },
 ];
 
+const PATEROS_PROFILE = {
+  population2024: '67,319',
+  barangays: 10,
+  classification: '1st class municipality · all barangays urban',
+  ageGroups2020: [
+    ['0–14 years', '17,648'],
+    ['15–64 years', '43,772'],
+    ['65+ years', '3,644'],
+  ],
+  barangayPopulation2024: [
+    ['Aguho', '7,448'], ['Magtanggol', '1,452'], ['Martires Del 96', '5,130'],
+    ['Poblacion', '2,089'], ['San Pedro', '2,252'], ['San Roque', '4,897'],
+    ['Santa Ana', '30,950'], ['Santo Rosario-Kanluran', '5,504'],
+    ['Santo Rosario-Silangan', '4,744'], ['Tabacalera', '2,853'],
+  ],
+};
+
 function SectionHeader({
   title, subtitle, actionLabel, onAction,
 }: { title: string; subtitle?: string; actionLabel?: string; onAction?: () => void }) {
@@ -205,7 +250,13 @@ export default function DashboardScreen() {
   const [searchFocused, setSearchFocused] = React.useState(false);
   const [menuOpen, setMenuOpen] = React.useState(false);
   const [bannerIndex, setBannerIndex] = React.useState(0);
+  const [showAllBarangayPopulation, setShowAllBarangayPopulation] = React.useState(false);
   const [unreadChatCount, setUnreadChatCount] = React.useState(0);
+  const [announcementsData, setAnnouncementsData] = React.useState<Announcement[]>([]);
+  const [reviewOpen, setReviewOpen] = React.useState(false);
+  const [reviewRating, setReviewRating] = React.useState(0);
+  const [reviewComments, setReviewComments] = React.useState('');
+  const [reviewSaving, setReviewSaving] = React.useState(false);
   const displayedUnreadChatCount = user?.id ? unreadChatCount : 0;
   const missingProfileFields = React.useMemo(() => {
     if (!user) return [];
@@ -275,6 +326,48 @@ export default function DashboardScreen() {
   const showToast = (message: string, type: 'success' | 'error' = 'success') =>
     setToast({ visible: true, message, type });
 
+  React.useEffect(() => {
+    let active = true;
+    fetch(`${apiBase()}/api/announcements`)
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.message || 'Announcements are unavailable.');
+        return data;
+      })
+      .then((data) => {
+        if (active) setAnnouncementsData(data.announcements || []);
+      })
+      .catch(() => {
+        if (active) showToast('Announcements are temporarily unavailable.', 'error');
+      });
+    return () => { active = false; };
+  }, []);
+
+  const submitReview = async () => {
+    if (!user?.token || reviewRating === 0 || !reviewComments.trim()) {
+      showToast('Choose a star rating and add a comment.', 'error');
+      return;
+    }
+    setReviewSaving(true);
+    try {
+      const response = await fetch(`${apiBase()}/api/feedback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${user.token}` },
+        body: JSON.stringify({ rating: reviewRating, comments: reviewComments.trim() }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.message || 'Could not submit your review.');
+      setReviewOpen(false);
+      setReviewRating(0);
+      setReviewComments('');
+      showToast('Thank you for reviewing AUREA.');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Could not submit your review.', 'error');
+    } finally {
+      setReviewSaving(false);
+    }
+  };
+
   const handleSearchSubmit = () => {
     if (!user) {
       showToast('Please log in to search and apply for benefits.', 'error');
@@ -324,21 +417,28 @@ export default function DashboardScreen() {
 
   const avatarSource = user?.avatarUrl || user?.profilePhoto || '';
 
-  const announcements = (
-    <View style={s.announceCard}>
+  const announcements = announcementsData.length ? announcementsData.map((item) => (
+    <View key={item.id} style={s.announceCard}>
       <View style={s.announceThumbWrap}>
-        <Image source={PATEROS_LOGO} style={s.announceThumb} resizeMode="contain" />
+        {item.image_url
+          ? <Image source={{ uri: item.image_url }} style={s.announceImage} resizeMode="cover" />
+          : <Image source={PATEROS_LOGO} style={s.announceThumb} resizeMode="contain" />}
       </View>
       <View style={{ flex: 1 }}>
         <View style={s.announceTag}>
           <Ionicons name="megaphone" size={11} color={C.goldDark} />
           <Text style={s.announceTagText}>Announcement</Text>
         </View>
-        <Text style={s.announceTitle}>OSCA office hours this week</Text>
-        <Text style={s.announceText}>
-          Visit the Pateros Office for Senior Citizens Affairs for in-person
-          assistance, or ask a family member to help you register.
-        </Text>
+        <Text style={s.announceTitle}>{item.title}</Text>
+        <Text style={s.announceText}>{item.body}</Text>
+      </View>
+    </View>
+  )) : (
+    <View style={s.announceCard}>
+      <View style={s.announceThumbWrap}><Image source={PATEROS_LOGO} style={s.announceThumb} resizeMode="contain" /></View>
+      <View style={{ flex: 1 }}>
+        <Text style={s.announceTitle}>No announcements yet</Text>
+        <Text style={s.announceText}>New OSCA updates will appear here.</Text>
       </View>
     </View>
   );
@@ -464,6 +564,38 @@ export default function DashboardScreen() {
                   >
                     <Ionicons name="notifications-outline" size={18} color={C.ink} />
                     <Text style={s.headerMenuText}>Notifications</Text>
+                  </TouchableOpacity>
+                  <View style={s.headerMenuDivider} />
+                  {user.role === 'user' && (
+                    <>
+                      <TouchableOpacity
+                        style={[s.headerMenuItem, webPointer]}
+                        onPress={() => {
+                          setMenuOpen(false);
+                          setReviewOpen(true);
+                        }}
+                        activeOpacity={0.8}
+                        accessibilityRole="button"
+                        accessibilityLabel="Review AUREA"
+                      >
+                        <Ionicons name="star-outline" size={18} color={C.goldDark} />
+                        <Text style={s.headerMenuText}>Review AUREA</Text>
+                      </TouchableOpacity>
+                      <View style={s.headerMenuDivider} />
+                    </>
+                  )}
+                  <TouchableOpacity
+                    style={[s.headerMenuItem, webPointer]}
+                    onPress={() => {
+                      setMenuOpen(false);
+                      router.push('/forum' as any);
+                    }}
+                    activeOpacity={0.8}
+                    accessibilityRole="button"
+                    accessibilityLabel="Open community forum"
+                  >
+                    <Ionicons name="people-outline" size={18} color={C.ink} />
+                    <Text style={s.headerMenuText}>Community forum</Text>
                   </TouchableOpacity>
                   <View style={s.headerMenuDivider} />
                   <TouchableOpacity
@@ -752,6 +884,83 @@ export default function DashboardScreen() {
               </View>
             ))}
           </View>
+          <View style={s.paterosProfile}>
+            <View style={s.paterosProfileHeader}>
+              <View style={s.paterosProfileIcon}>
+                <Ionicons name="stats-chart" size={20} color={C.white} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={s.paterosProfileEyebrow}>MUNICIPAL POPULATION</Text>
+                <Text style={s.paterosProfileTitle}>{PATEROS_PROFILE.population2024}</Text>
+                <Text style={s.paterosProfileText}>
+                  {PATEROS_PROFILE.barangays} barangays · {PATEROS_PROFILE.classification}
+                </Text>
+              </View>
+            </View>
+            <View style={[s.paterosProfileColumns, isTablet && s.paterosProfileColumnsWide]}>
+              <View style={s.paterosProfilePanel}>
+                <View style={s.paterosProfileHeadingRow}>
+                  <Text style={s.paterosProfileHeading}>Age distribution</Text>
+                  <Text style={s.paterosProfileCaption}>2020 Census</Text>
+                </View>
+                <View style={s.paterosRows}>
+                  {PATEROS_PROFILE.ageGroups2020.map(([label, value], index) => {
+                    const count = Number(value.replace(',', ''));
+                    const colors = ['#78B892', C.primary, C.gold];
+                    return (
+                      <View key={label} style={s.paterosChartRow}>
+                        <View style={s.paterosRow}>
+                          <Text style={s.paterosRowLabel}>{label}</Text>
+                          <Text style={s.paterosRowValue}>{value}</Text>
+                        </View>
+                        <View style={s.paterosBarTrack}>
+                          <View style={[s.paterosBarFill, { width: `${(count / 43772) * 100}%`, backgroundColor: colors[index] }]} />
+                        </View>
+                      </View>
+                    );
+                  })}
+                </View>
+              </View>
+              <View style={s.paterosProfilePanel}>
+                <View style={s.paterosProfileHeadingRow}>
+                  <Text style={s.paterosProfileHeading}>Population by barangay</Text>
+                  <Text style={s.paterosProfileCaption}>2024 estimate</Text>
+                </View>
+                <View style={s.paterosTable}>
+                  <View style={s.paterosTableHeader}>
+                    <Text style={[s.paterosTableHeaderText, s.paterosBarangayColumn]}>Barangay</Text>
+                    <Text style={s.paterosTableHeaderText}>Population</Text>
+                  </View>
+                  {PATEROS_PROFILE.barangayPopulation2024
+                    .slice(0, showAllBarangayPopulation ? undefined : 5)
+                    .map(([label, value], index) => (
+                      <View key={label} style={[s.paterosTableRow, index % 2 === 1 && s.paterosTableRowAlt]}>
+                        <Text style={[s.paterosRowLabel, s.paterosBarangayColumn]} numberOfLines={1}>{label}</Text>
+                        <Text style={s.paterosRowValue}>{value}</Text>
+                      </View>
+                    ))}
+                </View>
+                <Pressable
+                  onPress={() => setShowAllBarangayPopulation((visible) => !visible)}
+                  style={({ pressed }) => [s.paterosTableToggle, pressed && { opacity: 0.75 }]}
+                  accessibilityRole="button"
+                  accessibilityLabel={showAllBarangayPopulation ? 'Show top five barangays' : 'Show all barangays'}
+                >
+                  <Text style={s.paterosTableToggleText}>
+                    {showAllBarangayPopulation ? 'Show top 5' : 'Show all 10 barangays'}
+                  </Text>
+                  <Ionicons name={showAllBarangayPopulation ? 'chevron-up' : 'chevron-down'} size={15} color={C.primary} />
+                </Pressable>
+              </View>
+            </View>
+            <Text style={s.paterosSource}>
+              Sources: Philippine Statistics Authority (PSA), 2024 Census of Population and Housing; City Population, Pateros age distribution, 2020 Census.
+            </Text>
+            <View style={s.sourceLinks}>
+              <Pressable onPress={() => Linking.openURL('https://psa.gov.ph/classification/psgc/barangays/1381701000')}><Text style={s.sourceLink}>PSA Philippine Statistics Authority 2024</Text></Pressable>
+              <Pressable onPress={() => Linking.openURL('https://www.citypopulation.de/en/philippines/luzon/admin/n_c_r_4th_district/137606__pateros/')}><Text style={s.sourceLink}>City Population: Pateros</Text></Pressable>
+            </View>
+          </View>
 
           {/* ── How to use ── */}
           <SectionHeader title="Paano Gamitin ang AUREA" subtitle="Sundin ang 4 na madaling hakbang" />
@@ -817,6 +1026,27 @@ export default function DashboardScreen() {
           )}
         </View>
       </ScrollView>
+      <Modal visible={reviewOpen} transparent animationType="fade" onRequestClose={() => setReviewOpen(false)}>
+        <View style={s.reviewBackdrop}>
+          <View style={s.reviewModal}>
+            <View style={s.reviewHeader}>
+              <View><Text style={s.reviewTitle}>Review AUREA</Text><Text style={s.reviewSubtitle}>How was your experience?</Text></View>
+              <Pressable onPress={() => setReviewOpen(false)}><Ionicons name="close" size={22} color={C.ink} /></Pressable>
+            </View>
+            <View style={s.reviewStars}>
+              {[1, 2, 3, 4, 5].map((star) => (
+                <Pressable key={star} onPress={() => setReviewRating(star)} accessibilityRole="button" accessibilityLabel={`${star} star rating`}>
+                  <Ionicons name={star <= reviewRating ? 'star' : 'star-outline'} size={34} color={star <= reviewRating ? C.gold : C.inkFaint} />
+                </Pressable>
+              ))}
+            </View>
+            <TextInput value={reviewComments} onChangeText={setReviewComments} multiline placeholder="Tell us what you think..." placeholderTextColor={C.inkFaint} style={s.reviewInput} />
+            <Pressable onPress={submitReview} disabled={reviewSaving} style={s.reviewSubmit}>
+              {reviewSaving ? <ActivityIndicator color={C.white} /> : <Text style={s.reviewSubmitText}>Submit review</Text>}
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -940,6 +1170,15 @@ const s = StyleSheet.create({
     color: C.ink,
   },
   headerMenuTextDanger: { color: C.danger },
+  reviewBackdrop: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 20, backgroundColor: 'rgba(0,0,0,0.42)' },
+  reviewModal: { width: '100%', maxWidth: 520, padding: 22, borderRadius: 22, backgroundColor: C.card, gap: 16 },
+  reviewHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' },
+  reviewTitle: { fontFamily: 'FraunTitle', fontSize: 21, color: C.ink },
+  reviewSubtitle: { fontFamily: 'InterBody', fontSize: 13, color: C.inkFaint, marginTop: 3 },
+  reviewStars: { flexDirection: 'row', justifyContent: 'center', gap: 12, paddingVertical: 5 },
+  reviewInput: { minHeight: 110, borderWidth: 1, borderColor: C.line, borderRadius: 13, padding: 13, color: C.ink, fontFamily: 'InterBody', fontSize: 13, textAlignVertical: 'top' },
+  reviewSubmit: { alignItems: 'center', padding: 13, borderRadius: 13, backgroundColor: C.primary },
+  reviewSubmitText: { fontFamily: 'InterBody', fontWeight: '700', color: C.white, fontSize: 13 },
 
   // Greeting
   greetingBlock: { marginBottom: sp(4) },
@@ -1181,6 +1420,7 @@ const s = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   announceThumb: { width: 60, height: 60 },
+  announceImage: { width: 76, height: 76, borderRadius: 16 },
   announceTag: {
     alignSelf: 'flex-start',
     flexDirection: 'row', alignItems: 'center', gap: 4,
@@ -1222,6 +1462,69 @@ const s = StyleSheet.create({
   infoCardText: {
     fontFamily: 'InterBody', fontSize: 14.5, lineHeight: 21, color: C.inkSoft,
   },
+  paterosProfile: {
+    backgroundColor: C.card, borderRadius: 22, overflow: 'hidden',
+    borderWidth: 1, borderColor: C.line, marginBottom: sp(6),
+    ...shadow(C.ink, 0.04, 8, 2),
+  },
+  paterosProfileHeader: {
+    flexDirection: 'row', alignItems: 'center', gap: 14,
+    padding: sp(4), backgroundColor: C.primaryDark,
+  },
+  paterosProfileIcon: {
+    width: 44, height: 44, borderRadius: 14,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: 'rgba(95,194,138,0.22)',
+  },
+  paterosProfileEyebrow: {
+    fontFamily: 'InterBody', fontWeight: '700', fontSize: 10,
+    letterSpacing: 0.8, color: C.goldLight,
+  },
+  paterosProfileTitle: {
+    fontFamily: 'FraunTitle', fontSize: 28, lineHeight: 32,
+    color: C.white, marginTop: 2,
+  },
+  paterosProfileText: { fontFamily: 'InterBody', fontSize: 12.5, lineHeight: 19, color: 'rgba(255,255,255,0.72)' },
+  paterosProfileColumns: { gap: 18, padding: sp(4) },
+  paterosProfileColumnsWide: { flexDirection: 'row', alignItems: 'flex-start' },
+  paterosProfilePanel: { flex: 1, minWidth: 0 },
+  paterosProfileHeadingRow: {
+    flexDirection: 'row', alignItems: 'baseline',
+    justifyContent: 'space-between', gap: 8, marginBottom: 10,
+  },
+  paterosProfileHeading: { fontFamily: 'InterBody', fontWeight: '700', fontSize: 14, color: C.primaryDark },
+  paterosProfileCaption: { fontFamily: 'InterBody', fontSize: 10.5, color: C.inkFaint },
+  paterosRows: { gap: 14 },
+  paterosChartRow: { gap: 6 },
+  paterosRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 8, paddingVertical: 5, borderBottomWidth: 1, borderBottomColor: C.lineSoft },
+  paterosRowLabel: { fontFamily: 'InterBody', fontSize: 12.5, color: C.inkSoft },
+  paterosRowValue: { fontFamily: 'InterBody', fontWeight: '700', fontSize: 12.5, color: C.ink },
+  paterosBarTrack: { height: 10, borderRadius: 5, backgroundColor: C.lineSoft, overflow: 'hidden' },
+  paterosBarFill: { height: 10, borderRadius: 5, minWidth: 8 },
+  paterosTable: { borderWidth: 1, borderColor: C.line, borderRadius: 12, overflow: 'hidden' },
+  paterosTableHeader: {
+    flexDirection: 'row', justifyContent: 'space-between',
+    paddingHorizontal: 12, paddingVertical: 9, backgroundColor: C.lineSoft,
+  },
+  paterosTableHeaderText: {
+    fontFamily: 'InterBody', fontWeight: '700', fontSize: 10,
+    letterSpacing: 0.5, textTransform: 'uppercase', color: C.inkFaint,
+  },
+  paterosTableRow: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingHorizontal: 12, paddingVertical: 8, minHeight: 34,
+    borderTopWidth: 1, borderTopColor: C.lineSoft,
+  },
+  paterosTableRowAlt: { backgroundColor: '#FAFCF9' },
+  paterosBarangayColumn: { flex: 1, paddingRight: 10 },
+  paterosTableToggle: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4,
+    paddingVertical: 10,
+  },
+  paterosTableToggleText: { fontFamily: 'InterBody', fontWeight: '700', fontSize: 12, color: C.primary },
+  paterosSource: { fontFamily: 'InterBody', fontSize: 11, lineHeight: 16, color: C.inkFaint, marginTop: 16, paddingHorizontal: sp(4) },
+  sourceLinks: { flexDirection: 'row', flexWrap: 'wrap', gap: 14, marginTop: 8, paddingHorizontal: sp(4), paddingBottom: sp(4) },
+  sourceLink: { fontFamily: 'InterBody', fontSize: 11.5, fontWeight: '700', color: C.primary },
 
   // How to use
   howToWrap: {

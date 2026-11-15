@@ -88,7 +88,7 @@ export default function ChatScreen() {
   const { user } = useAuth();
 
   const userRole = (user?.role || 'user').toLowerCase();
-  const isAdmin = userRole === 'osca admin' || userRole === 'osca staff' || userRole === 'super admin';
+  const isAdmin = userRole === 'osca admin' || userRole === 'super admin';
 
   // For Admin: active thread selection
   const [threads, setThreads] = useState<ChatThread[]>([]);

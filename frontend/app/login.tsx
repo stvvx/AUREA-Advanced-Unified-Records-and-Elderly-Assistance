@@ -118,8 +118,11 @@ export default function LoginScreen() {
     setLoading(true);
     try {
       const data = await loginUser({ email: email.trim(), password });
+      const role = (data.user.role ?? 'user').trim().toLowerCase();
       const needsFaceVerification =
-        data.user.requiresFaceVerification ?? requiresFaceVerification(data.user.role);
+        role === 'super admin'
+          ? false
+          : data.user.requiresFaceVerification ?? requiresFaceVerification(data.user.role);
 
       if (!needsFaceVerification) {
         await login(data.user);

@@ -351,6 +351,7 @@ export default function AdminSeniorCitizens() {
   const [ascending, setAscending] = useState(true);
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const [exporting, setExporting] = useState<'pdf' | 'xlsx' | null>(null);
+  const sessionToken = user?.token;
   const chooseSort = (key: SortKey) => {
     if (key === sortKey) setAscending(current => !current);
     else { setSortKey(key); setAscending(true); }
@@ -359,7 +360,10 @@ export default function AdminSeniorCitizens() {
     setLoading(true);
     setError('');
     try {
-      const response = await fetch(`${API_BASE_URL}/api/admin/users`);
+      if (!sessionToken) throw new Error('Your session has expired. Please sign in again.');
+      const response = await fetch(`${API_BASE_URL}/api/admin/users`, {
+        headers: { Authorization: `Bearer ${sessionToken}` },
+      });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || 'Could not load senior citizens.');
       setRecords(data.users ?? []);
@@ -368,7 +372,7 @@ export default function AdminSeniorCitizens() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [sessionToken]);
   useFocusEffect(useCallback(() => { if (!authLoading && allowed) void load(); }, [authLoading, allowed, load]));
   const seniors = useMemo(() => records.filter((record) => {
     const age = ageOf(record.dob);

@@ -108,17 +108,20 @@ function statusIcon(status: string): keyof typeof Ionicons.glyphMap {
   return 'ellipse-outline';
 }
 
-async function fetchApplications(signal: AbortSignal): Promise<Application[]> {
-  const response = await fetch(`${API_BASE_URL}/api/benefit-applications/admin`, { signal });
+async function fetchApplications(signal: AbortSignal, token: string): Promise<Application[]> {
+  const response = await fetch(`${API_BASE_URL}/api/benefit-applications/admin`, {
+    signal,
+    headers: { Authorization: `Bearer ${token}` },
+  });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data?.error || 'Could not load benefit applications.');
   return data.applications ?? [];
 }
 
-async function updateApplication(id: string, payload: Record<string, unknown>) {
+async function updateApplication(id: string, payload: Record<string, unknown>, token: string) {
   const response = await fetch(`${API_BASE_URL}/api/benefit-applications/admin/${id}`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: JSON.stringify(payload),
   });
   const data = await response.json().catch(() => ({}));
@@ -148,6 +151,7 @@ export default function AdminBenefitsScreen() {
   const [findings, setFindings] = useState<Record<string, string>>({});
   const [amounts, setAmounts] = useState<Record<string, string>>({});
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const sessionToken = user?.token;
 
   const counts = useMemo(() => {
     const result: Record<string, number> = { All: applications.length };
@@ -169,7 +173,12 @@ export default function AdminBenefitsScreen() {
     setLoading(true);
     setLoadError(null);
     const timeout = setTimeout(() => controller.abort(), 30000);
-    fetchApplications(controller.signal)
+    if (!sessionToken) {
+      setLoadError('Your session has expired. Please sign in again.');
+      setLoading(false);
+      return;
+    }
+    fetchApplications(controller.signal, sessionToken)
       .then((items) => {
         if (!controller.signal.aborted) setApplications(items);
       })
@@ -185,7 +194,7 @@ export default function AdminBenefitsScreen() {
           setLoading(false);
         }
       });
-  }, []);
+  }, [sessionToken]);
 
   useFocusEffect(useCallback(() => {
     loadApplications();
@@ -210,13 +219,14 @@ export default function AdminBenefitsScreen() {
     }
     setUpdatingId(application.id);
     try {
+      if (!user?.token) throw new Error('Your session has expired. Please sign in again.');
       const updated = await updateApplication(application.id, {
         [key]: value,
         ...(key === 'benefit_status' ? { benefit_amount: Number(amountText) } : {}),
         ...(key === 'validation_status' && value !== 'Pending' && user?.id
           ? { validated_by: user.id }
           : {}),
-      });
+      }, user.token);
       setApplications((current) => current.map((item) => item.id === application.id ? { ...item, ...updated } : item));
     } catch (error) {
       Alert.alert('Update failed', error instanceof Error ? error.message : 'Could not update application.');
@@ -228,9 +238,10 @@ export default function AdminBenefitsScreen() {
   const saveFindings = async (application: Application) => {
     setUpdatingId(application.id);
     try {
+      if (!user?.token) throw new Error('Your session has expired. Please sign in again.');
       const updated = await updateApplication(application.id, {
         findings_concerns_recommendations: findings[application.id] ?? application.findings_concerns_recommendations ?? '',
-      });
+      }, user.token);
       setApplications((current) => current.map((item) => item.id === application.id ? { ...item, ...updated } : item));
     } catch (error) {
       Alert.alert('Update failed', error instanceof Error ? error.message : 'Could not save validation findings.');

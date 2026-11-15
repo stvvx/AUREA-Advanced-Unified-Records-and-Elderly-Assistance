@@ -15,6 +15,8 @@ import {
   Animated,
   Easing,
   AccessibilityInfo,
+  Modal,
+  Alert,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -88,6 +90,7 @@ const TINTS = [
 type Action = { icon: string; label: string; desc: string; route?: string };
 
 const OSCA_ACTIONS: Action[] = [
+  { icon: 'megaphone',      label: 'Announcements',      desc: 'Create and manage resident updates', route: '/admin-announcements' },
   { icon: 'people',        label: 'Senior Citizens',     desc: 'View all senior citizen details', route: '/admin-senior-citizens' },
   { icon: 'chatbubbles',   label: 'Senior Support Chat', desc: 'Chat with seniors in real time', route: '/chat' },
   { icon: 'gift',          label: 'Birthday Benefits',   desc: 'Manage benefit distributions',   route: '/admin-benefits' },
@@ -112,6 +115,15 @@ const SUPER_ACTIONS: Action[] = [
   { icon: 'server',           label: 'Audit Logs',      desc: 'View the system audit trail' },
 ];
 
+const SUPER_ADMIN_TABS = [
+  { key: 'users', label: 'Users', icon: 'people' },
+  { key: 'transactions', label: 'Transactions', icon: 'swap-horizontal' },
+  { key: 'seniors', label: 'Seniors', icon: 'person' },
+  { key: 'issues', label: 'Reports', icon: 'flag' },
+  { key: 'roles', label: 'Roles & access', icon: 'shield-checkmark' },
+  { key: 'audit', label: 'Audit logs', icon: 'server' },
+] as const;
+
 function getActions(role: string) {
   if (role === 'super admin') return SUPER_ACTIONS;
   if (role === 'med admin')   return MED_ACTIONS;
@@ -121,6 +133,25 @@ function getActions(role: string) {
 const BARANGAYS = [
   'Aguho', 'Magtanggol', 'Martires Del 96', 'Poblacion', 'San Pedro',
   'San Roque', 'Santa Ana', 'Santo Rosario-Kanluran', 'Santo Rosario-Silangan', 'Tabacalera',
+];
+
+const PATEROS_AGE_DISTRIBUTION = [
+  { label: '0–14 years', value: 17648, color: '#78B892' },
+  { label: '15–64 years', value: 43772, color: C.primary },
+  { label: '65+ years', value: 3644, color: C.gold },
+];
+
+const PATEROS_BARANGAY_POPULATION = [
+  { name: 'Santa Ana', value: 30950 },
+  { name: 'Aguho', value: 7448 },
+  { name: 'Santo Rosario-Kanluran', value: 5504 },
+  { name: 'Martires Del 96', value: 5130 },
+  { name: 'San Roque', value: 4897 },
+  { name: 'Santo Rosario-Silangan', value: 4744 },
+  { name: 'Tabacalera', value: 2853 },
+  { name: 'San Pedro', value: 2252 },
+  { name: 'Poblacion', value: 2089 },
+  { name: 'Magtanggol', value: 1452 },
 ];
 
 // Approximate barangay locations from the Location section of each PhilAtlas profile.
@@ -253,18 +284,78 @@ function getBaseUrl() {
 
 const API = getBaseUrl();
 
-async function fetchUsers(): Promise<any[]> {
-  const res = await fetch(`${API}/api/admin/users`);
+async function fetchUsers(token?: string): Promise<any[]> {
+  const res = await fetch(`${API}/api/admin/users`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data?.message || 'Failed to fetch users.');
   return data.users ?? [];
 }
 
-async function fetchTransactions(): Promise<any[]> {
-  const res = await fetch(`${API}/api/admin/transactions`);
+async function fetchTransactions(token?: string): Promise<any[]> {
+  const res = await fetch(`${API}/api/admin/transactions`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data?.message || 'Failed to fetch transactions.');
   return data.transactions ?? [];
+}
+
+async function fetchAnalytics(token?: string): Promise<any> {
+  const res = await fetch(`${API}/api/admin/transactions?category=all`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.message || 'Failed to fetch analytics.');
+  return data;
+}
+
+async function fetchIssues(token?: string): Promise<any[]> {
+  const res = await fetch(`${API}/api/issues`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 404 && String(data?.message || '').includes('issue_reports')) return [];
+  if (!res.ok) throw new Error(data?.message || 'Failed to fetch reported issues.');
+  return data.issues ?? [];
+}
+
+async function fetchAdminFeedback(token?: string): Promise<any[]> {
+  const res = await fetch(`${API}/api/admin/feedback`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.message || 'Failed to fetch feedback.');
+  return data.feedback ?? [];
+}
+
+async function submitSystemFeedback(token: string, rating: number, comments: string): Promise<void> {
+  const res = await fetch(`${API}/api/feedback`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rating, comments }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.message || 'Failed to submit feedback.');
+}
+
+async function fetchAuditLogs(token?: string): Promise<any[]> {
+  const res = await fetch(`${API}/api/admin/audit-logs`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 404 || (res.status === 500 && String(data?.message || '').includes('audit_logs'))) return [];
+  if (!res.ok) throw new Error(data?.message || 'Failed to fetch audit logs.');
+  return data.logs ?? [];
+}
+
+async function updateManagedUser(token: string, id: number, payload: { status?: string; role?: string }) {
+  const res = await fetch(`${API}/api/admin/users/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.message || 'Could not update user.');
+  return data.user;
+}
+
+async function deleteManagedUser(token: string, id: number) {
+  const res = await fetch(`${API}/api/admin/users/${id}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.message || 'Could not delete user.');
 }
 
 // ---------------------------------------------------------------------------
@@ -757,7 +848,9 @@ export default function AdminDashboard() {
   const meta = ROLE_META[role] ?? ROLE_META['osca admin'];
   const actions = getActions(role);
   const isSuperAdmin = role === 'super admin';
-  const canViewSeniorMap = isSuperAdmin || role === 'osca admin';
+  const canViewSeniorMap = role === 'osca admin';
+  const canLoadUsers = canViewSeniorMap || isSuperAdmin;
+  const sessionToken = user?.token;
   const appVersion = Constants.expoConfig?.version;
 
   const [users, setUsers]               = useState<any[]>([]);
@@ -766,10 +859,23 @@ export default function AdminDashboard() {
   const [loadingTx, setLoadingTx]       = useState(false);
   const [refreshing, setRefreshing]     = useState(false);
   const [lastSynced, setLastSynced]     = useState<Date | null>(null);
-  const [activeTab, setActiveTab]       = useState<'users' | 'transactions' | 'seniors'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'transactions' | 'seniors' | 'issues' | 'roles' | 'audit'>('users');
+  const [issues, setIssues] = useState<any[]>([]);
+  const [feedback, setFeedback] = useState<any[]>([]);
+  const [auditLogs, setAuditLogs] = useState<any[]>([]);
+  const [analytics, setAnalytics] = useState<any>({ stats: { total: 0, completed: 0, pending: 0, byCategory: {} } });
+  const [transactionCategory, setTransactionCategory] = useState('all');
+  const [userRoleFilter, setUserRoleFilter] = useState('All');
+  const [userStatusFilter, setUserStatusFilter] = useState('All');
+  const [selectedUser, setSelectedUser] = useState<any | null>(null);
   const [seniorSearch, setSeniorSearch] = useState('');
   const [seniorFilter, setSeniorFilter] = useState('All');
   const [showAllBarangays, setShowAllBarangays] = useState(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [feedbackRating, setFeedbackRating] = useState(0);
+  const [feedbackComments, setFeedbackComments] = useState('');
+  const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
+  const isUsersLoading = canLoadUsers && Boolean(sessionToken) && loadingUsers;
 
   const [toast, setToast] = useState({ visible: false, message: '', type: 'success' as 'success' | 'error' });
   const showToast = useCallback((message: string, type: 'success' | 'error' = 'success') =>
@@ -781,24 +887,79 @@ export default function AdminDashboard() {
     setTimeout(() => router.replace('/login'), 1200);
   };
 
+  const handleFeedbackSubmit = async () => {
+    if (!sessionToken || feedbackRating === 0 || !feedbackComments.trim()) {
+      showToast('Choose a star rating and add a short review.', 'error');
+      return;
+    }
+    setFeedbackSubmitting(true);
+    try {
+      await submitSystemFeedback(sessionToken, feedbackRating, feedbackComments.trim());
+      setFeedbackOpen(false);
+      setFeedbackRating(0);
+      setFeedbackComments('');
+      showToast('Thank you for reviewing AUREA.');
+    } catch (feedbackError) {
+      showToast(feedbackError instanceof Error ? feedbackError.message : 'Could not submit feedback.', 'error');
+    } finally {
+      setFeedbackSubmitting(false);
+    }
+  };
+
   const handleAction = (action: Action) => {
     if (action.route) router.push(action.route as any);
-    else showToast(`${action.label} is coming soon.`);
+    else if (action.label === 'All Users') setActiveTab('users');
+    else if (action.label === 'Transactions' || action.label === 'Reports') setActiveTab('transactions');
+    else if (action.label === 'Roles & Access') setActiveTab('roles');
+    else if (action.label === 'Audit Logs') setActiveTab('audit');
+    else showToast('System settings are managed by the deployment configuration.');
+  };
+
+  const handleUserChange = async (target: any, changes: { status?: string; role?: string }) => {
+    if (!user?.token) return;
+    try {
+      const updated = await updateManagedUser(user.token, target.id, changes);
+      setUsers((current) => current.map((item) => item.id === target.id ? { ...item, ...updated } : item));
+      setSelectedUser((current: any | null) => current?.id === target.id ? { ...current, ...updated } : current);
+      showToast('User account updated.');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Could not update user.', 'error');
+    }
+  };
+
+  const handleUserDelete = async (target: any) => {
+    if (!user?.token) return;
+    const confirmed = await new Promise<boolean>((resolve) => {
+      Alert.alert('Delete account', `Delete ${fullName(target)} permanently?`, [
+        { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+        { text: 'Delete', style: 'destructive', onPress: () => resolve(true) },
+      ]);
+    });
+    if (!confirmed) return;
+    try {
+      await deleteManagedUser(user.token, target.id);
+      setUsers((current) => current.filter((item) => item.id !== target.id));
+      setSelectedUser(null);
+      showToast('User account deleted.');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Could not delete user.', 'error');
+    }
   };
 
   const loadUsers = useCallback(async () => {
+    if (!sessionToken) return;
     try {
-      setUsers(await fetchUsers());
+      setUsers(await fetchUsers(sessionToken));
       setLastSynced(new Date());
     } catch {
       showToast('Could not load users. Pull down to try again.', 'error');
     }
-  }, [showToast]);
+  }, [sessionToken, showToast]);
 
   useEffect(() => {
-    if (!canViewSeniorMap) return;
+    if (!canLoadUsers || !sessionToken) return;
     let cancelled = false;
-    fetchUsers()
+    fetchUsers(sessionToken)
       .then(records => {
         if (cancelled) return;
         setUsers(records);
@@ -811,18 +972,33 @@ export default function AdminDashboard() {
         if (!cancelled) setLoadingUsers(false);
       });
     return () => { cancelled = true; };
-  }, [canViewSeniorMap, showToast]);
+  }, [canLoadUsers, sessionToken, showToast]);
 
   useEffect(() => {
-    if (!isSuperAdmin || activeTab !== 'transactions') return;
-    fetchTransactions()
-      .then(setTransactions)
+    if (!isSuperAdmin || activeTab !== 'transactions' || !user?.token) return;
+    Promise.all([fetchTransactions(user?.token), fetchAnalytics(user?.token)])
+      .then(([rows, summary]) => { setTransactions(rows); setAnalytics(summary); })
       .catch(() => showToast('Could not load transactions.', 'error'))
       .finally(() => setLoadingTx(false));
-  }, [isSuperAdmin, activeTab, showToast]);
+  }, [isSuperAdmin, activeTab, showToast, user?.token]);
+
+  useEffect(() => {
+    if (!isSuperAdmin || !['issues', 'audit'].includes(activeTab) || !user?.token) return;
+    Promise.all([
+      activeTab === 'issues' ? fetchIssues(user?.token) : Promise.resolve([]),
+      activeTab === 'issues' ? fetchAdminFeedback(user?.token) : Promise.resolve([]),
+      activeTab === 'audit' ? fetchAuditLogs(user?.token) : Promise.resolve([]),
+    ])
+      .then(([reported, receivedFeedback, logs]) => {
+        setIssues(reported);
+        setFeedback(receivedFeedback);
+        setAuditLogs(logs);
+      })
+      .catch(() => showToast('Could not load administrative records.', 'error'));
+  }, [isSuperAdmin, activeTab, showToast, user?.token]);
 
   const onRefresh = async () => {
-    if (!canViewSeniorMap) return;
+    if (!canLoadUsers) return;
     setRefreshing(true);
     await loadUsers();
     setRefreshing(false);
@@ -896,12 +1072,15 @@ export default function AdminDashboard() {
     return matchesQuery && (seniorFilter === 'All' || ageFilter === seniorFilter || category === seniorFilter || faceStatus === seniorFilter);
   }), [seniors, seniorSearch, seniorFilter]);
 
-  const TABS: { key: 'users' | 'transactions' | 'seniors'; label: string; icon: string }[] = [
-    { key: 'users',        label: 'Users',        icon: 'people' },
-    { key: 'transactions', label: 'Transactions', icon: 'swap-horizontal' },
-    { key: 'seniors',      label: 'Seniors',      icon: 'person' },
-  ];
-
+  const visibleUsers = users.filter((candidate) =>
+    (userRoleFilter === 'All' || String(candidate.role ?? 'user').toLowerCase() === userRoleFilter)
+    && (userStatusFilter === 'All' || String(candidate.status ?? 'Active') === userStatusFilter)
+  );
+  const visibleTransactions = transactions.filter((transaction) => {
+    if (transactionCategory === 'all') return true;
+    const category = String(transaction.category ?? transaction.type ?? '').toLowerCase();
+    return category.includes(transactionCategory);
+  });
   const stats = [
     { value: seniors.length,       label: 'Senior citizens',     icon: 'people' },
     { value: enrolledCount,        label: 'Face enrolled',       icon: 'scan' },
@@ -925,42 +1104,112 @@ export default function AdminDashboard() {
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
         refreshControl={
-          canViewSeniorMap
+          canLoadUsers
             ? <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.primary} colors={[C.primary]} />
             : undefined
         }
       >
-        {/* ── HEADER ── */}
+        {/* ── ADMIN HERO ── */}
+        <View style={isSuperAdmin ? s.adminHero : undefined}>
         <View style={s.header}>
           <View style={s.brand}>
             <LinearGradient colors={[C.primaryBright, C.primaryMid]} style={s.logoGrad}>
               <Ionicons name="shield-checkmark" size={22} color={C.white} />
             </LinearGradient>
             <View>
-              <Text style={s.h1}>AUREA</Text>
+              <Text style={s.headerEyebrow}>AUREA ADMINISTRATION</Text>
+              <Text style={s.h1}>Admin dashboard</Text>
               <Text style={s.brandSub}>Municipality of Pateros</Text>
             </View>
           </View>
           <View style={s.headerActions}>
-            <Pressable
-              style={({ pressed }) => [s.iconBtn, pressed && s.pressed]}
-              onPress={() => router.push('/chat')}
-              accessibilityRole="button"
-              accessibilityLabel="Open live chat"
-            >
-              <Ionicons name="chatbubbles-outline" size={19} color={C.primaryDark} />
-            </Pressable>
+            {role === 'user' && (
+              <Pressable
+                style={({ pressed }) => [s.iconBtn, pressed && s.pressed]}
+                onPress={() => setFeedbackOpen(true)}
+                accessibilityRole="button"
+                accessibilityLabel="Review AUREA"
+              >
+                <Ionicons name="star-outline" size={19} color={C.white} />
+              </Pressable>
+            )}
+            {!isSuperAdmin && (
+              <Pressable
+                style={({ pressed }) => [s.iconBtn, pressed && s.pressed]}
+                onPress={() => router.push('/chat')}
+                accessibilityRole="button"
+                accessibilityLabel="Open live chat"
+              >
+                <Ionicons name="chatbubbles-outline" size={19} color={C.white} />
+              </Pressable>
+            )}
             <Pressable
               style={({ pressed }) => [s.iconBtn, pressed && s.pressed]}
               onPress={handleLogout}
               accessibilityRole="button"
               accessibilityLabel="Log out"
             >
-              <Ionicons name="log-out-outline" size={19} color={C.primaryDark} />
+              <Ionicons name="log-out-outline" size={19} color={C.white} />
             </Pressable>
           </View>
         </View>
 
+        {isSuperAdmin && (
+          <>
+            <View style={s.superWelcome}>
+              <View style={s.superWelcomeTop}>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.superWelcomeEyebrow}>SUPER ADMIN CONSOLE</Text>
+                  <Text style={s.superWelcomeTitle}>Welcome back, {user?.firstName || 'Administrator'}</Text>
+                  <Text style={s.superWelcomeSub}>Manage accounts, services, and access from one place.</Text>
+                </View>
+                <View style={s.consoleStatus}>
+                  <View style={s.statusDot} />
+                  <Text style={s.consoleStatusText}>Live system</Text>
+                </View>
+              </View>
+              <View style={s.superWelcomeFooter}>
+                <Text style={s.superWelcomeFooterText}>AUREA administrative workspace</Text>
+                <Text style={s.superWelcomeFooterText}>Secure session active</Text>
+              </View>
+            </View>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={s.managementNav}
+              accessibilityRole="tablist"
+            >
+              {SUPER_ADMIN_TABS.map((tab) => {
+                const active = activeTab === tab.key;
+                return (
+                  <Pressable
+                    key={tab.key}
+                    style={({ pressed }) => [s.managementNavItem, active && s.managementNavItemActive, pressed && s.pressed]}
+                    onPress={() => {
+                      if (tab.key === 'seniors') {
+                        router.push('/admin-senior-citizens' as any);
+                        return;
+                      }
+                      router.push({
+                        pathname: '/admin-management',
+                        params: { section: tab.key },
+                      } as any);
+                    }}
+                    accessibilityRole="tab"
+                    accessibilityState={{ selected: active }}
+                  >
+                    <Ionicons name={tab.icon as any} size={15} color={active ? C.white : C.inkSoft} />
+                    <Text style={[s.managementNavText, active && s.managementNavTextActive]}>{tab.label}</Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          </>
+        )}
+        </View>
+
+        {!isSuperAdmin && (
+        <>
         {/* ── WELCOME BANNER ── */}
         <View style={s.bannerWrap}>
           <LinearGradient
@@ -989,59 +1238,33 @@ export default function AdminDashboard() {
               </View>
             </View>
 
-            {canViewSeniorMap && (
-              <>
-                <View style={s.bannerStats}>
-                  {stats.map((stat) => (
-                    <View key={stat.label} style={s.bannerStat}>
-                      <Ionicons name={stat.icon as any} size={14} color={C.primaryBright} />
-                      <Text style={s.bannerStatValue}>{loadingUsers ? '–' : stat.value}</Text>
-                      <Text style={s.bannerStatLabel} numberOfLines={2}>{stat.label}</Text>
-                    </View>
-                  ))}
-                </View>
-
-                <View style={s.progressWrap}>
-                  <View style={s.progressHead}>
-                    <Text style={s.progressLabel}>Face enrollment</Text>
-                    <Text style={s.progressPct}>{loadingUsers ? '–' : `${enrolledPct}%`}</Text>
-                  </View>
-                  <View style={s.progressTrack}>
-                    <LinearGradient
-                      colors={[C.primaryBright, '#BFEAD0']}
-                      start={{ x: 0, y: 0 }}
-                      end={{ x: 1, y: 0 }}
-                      style={[s.progressFill, { width: `${loadingUsers ? 0 : enrolledPct}%` }]}
-                    />
-                  </View>
-                </View>
-              </>
-            )}
           </LinearGradient>
         </View>
 
-        {/* ── QUICK ACTIONS ── */}
-        <SectionHeader title="Quick actions" />
-        <View style={s.grid}>
-          {actions.map((a, index) => {
-            const ready = !!a.route;
-            const tint = TINTS[index % TINTS.length];
-            return (
+        <View style={s.operationsSection}>
+          <View style={s.sectionHeading}>
+            <View><Text style={s.operationsTitle}>OSCA operations</Text><Text style={s.operationsSub}>Manage senior services and resident support</Text></View>
+            <Ionicons name="grid-outline" size={20} color={C.primary} />
+          </View>
+          <View style={s.actionGrid}>
+            {actions.map((action, index) => (
               <Pressable
-                key={a.label}
-                style={({ pressed }) => [s.actionCard, { width: actionWidth }, !ready && s.actionCardMuted, pressed && s.pressed]}
-                onPress={() => handleAction(a)}
+                key={action.label}
+                onPress={() => handleAction(action)}
+                style={({ pressed }) => [s.operationCard, pressed && s.pressed]}
                 accessibilityRole="button"
-                accessibilityLabel={`${a.label}. ${a.desc}${ready ? '' : '. Coming soon'}`}
               >
-                <View style={[s.actionIconWrap, { backgroundColor: ready ? tint.bg : C.lineSoft }]}>
-                  <Ionicons name={a.icon as any} size={30} color={ready ? tint.fg : C.inkFaint} />
-                  {!ready && <View style={s.actionSoon}><Text style={s.actionSoonText}>Soon</Text></View>}
+                <View style={[s.actionIcon, { backgroundColor: TINTS[index % TINTS.length].bg }]}>
+                  <Ionicons name={action.icon as any} size={19} color={TINTS[index % TINTS.length].fg} />
                 </View>
-                <Text style={s.actionLabel}>{a.label}</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.actionTitle}>{action.label}</Text>
+                  <Text style={s.actionDesc} numberOfLines={2}>{action.desc}</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={16} color={C.inkFaint} />
               </Pressable>
-            );
-          })}
+            ))}
+          </View>
         </View>
 
         {/* ── SENIOR MAPS ── */}
@@ -1054,7 +1277,7 @@ export default function AdminDashboard() {
             />
             <View style={s.mapCard}>
               <View style={s.mapFrame}>
-                {loadingUsers ? (
+                {isUsersLoading ? (
                   <View style={s.mapLoading}>
                     <ActivityIndicator color={C.primaryDark} />
                     <Text style={s.mapLoadingTxt}>Loading map…</Text>
@@ -1062,7 +1285,7 @@ export default function AdminDashboard() {
                 ) : (
                   <BarangayMap html={barangayMapHtml} />
                 )}
-                {!loadingUsers && (
+                {!isUsersLoading && (
                   <View style={s.mapBadge} pointerEvents="none">
                     <Ionicons name="location" size={12} color={C.primary} />
                     <Text style={s.mapBadgeTxt}>{mappedSeniorCount} of {seniors.length} mapped</Text>
@@ -1140,9 +1363,9 @@ export default function AdminDashboard() {
               </Pressable>
               </View>
               <View style={s.mapFrame}>
-                {loadingUsers ? <View style={s.mapLoading}><ActivityIndicator color={C.primaryDark} /></View>
+                {isUsersLoading ? <View style={s.mapLoading}><ActivityIndicator color={C.primaryDark} /></View>
                   : <BarangayMap html={categoryMapHtml} title={`${heatCategory} senior distribution in Pateros`} />}
-                {!loadingUsers && (
+                {!isUsersLoading && (
                   <View style={s.mapBadge} pointerEvents="none">
                     <Ionicons name="flame" size={12} color={C.danger} />
                     <Text style={s.mapBadgeTxt}>{categoryMappedCount} mapped</Text>
@@ -1151,7 +1374,7 @@ export default function AdminDashboard() {
               </View>
               <View style={s.categoryLegend}>
                 <Text style={s.categorySummary}>{heatCategory} · {categoryMappedCount} seniors mapped</Text>
-                {!loadingUsers && categoryMappedCount === 0 && <Text style={s.sectionSub}>No seniors in this category have a recognized barangay address.</Text>}
+                {!isUsersLoading && categoryMappedCount === 0 && <Text style={s.sectionSub}>No seniors in this category have a recognized barangay address.</Text>}
                 <LinearGradient colors={['#2563eb', '#06b6d4', '#84cc16', '#facc15', '#ef4444']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={s.categoryGradient} />
                 <View style={s.categoryLegendLabels}><Text style={s.sectionSub}>Fewer seniors</Text><Text style={s.sectionSub}>More seniors</Text></View>
                 <Text style={s.sectionSub}>Counts grouped at approximate barangay locations. Tap a point to view its count.</Text>
@@ -1161,49 +1384,115 @@ export default function AdminDashboard() {
           </View>
         )}
 
-        {/* ── SUPER ADMIN: MANAGEMENT ── */}
-        {isSuperAdmin && (
-          <>
-            <SectionHeader title="System overview" />
+        </>
+        )}
 
-            {/* Segmented control */}
-            <View style={s.segment} accessibilityRole="tablist">
-              {TABS.map((tab) => {
-                const active = activeTab === tab.key;
-                return (
-                  <Pressable
-                    key={tab.key}
-                    style={[s.segmentItem, active && s.segmentItemActive]}
-                    onPress={() => {
-                      if (tab.key === 'seniors') {
-                        router.push('/admin-senior-citizens' as any);
-                        return;
-                      }
-                      if (tab.key === 'transactions' && activeTab !== 'transactions') setLoadingTx(true);
-                      setActiveTab(tab.key);
-                    }}
-                    accessibilityRole="tab"
-                    accessibilityState={{ selected: active }}
-                  >
-                    <Ionicons name={tab.icon as any} size={15} color={active ? C.primaryDark : C.inkFaint} />
-                    <Text style={[s.segmentTxt, active && s.segmentTxtActive]}>{tab.label}</Text>
-                  </Pressable>
-                );
-              })}
+        {/* ── POPULATION PROFILE ── */}
+        <View style={s.populationSection}>
+          <SectionHeader
+            title="Pateros at a glance"
+            subtitle="Reference population profile from the 2020 Census and 2024 barangay estimates."
+          />
+          <View style={s.populationCard}>
+            <View style={s.populationSummary}>
+              <View style={s.populationSummaryIcon}>
+                <Ionicons name="stats-chart" size={20} color={C.white} />
+              </View>
+              <View style={s.populationSummaryCopy}>
+                <Text style={s.populationEyebrow}>MUNICIPAL POPULATION</Text>
+                <Text style={s.populationTotal}>67,319</Text>
+                <Text style={s.populationMeta}>10 barangays · 1st class municipality · all barangays urban</Text>
+              </View>
             </View>
 
+            <View style={[s.populationColumns, width >= 850 && s.populationColumnsWide]}>
+              <View style={s.populationPanel}>
+                <View style={s.populationPanelHeading}>
+                  <Text style={s.populationPanelTitle}>Age distribution</Text>
+                  <Text style={s.populationPanelCaption}>2020 Census</Text>
+                </View>
+                <View style={s.ageChart}>
+                  {PATEROS_AGE_DISTRIBUTION.map((item) => (
+                    <View key={item.label} style={s.ageChartRow}>
+                      <View style={s.ageChartLabel}>
+                        <Text style={s.populationRowName}>{item.label}</Text>
+                        <Text style={s.populationRowValue}>{item.value.toLocaleString()}</Text>
+                      </View>
+                      <View style={s.populationBarTrack}>
+                        <View
+                          style={[
+                            s.populationBarFill,
+                            { width: `${(item.value / 43772) * 100}%`, backgroundColor: item.color },
+                          ]}
+                        />
+                      </View>
+                    </View>
+                  ))}
+                </View>
+              </View>
+
+              <View style={s.populationPanel}>
+                <View style={s.populationPanelHeading}>
+                  <Text style={s.populationPanelTitle}>Population by barangay</Text>
+                  <Text style={s.populationPanelCaption}>2024 estimate</Text>
+                </View>
+                <View style={s.populationTable}>
+                  <View style={s.populationTableHeader}>
+                    <Text style={[s.populationTableHeaderText, s.populationBarangayColumn]}>Barangay</Text>
+                    <Text style={s.populationTableHeaderText}>Population</Text>
+                  </View>
+                  {PATEROS_BARANGAY_POPULATION.map((item, index) => (
+                    <View key={item.name} style={[s.populationTableRow, index % 2 === 1 && s.populationTableRowAlt]}>
+                      <Text style={[s.populationRowName, s.populationBarangayColumn]} numberOfLines={1}>{item.name}</Text>
+                      <Text style={s.populationRowValue}>{item.value.toLocaleString()}</Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+            </View>
+
+            <View style={s.populationFooter}>
+              <Ionicons name="information-circle-outline" size={14} color={C.inkFaint} />
+              <Text style={s.populationSource}>Sources: Philippine Statistics Authority (PSA), 2024 Census of Population and Housing; City Population, Pateros age distribution, 2020 Census.</Text>
+            </View>
+          </View>
+        </View>
+
+        {/* ── SUPER ADMIN: MANAGEMENT ── */}
+        {!isSuperAdmin && (
+          <>
             {/* Users */}
             {activeTab === 'users' && (
               <View style={s.listCard}>
                 <View style={s.listHeader}>
-                  <Text style={s.listHeaderTxt}>{users.length} registered users</Text>
+                  <Text style={s.listHeaderTxt}>{visibleUsers.length} of {users.length} registered users</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.filterRow}>
+                    {['All', 'user', 'osca admin', 'med admin', 'health center', 'super admin'].map((filter) => (
+                      <Pressable key={filter} style={[s.filterChip, userRoleFilter === filter.toLowerCase() && s.filterChipActive]} onPress={() => setUserRoleFilter(filter === 'All' ? 'All' : filter.toLowerCase())}>
+                        <Text style={[s.filterChipTxt, userRoleFilter === filter.toLowerCase() && s.filterChipTxtActive]}>{filter}</Text>
+                      </Pressable>
+                    ))}
+                  </ScrollView>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.filterRow}>
+                    {['All', 'Active', 'Inactive', 'Suspended'].map((filter) => (
+                      <Pressable key={filter} style={[s.filterChip, userStatusFilter === filter && s.filterChipActive]} onPress={() => setUserStatusFilter(filter)}>
+                        <Text style={[s.filterChipTxt, userStatusFilter === filter && s.filterChipTxtActive]}>{filter}</Text>
+                      </Pressable>
+                    ))}
+                  </ScrollView>
                 </View>
-                {loadingUsers ? (
+                <View style={s.tableHeader}>
+                  <Text style={[s.tableHeaderText, { flex: 2 }]}>Account</Text>
+                  <Text style={[s.tableHeaderText, { flex: 1.2 }]}>Role</Text>
+                  <Text style={[s.tableHeaderText, { flex: 0.8 }]}>Status</Text>
+                  <Text style={s.tableHeaderText}>Action</Text>
+                </View>
+                {isUsersLoading ? (
                   <ListSkeleton />
                 ) : users.length === 0 ? (
                   <EmptyState icon="people-outline" title="No users yet" hint="Registered users will show up here." cartoon="grandma" />
                 ) : (
-                  users.map((u, i) => {
+                  visibleUsers.map((u, i) => {
                     const badge = ROLE_BADGE[String(u.role ?? 'user').toLowerCase()] ?? ROLE_BADGE.user;
                     return (
                       <View key={u.id ?? i} style={[s.listRow, i < users.length - 1 && s.listRowBorder]}>
@@ -1219,6 +1508,7 @@ export default function AdminDashboard() {
                         <View style={[s.roleBadge, { backgroundColor: badge.bg }]}>
                           <Text style={[s.roleBadgeTxt, { color: badge.fg }]}>{u.role ?? 'user'}</Text>
                         </View>
+                        <Pressable style={s.smallAction} onPress={() => setSelectedUser(u)}><Text style={s.smallActionText}>View</Text></Pressable>
                       </View>
                     );
                   })
@@ -1230,14 +1520,33 @@ export default function AdminDashboard() {
             {activeTab === 'transactions' && (
               <View style={s.listCard}>
                 <View style={s.listHeader}>
-                  <Text style={s.listHeaderTxt}>{transactions.length} transactions</Text>
+                  <Text style={s.listHeaderTxt}>Transaction analytics</Text>
+                  <View style={s.statsRow}>
+                    <View style={s.statCard}><Text style={s.statValue}>{analytics?.stats?.total ?? transactions.length}</Text><Text style={s.statLabel}>Total</Text></View>
+                    <View style={s.statCard}><Text style={s.statValue}>{analytics?.stats?.completed ?? 0}</Text><Text style={s.statLabel}>Completed</Text></View>
+                    <View style={s.statCard}><Text style={s.statValue}>{analytics?.stats?.pending ?? 0}</Text><Text style={s.statLabel}>Pending</Text></View>
+                  </View>
+                  <View style={s.chipRow}>
+                    {['all', 'birthday', 'cinema'].map((category) => (
+                      <Pressable key={category} onPress={() => setTransactionCategory(category)}>
+                        <View style={[s.filterChip, transactionCategory === category && s.filterChipActive]}>
+                          <Text style={[s.filterChipTxt, transactionCategory === category && s.filterChipTxtActive]}>{category} · {analytics?.stats?.byCategory?.[category] ?? 0}</Text>
+                        </View>
+                      </Pressable>
+                    ))}
+                  </View>
+                </View>
+                <View style={s.tableHeader}>
+                  <Text style={[s.tableHeaderText, { flex: 2 }]}>Activity</Text>
+                  <Text style={[s.tableHeaderText, { flex: 1.2 }]}>Date</Text>
+                  <Text style={s.tableHeaderText}>Status</Text>
                 </View>
                 {loadingTx ? (
                   <ListSkeleton />
-                ) : transactions.length === 0 ? (
+                ) : visibleTransactions.length === 0 ? (
                   <EmptyState icon="swap-horizontal-outline" title="No transactions yet" hint="Activity will appear here once it happens." cartoon="grandpa" />
                 ) : (
-                  transactions.map((tx, i) => {
+                  visibleTransactions.map((tx, i) => {
                     const status = String(tx.status ?? '').toLowerCase();
                     const tone = ['success', 'completed', 'approved', 'paid'].includes(status)
                       ? 'green'
@@ -1245,7 +1554,7 @@ export default function AdminDashboard() {
                         ? 'danger'
                         : 'gold';
                     return (
-                      <View key={tx.id ?? i} style={[s.listRow, i < transactions.length - 1 && s.listRowBorder]}>
+                      <View key={tx.id ?? i} style={[s.listRow, i < visibleTransactions.length - 1 && s.listRowBorder]}>
                         <View style={[s.avatar, { backgroundColor: C.goldSoft }]}>
                           <Ionicons name="swap-horizontal" size={18} color={C.goldDark} />
                         </View>
@@ -1258,6 +1567,74 @@ export default function AdminDashboard() {
                     );
                   })
                 )}
+
+              </View>
+            )}
+
+            {activeTab === 'issues' && (
+              <View style={s.listCard}>
+                <View style={s.listHeader}>
+                  <Text style={s.listHeaderTxt}>{issues.length} reported issues · {feedback.length} feedback items</Text>
+                </View>
+                <View style={s.tableHeader}>
+                  <Text style={[s.tableHeaderText, { flex: 2 }]}>Report or feedback</Text>
+                  <Text style={[s.tableHeaderText, { flex: 1.2 }]}>Date</Text>
+                  <Text style={s.tableHeaderText}>Status</Text>
+                </View>
+                {issues.length === 0 && feedback.length === 0 ? (
+                  <EmptyState icon="flag-outline" title="No reported issues" hint="Reports from residents will appear here." cartoon="grandma" />
+                ) : [...issues.map((issue) => ({ ...issue, kind: 'Issue' })), ...feedback.map((item) => ({ ...item, kind: 'Feedback', subject: item.subject ?? item.title ?? 'Service feedback', description: item.message ?? item.description }))].map((issue, i) => (
+                  <View key={issue.id ?? i} style={[s.listRow, i < issues.length - 1 && s.listRowBorder]}>
+                    <View style={[s.avatar, { backgroundColor: C.dangerSoft }]}><Ionicons name="flag" size={18} color={C.danger} /></View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={s.listName}>{issue.kind}: {issue.subject}</Text>
+                      <Text style={s.listSub} numberOfLines={2}>{issue.description}</Text>
+                      <Text style={s.listSub}>{issue.status} · {issue.created_at ?? ''}</Text>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            )}
+
+            {activeTab === 'roles' && (
+              <View style={s.listCard}>
+                <View style={s.listHeader}>
+                  <Text style={s.listHeaderTxt}>Roles and access</Text>
+                  <Text style={s.listSub}>Account distribution by permission level</Text>
+                </View>
+                {Object.entries({
+                  'super admin': 'Full system management, user roles, reports, analytics, and audit logs.',
+                  'osca admin': 'Senior citizen records, benefits, IDs, records, and movie center.',
+                  'med admin': 'Medical records and health workflows.',
+                  'health center': 'Health-center services and appointments.',
+                  user: 'Resident services and personal account access.',
+                }).map(([name, description]) => (
+                  <View key={name} style={[s.roleRow, name !== 'user' && s.listRowBorder]}>
+                    <Ionicons name={(ROLE_META[name]?.icon ?? 'person') as any} size={20} color={ROLE_META[name]?.color ?? C.primary} />
+                    <View style={{ flex: 1 }}>
+                      <View style={s.roleTitleLine}><Text style={s.listName}>{name}</Text><Text style={s.roleCount}>{users.filter((candidate) => String(candidate.role ?? 'user').toLowerCase() === name).length}</Text></View>
+                      <Text style={s.listSub}>{description}</Text>
+                      <View style={s.roleBar}><View style={[s.roleBarFill, { width: `${users.length ? Math.max(2, users.filter((candidate) => String(candidate.role ?? 'user').toLowerCase() === name).length / users.length * 100) : 0}%`, backgroundColor: ROLE_META[name]?.color ?? C.primary }]} /></View>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            )}
+
+            {activeTab === 'audit' && (
+              <View style={s.listCard}>
+                <View style={s.listHeader}><Text style={s.listHeaderTxt}>{auditLogs.length} administrative actions</Text></View>
+                <View style={s.tableHeader}>
+                  <Text style={[s.tableHeaderText, { flex: 2 }]}>Action</Text>
+                  <Text style={[s.tableHeaderText, { flex: 1.2 }]}>Entity</Text>
+                  <Text style={s.tableHeaderText}>Date</Text>
+                </View>
+                {auditLogs.length === 0 ? <EmptyState icon="server-outline" title="No audit activity yet" hint="Administrative changes will be recorded here." /> : auditLogs.map((entry, i) => (
+                  <View key={entry.id ?? i} style={[s.listRow, i < auditLogs.length - 1 && s.listRowBorder]}>
+                    <View style={[s.avatar, { backgroundColor: C.primarySoft }]}><Ionicons name="shield-checkmark" size={18} color={C.primaryDark} /></View>
+                    <View style={{ flex: 1 }}><Text style={s.listName}>{entry.action ?? 'Administrative action'}</Text><Text style={s.listSub}>{entry.description ?? entry.details ?? ''}</Text><Text style={s.listMeta}>{entry.created_at ?? entry.createdAt ?? ''}</Text></View>
+                  </View>
+                ))}
               </View>
             )}
 
@@ -1304,7 +1681,7 @@ export default function AdminDashboard() {
                   </ScrollView>
                 </View>
 
-                {loadingUsers ? (
+                {isUsersLoading ? (
                   <ListSkeleton />
                 ) : filteredSeniors.length === 0 ? (
                   <EmptyState
@@ -1364,17 +1741,17 @@ export default function AdminDashboard() {
             <View style={s.footerColumn}>
               <Image source={require('../assets/images/bagong_pilipinas_logo.png')} style={s.footerLogo} resizeMode="contain" accessibilityLabel="Bagong Pilipinas logo" />
               <Text style={s.footerBrand}>Bagong Pilipinas</Text>
-              {canViewSeniorMap && <Text style={s.footerMessage}>{lastSynced
+              {canLoadUsers && <Text style={s.footerMessage}>{lastSynced
                 ? `Data synced ${lastSynced.toLocaleTimeString('en-PH', { hour: 'numeric', minute: '2-digit' })}`
                 : 'Waiting for first sync'}</Text>}
             </View>
           </View>
           <Text style={s.footerCopy}>? {new Date().getFullYear()} AUREA ? Municipality of Pateros{appVersion ? ` ? v${appVersion}` : ''}</Text>
           <View style={s.footerActions}>
-            <Pressable onPress={() => router.push('/chat' as any)} accessibilityRole="button" style={({ pressed }) => [s.footerAction, pressed && s.pressed]}>
+            {!isSuperAdmin && <Pressable onPress={() => router.push('/chat' as any)} accessibilityRole="button" style={({ pressed }) => [s.footerAction, pressed && s.pressed]}>
               <Ionicons name="chatbubbles-outline" size={16} color="#FFFFFF" /><Text style={s.footerActionTxt}>Live chat</Text>
-            </Pressable>
-            {canViewSeniorMap && <Pressable onPress={onRefresh} disabled={refreshing} accessibilityRole="button" style={({ pressed }) => [s.footerAction, pressed && s.pressed]}>
+            </Pressable>}
+            {canLoadUsers && <Pressable onPress={onRefresh} disabled={refreshing} accessibilityRole="button" style={({ pressed }) => [s.footerAction, pressed && s.pressed]}>
               {refreshing ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Ionicons name="refresh-outline" size={16} color="#FFFFFF" />}<Text style={s.footerActionTxt}>Refresh</Text>
             </Pressable>}
             <Pressable onPress={() => mainScroll.current?.scrollTo({ y: 0, animated: true })} accessibilityRole="button" style={({ pressed }) => [s.footerAction, pressed && s.pressed]}>
@@ -1383,6 +1760,48 @@ export default function AdminDashboard() {
           </View>
         </View>
       </ScrollView>
+    <Modal visible={!!selectedUser} transparent animationType="fade" onRequestClose={() => setSelectedUser(null)}>
+      <View style={s.modalBackdrop}>
+        <View style={s.modalCard}>
+          <View style={s.modalHeader}><Text style={s.modalTitle}>User details</Text><Pressable onPress={() => setSelectedUser(null)}><Ionicons name="close" size={22} color={C.ink} /></Pressable></View>
+          {selectedUser && <>
+            <Text style={s.detailName}>{fullName(selectedUser)}</Text>
+            <Text style={s.detailLine}>{selectedUser.email || 'No email'} · {selectedUser.contact || 'No contact'}</Text>
+            <Text style={s.detailLine}>{selectedUser.address || 'No address saved'}</Text>
+            <Text style={s.detailLine}>Role: {selectedUser.role || 'user'} · Status: {selectedUser.status || 'Active'}</Text>
+            <View style={s.modalActions}>
+              <Pressable style={s.modalButton} onPress={() => handleUserChange(selectedUser, { status: selectedUser.status === 'Active' ? 'Inactive' : 'Active' })}><Text style={s.modalButtonText}>{selectedUser.status === 'Active' ? 'Deactivate' : 'Activate'}</Text></Pressable>
+              <Pressable style={[s.modalButton, s.modalDanger]} onPress={() => handleUserDelete(selectedUser)}><Text style={s.modalButtonDangerText}>Delete</Text></Pressable>
+            </View>
+          </>}
+        </View>
+      </View>
+    </Modal>
+    <Modal visible={feedbackOpen} transparent animationType="fade" onRequestClose={() => setFeedbackOpen(false)}>
+      <View style={s.modalBackdrop}>
+        <View style={s.modalCard}>
+          <View style={s.modalHeader}>
+            <View><Text style={s.modalTitle}>Review AUREA</Text><Text style={s.detailLine}>How is your overall experience?</Text></View>
+            <Pressable onPress={() => setFeedbackOpen(false)}><Ionicons name="close" size={22} color={C.ink} /></Pressable>
+          </View>
+          <View style={s.starRow}>
+            {[1, 2, 3, 4, 5].map((star) => <Pressable key={star} onPress={() => setFeedbackRating(star)} accessibilityRole="button" accessibilityLabel={`${star} star rating`}><Ionicons name={star <= feedbackRating ? 'star' : 'star-outline'} size={32} color={star <= feedbackRating ? C.gold : C.inkFaint} /></Pressable>)}
+          </View>
+          <TextInput
+            value={feedbackComments}
+            onChangeText={setFeedbackComments}
+            placeholder="Tell us what we can improve..."
+            placeholderTextColor={C.inkFaint}
+            multiline
+            maxLength={2000}
+            style={s.feedbackInput}
+          />
+          <Pressable onPress={handleFeedbackSubmit} disabled={feedbackSubmitting} style={[s.modalButton, feedbackSubmitting && s.disabledButton]}>
+            {feedbackSubmitting ? <ActivityIndicator color={C.white} /> : <Text style={s.modalButtonText}>Submit review</Text>}
+          </Pressable>
+        </View>
+      </View>
+    </Modal>
     </SafeAreaView>
   );
 }
@@ -1399,7 +1818,12 @@ const s = StyleSheet.create({
   // Header
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    marginTop: sp(1), marginBottom: sp(5),
+    backgroundColor: C.primaryDark, borderRadius: 22,
+    padding: 14, marginTop: sp(1), marginBottom: sp(5),
+  },
+  adminHero: {
+    backgroundColor: C.primaryDark, borderRadius: 24,
+    marginTop: sp(1), marginBottom: sp(5), overflow: 'hidden',
   },
   brand:    { flexDirection: 'row', alignItems: 'center', flex: 1 },
   logoGrad: {
@@ -1407,15 +1831,69 @@ const s = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center', marginRight: 12,
     ...shadow(C.primaryMid, 0.3, 10, 4),
   },
-  h1:       { fontFamily: 'FraunTitle', fontSize: 25, color: C.ink, lineHeight: 29 },
-  brandSub: { fontFamily: 'InterBody', fontSize: 12, color: C.inkFaint, marginTop: 1 },
+  headerEyebrow: { fontFamily: 'InterBody', fontWeight: '700', fontSize: 10, color: C.gold, letterSpacing: 0.6 },
+  h1:       { fontFamily: 'FraunTitle', fontSize: 23, color: C.white, lineHeight: 27 },
+  brandSub: { fontFamily: 'InterBody', fontSize: 12, color: '#B8CEC0', marginTop: 1 },
   headerActions: { flexDirection: 'row', gap: 10 },
   iconBtn: {
     width: 44, height: 44, borderRadius: 22,
-    backgroundColor: C.card,
+    backgroundColor: 'rgba(255,255,255,0.12)',
     alignItems: 'center', justifyContent: 'center',
     ...shadow(C.ink, 0.08, 10, 3),
   },
+  superWelcome: {
+    borderRadius: 0, padding: 18, marginBottom: 0,
+    overflow: 'hidden', backgroundColor: C.primaryDark,
+  },
+  superWelcomeTop: {
+    flexDirection: 'row', alignItems: 'center', gap: 13,
+  },
+  superWelcomeEyebrow: {
+    fontFamily: 'InterBody', fontWeight: '700', fontSize: 10,
+    letterSpacing: 0.8, color: C.gold,
+  },
+  superWelcomeTitle: {
+    fontFamily: 'FraunTitle', fontSize: 23, color: C.white, marginTop: 3,
+  },
+  superWelcomeSub: {
+    fontFamily: 'InterBody', fontSize: 12, color: 'rgba(255,255,255,0.7)', marginTop: 3,
+  },
+  consoleStatus: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 10, paddingVertical: 8, borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+  },
+  statusDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: '#76D69A' },
+  consoleStatusText: { fontFamily: 'InterBody', fontSize: 11, fontWeight: '700', color: '#D5F1DE' },
+  superWelcomeFooter: {
+    flexDirection: 'row', justifyContent: 'space-between',
+    marginTop: 17, paddingTop: 12,
+    borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.14)',
+  },
+  superWelcomeFooterText: { fontFamily: 'InterBody', fontSize: 11, color: 'rgba(255,255,255,0.62)' },
+  operationsSection: { marginBottom: sp(6) },
+  sectionHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
+  operationsTitle: { fontFamily: 'FraunTitle', fontSize: 20, color: C.ink },
+  operationsSub: { fontFamily: 'InterBody', fontSize: 12, color: C.inkFaint, marginTop: 2 },
+  actionGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  operationCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    width: '48%', minHeight: 72, padding: 12, borderRadius: 16,
+    backgroundColor: C.card, borderWidth: 1, borderColor: C.line,
+    ...shadow(C.ink, 0.06, 8, 3),
+  },
+  actionIcon: { width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  actionTitle: { fontFamily: 'InterBody', fontSize: 13, fontWeight: '700', color: C.ink },
+  actionDesc: { fontFamily: 'InterBody', fontSize: 11, color: C.inkFaint, marginTop: 3 },
+  managementNav: { gap: 8, paddingBottom: 18, alignItems: 'center' },
+  managementNavItem: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    borderRadius: 16, paddingHorizontal: 13, paddingVertical: 9,
+    backgroundColor: C.card,
+  },
+  managementNavItemActive: { backgroundColor: C.primaryDark },
+  managementNavText: { fontFamily: 'InterBody', fontWeight: '600', fontSize: 12, color: C.inkSoft },
+  managementNavTextActive: { color: C.white },
 
   // Banner
   bannerWrap: {
@@ -1539,6 +2017,87 @@ const s = StyleSheet.create({
     paddingHorizontal: sp(4), paddingBottom: sp(4), paddingTop: sp(1),
   },
 
+  // Population profile
+  populationSection: { marginBottom: sp(2) },
+  populationCard: {
+    backgroundColor: C.card, borderRadius: 28, overflow: 'hidden',
+    marginBottom: sp(8), ...shadow(C.ink, 0.07, 12, 4),
+  },
+  populationSummary: {
+    flexDirection: 'row', alignItems: 'center', gap: 14,
+    padding: sp(5), backgroundColor: C.primaryDark,
+  },
+  populationSummaryIcon: {
+    width: 44, height: 44, borderRadius: 14,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: 'rgba(95,194,138,0.22)',
+  },
+  populationSummaryCopy: { flex: 1 },
+  populationEyebrow: {
+    fontFamily: 'InterBody', fontWeight: '700', fontSize: 10,
+    letterSpacing: 0.8, color: C.primaryBright,
+  },
+  populationTotal: {
+    fontFamily: 'FraunTitle', fontSize: 30, lineHeight: 34,
+    color: C.white, marginTop: 2,
+  },
+  populationMeta: {
+    fontFamily: 'InterBody', fontSize: 12, color: 'rgba(255,255,255,0.7)',
+    marginTop: 3,
+  },
+  populationColumns: { gap: 18, padding: sp(4) },
+  populationColumnsWide: { flexDirection: 'row', alignItems: 'flex-start' },
+  populationPanel: { flex: 1, minWidth: 0 },
+  populationPanelHeading: {
+    flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between',
+    gap: 8, marginBottom: 10,
+  },
+  populationPanelTitle: {
+    fontFamily: 'InterBody', fontWeight: '700', fontSize: 14, color: C.ink,
+  },
+  populationPanelCaption: {
+    fontFamily: 'InterBody', fontSize: 10.5, color: C.inkFaint,
+  },
+  ageChart: { gap: 16, paddingVertical: 5 },
+  ageChartRow: { gap: 7 },
+  ageChartLabel: { flexDirection: 'row', justifyContent: 'space-between', gap: 8 },
+  populationRowName: {
+    fontFamily: 'InterBody', fontSize: 12, color: C.inkSoft,
+  },
+  populationRowValue: {
+    fontFamily: 'InterBody', fontWeight: '700', fontSize: 12, color: C.primaryDark,
+  },
+  populationBarTrack: {
+    height: 11, borderRadius: 6, backgroundColor: C.lineSoft, overflow: 'hidden',
+  },
+  populationBarFill: { height: 11, borderRadius: 6, minWidth: 8 },
+  populationTable: {
+    borderWidth: 1, borderColor: C.line, borderRadius: 12, overflow: 'hidden',
+  },
+  populationTableHeader: {
+    flexDirection: 'row', justifyContent: 'space-between',
+    paddingHorizontal: 12, paddingVertical: 9, backgroundColor: C.lineSoft,
+  },
+  populationTableHeaderText: {
+    fontFamily: 'InterBody', fontWeight: '700', fontSize: 10,
+    letterSpacing: 0.5, textTransform: 'uppercase', color: C.inkFaint,
+  },
+  populationTableRow: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingHorizontal: 12, paddingVertical: 8, minHeight: 34,
+    borderTopWidth: 1, borderTopColor: C.lineSoft,
+  },
+  populationTableRowAlt: { backgroundColor: '#FAFCF9' },
+  populationBarangayColumn: { flex: 1, paddingRight: 10 },
+  populationFooter: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 6,
+    paddingHorizontal: sp(4), paddingBottom: sp(4),
+  },
+  populationSource: {
+    flex: 1, fontFamily: 'InterBody', fontSize: 10.5, lineHeight: 15,
+    color: C.inkFaint,
+  },
+
   // Segmented control
   segment: {
     flexDirection: 'row', backgroundColor: '#E4ECE1',
@@ -1561,6 +2120,15 @@ const s = StyleSheet.create({
   },
   listHeader: { paddingHorizontal: sp(4), paddingVertical: sp(3.5), borderBottomWidth: 1, borderBottomColor: C.lineSoft },
   listHeaderTxt: { fontFamily: 'InterBody', fontWeight: '600', fontSize: 12.5, color: C.inkSoft },
+  tableHeader: {
+    flexDirection: 'row', alignItems: 'center', gap: sp(3),
+    paddingHorizontal: sp(4), paddingVertical: 10,
+    backgroundColor: C.lineSoft, borderBottomWidth: 1, borderBottomColor: C.line,
+  },
+  tableHeaderText: {
+    flex: 1, fontFamily: 'InterBody', fontWeight: '700',
+    fontSize: 10, letterSpacing: 0.4, textTransform: 'uppercase', color: C.inkFaint,
+  },
   seniorHeader: { padding: sp(4), borderBottomWidth: 1, borderBottomColor: C.lineSoft, gap: sp(3) },
   searchWrap: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
@@ -1595,6 +2163,32 @@ const s = StyleSheet.create({
   listMeta: { fontFamily: 'InterBody', fontSize: 12, lineHeight: 17, color: C.inkFaint, marginTop: 3 },
   roleBadge: { borderRadius: 10, paddingHorizontal: 9, paddingVertical: 4 },
   roleBadgeTxt: { fontFamily: 'InterBody', fontWeight: '700', fontSize: 11 },
+  smallAction: { borderRadius: 10, backgroundColor: C.primarySoft, paddingHorizontal: 9, paddingVertical: 6 },
+  smallActionText: { fontFamily: 'InterBody', fontWeight: '700', fontSize: 11, color: C.primaryDark },
+  statsRow: { flexDirection: 'row', gap: 8, marginTop: 10 },
+  statCard: { flex: 1, backgroundColor: C.lineSoft, borderRadius: 12, padding: 10 },
+  statValue: { fontFamily: 'FraunTitle', fontSize: 22, color: C.primaryDark },
+  statLabel: { fontFamily: 'InterBody', fontSize: 11, color: C.inkSoft, marginTop: 2 },
+  roleRow: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: sp(4) },
+  roleCount: { fontFamily: 'FraunTitle', fontSize: 22, color: C.primaryDark },
+  roleTitleLine: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  roleBar: { height: 6, borderRadius: 3, backgroundColor: C.lineSoft, overflow: 'hidden', marginTop: 8 },
+  roleBarFill: { height: 6, borderRadius: 3, minWidth: 3 },
+  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.42)', alignItems: 'center', justifyContent: 'center', padding: 20 },
+  modalCard: { width: '100%', maxWidth: 560, backgroundColor: C.card, borderRadius: 24, padding: 20, ...shadow(C.ink, 0.2, 18, 8) },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
+  modalTitle: { fontFamily: 'FraunTitle', fontSize: 22, color: C.ink },
+  detailName: { fontFamily: 'InterBody', fontWeight: '700', fontSize: 17, color: C.ink },
+  detailLine: { fontFamily: 'InterBody', fontSize: 13, lineHeight: 20, color: C.inkSoft, marginTop: 5 },
+  modalActions: { flexDirection: 'row', gap: 10, marginTop: 18, marginBottom: 14 },
+  modalButton: { backgroundColor: C.primaryDark, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10 },
+  disabledButton: { opacity: 0.6 },
+  modalDanger: { backgroundColor: C.dangerSoft },
+  modalButtonText: { fontFamily: 'InterBody', fontWeight: '700', fontSize: 12, color: C.white },
+  modalButtonDangerText: { fontFamily: 'InterBody', fontWeight: '700', fontSize: 12, color: C.danger },
+  modalLabel: { fontFamily: 'InterBody', fontWeight: '700', fontSize: 12, color: C.inkSoft, marginBottom: 8 },
+  starRow: { flexDirection: 'row', justifyContent: 'center', gap: 8, marginBottom: 18 },
+  feedbackInput: { minHeight: 110, borderWidth: 1, borderColor: C.line, borderRadius: 14, padding: 13, color: C.ink, fontFamily: 'InterBody', fontSize: 13, textAlignVertical: 'top', marginBottom: 14 },
 
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: sp(2.5) },
   chip: {
