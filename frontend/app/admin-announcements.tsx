@@ -3,7 +3,7 @@ import { ActivityIndicator, Alert, Image, Modal, Pressable, ScrollView, StyleShe
 import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import * as ImagePicker from 'expo-image-picker';
-import { useRouter } from 'expo-router';
+import { Redirect, useRouter } from 'expo-router';
 import { useAuth } from '../context/AuthContext';
 
 type Announcement = { id: string; title: string; body: string; image_url?: string | null; published?: boolean; created_at?: string; updated_at?: string };
@@ -28,7 +28,9 @@ async function request(path: string, token?: string, options: RequestInit = {}) 
 
 export default function AdminAnnouncements() {
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
+  const canManage = user?.role?.trim().toLowerCase() === 'osca admin';
+  const token = user?.token;
   const [items, setItems] = useState<Announcement[]>([]);
   const [editing, setEditing] = useState<Announcement | null>(null);
   const [title, setTitle] = useState('');
@@ -37,22 +39,27 @@ export default function AdminAnnouncements() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Announcement | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+  const deleteInFlight = React.useRef(false);
 
   const load = useCallback(async () => {
-    setLoading(true);
+    if (!canManage || !token) return;
     try {
-      const data = await request('/api/announcements', user?.token);
+      const data = await request('/api/announcements', token);
       setItems(data.announcements || []);
     } catch (error) {
       Alert.alert('Could not load announcements', error instanceof Error ? error.message : 'Try again.');
     } finally {
       setLoading(false);
     }
-  }, [user?.token]);
+  }, [canManage, token]);
 
   useEffect(() => { load(); }, [load]);
 
   const openEditor = (item?: Announcement) => {
+    if (!canManage) return;
     setEditorOpen(true);
     setEditing(item || null);
     setTitle(item?.title || '');
@@ -78,6 +85,7 @@ export default function AdminAnnouncements() {
   };
 
   const save = async () => {
+    if (!canManage) return;
     if (!user?.token || !title.trim() || !body.trim()) {
       Alert.alert('Missing details', 'Add an announcement title and message.');
       return;
@@ -90,7 +98,7 @@ export default function AdminAnnouncements() {
       });
       setItems((current) => editing
         ? current.map((item) => item.id === editing.id ? data.announcement : item)
-        : [data.announcement, ...current]);
+        : [data.announcement]);
       setEditing(null);
       setEditorOpen(false);
       setTitle('');
@@ -103,39 +111,66 @@ export default function AdminAnnouncements() {
     }
   };
 
-  const remove = (item: Announcement) => {
-    Alert.alert('Delete announcement', `Delete "${item.title}"?`, [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete', style: 'destructive', onPress: async () => {
-        try {
-          await request(`/api/announcements/${item.id}`, user?.token, { method: 'DELETE' });
-          setItems((current) => current.filter((entry) => entry.id !== item.id));
-        } catch (error) {
-          Alert.alert('Could not delete announcement', error instanceof Error ? error.message : 'Try again.');
-        }
-      } },
-    ]);
+  const remove = async () => {
+    if (!canManage || !deleteTarget || deleteInFlight.current) return;
+    if (!user?.token) {
+      setDeleteError('Please sign in again before deleting this announcement.');
+      return;
+    }
+    deleteInFlight.current = true;
+    setDeleting(true);
+    setDeleteError('');
+    try {
+      await request(`/api/announcements/${encodeURIComponent(deleteTarget.id)}`, user.token, { method: 'DELETE' });
+      setItems((current) => current.filter((entry) => entry.id !== deleteTarget.id));
+      setDeleteTarget(null);
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : 'Could not delete the announcement. Try again.');
+    } finally {
+      deleteInFlight.current = false;
+      setDeleting(false);
+    }
   };
+
+  if (authLoading) return <View style={s.page}><ActivityIndicator color={COLORS.primary} /></View>;
+  if (!user) return <Redirect href="/login" />;
+  if (!canManage) return <Redirect href="/(tabs)" />;
 
   return (
     <View style={s.page}>
       <View style={s.header}>
-        <Pressable onPress={() => router.back()} style={s.iconButton}><Ionicons name="arrow-back" size={20} color="#FFF" /></Pressable>
+        <Pressable onPress={() => router.replace('/admin-dashboard')} style={s.iconButton}><Ionicons name="arrow-back" size={20} color="#FFF" /></Pressable>
         <View style={s.headerIcon}><Ionicons name="megaphone" size={21} color="#F6D17A" /></View>
         <View style={{ flex: 1 }}><Text style={s.eyebrow}>OSCA ADMIN</Text><Text style={s.title}>Announcements</Text><Text style={s.subtitle}>Share updates with AUREA residents</Text></View>
-        <Pressable onPress={load} style={s.iconButton}><Ionicons name="refresh" size={20} color="#FFF" /></Pressable>
+        <Pressable onPress={() => { setLoading(true); void load(); }} style={s.iconButton}><Ionicons name="refresh" size={20} color="#FFF" /></Pressable>
       </View>
       <ScrollView contentContainerStyle={s.content}>
         <Pressable onPress={() => openEditor()} style={s.createButton}><Ionicons name="add" size={18} color="#FFF" /><Text style={s.createText}>New announcement</Text></Pressable>
+        <Text style={s.empty}>Publishing a new announcement deletes the previous announcement.</Text>
         {loading ? <ActivityIndicator color={COLORS.primary} size="large" /> : items.length === 0 ? <Text style={s.empty}>No announcements yet.</Text> : items.map((item) => (
           <View key={item.id} style={s.card}>
             {item.image_url ? <Image source={{ uri: item.image_url }} style={s.cardImage} resizeMode="cover" /> : null}
             <View style={s.cardTop}><View style={{ flex: 1 }}><Text style={s.cardTitle}>{item.title}</Text><Text style={s.date}>{item.created_at ? new Date(item.created_at).toLocaleString() : ''}</Text></View><View style={s.published}><Text style={s.publishedText}>Published</Text></View></View>
             <Text style={s.body}>{item.body}</Text>
-            <View style={s.actions}><Pressable onPress={() => openEditor(item)} style={s.outline}><Text style={s.outlineText}>Edit</Text></Pressable><Pressable onPress={() => remove(item)} style={s.delete}><Text style={s.deleteText}>Delete</Text></Pressable></View>
+            <View style={s.actions}><Pressable onPress={() => openEditor(item)} style={s.outline}><Text style={s.outlineText}>Edit</Text></Pressable><Pressable onPress={() => { setDeleteError(''); setDeleteTarget(item); }} style={s.delete}><Text style={s.deleteText}>Delete</Text></Pressable></View>
           </View>
         ))}
       </ScrollView>
+      <Modal visible={!!deleteTarget} transparent animationType="fade" onRequestClose={() => { if (!deleteInFlight.current) setDeleteTarget(null); }}>
+        <View style={s.backdrop}>
+          <View style={s.modal}>
+            <Text style={s.modalTitle}>Delete announcement?</Text>
+            <Text style={s.body}>Delete &quot;{deleteTarget?.title}&quot;? Residents will no longer see this announcement.</Text>
+            {deleteError ? <Text accessibilityRole="alert" style={s.deleteText}>{deleteError}</Text> : null}
+            <View style={s.actions}>
+              <Pressable accessibilityRole="button" disabled={deleting} onPress={() => setDeleteTarget(null)} style={s.outline}><Text style={s.outlineText}>Cancel</Text></Pressable>
+              <Pressable accessibilityRole="button" accessibilityLabel={deleting ? 'Deleting announcement' : 'Confirm delete announcement'} disabled={deleting} onPress={remove} style={s.delete}>
+                {deleting ? <ActivityIndicator color="#B42318" /> : <Text style={s.deleteText}>Delete</Text>}
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
       <Modal visible={editorOpen} transparent animationType="fade" onRequestClose={() => { setEditorOpen(false); setEditing(null); setTitle(''); setBody(''); setImageUrl(''); }}>
         <View style={s.backdrop}><View style={s.modal}><View style={s.modalHeader}><Text style={s.modalTitle}>{editing ? 'Edit announcement' : 'New announcement'}</Text><Pressable onPress={() => { setEditorOpen(false); setEditing(null); setTitle(''); setBody(''); setImageUrl(''); }}><Ionicons name="close" size={22} color={COLORS.ink} /></Pressable></View><TextInput value={title} onChangeText={setTitle} placeholder="Announcement title" placeholderTextColor={COLORS.faint} style={s.input} /><TextInput value={body} onChangeText={setBody} placeholder="Write the announcement..." placeholderTextColor={COLORS.faint} style={[s.input, s.bodyInput]} multiline /><Pressable onPress={chooseImage} style={s.imageButton}><Ionicons name="image-outline" size={17} color={COLORS.primary} /><Text style={s.imageButtonText}>{imageUrl ? 'Change image' : 'Add image'}</Text></Pressable>{imageUrl ? <Image source={{ uri: imageUrl }} style={s.preview} resizeMode="cover" /> : null}<Pressable onPress={save} disabled={saving} style={s.save}>{saving ? <ActivityIndicator color="#FFF" /> : <Text style={s.saveText}>{editing ? 'Save changes' : 'Publish announcement'}</Text>}</Pressable></View></View>
       </Modal>

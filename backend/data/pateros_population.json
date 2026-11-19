@@ -1,0 +1,20 @@
+{
+  "census": "2024 POPCEN",
+  "reference_date": "2024-07-01",
+  "verified_at": "2026-11-15",
+  "source_url": "https://psa.gov.ph/classification/psgc/barangays/1381701000",
+  "population": 67319,
+  "income_class": "1st",
+  "barangays": [
+    {"code": "1381701007", "name": "Santa Ana", "value": 30950, "classification": "Urban"},
+    {"code": "1381701001", "name": "Aguho", "value": 7448, "classification": "Urban"},
+    {"code": "1381701008", "name": "Santo Rosario-Kanluran", "value": 5504, "classification": "Urban"},
+    {"code": "1381701003", "name": "Martires Del 96", "value": 5130, "classification": "Urban"},
+    {"code": "1381701006", "name": "San Roque", "value": 4897, "classification": "Urban"},
+    {"code": "1381701009", "name": "Santo Rosario-Silangan", "value": 4744, "classification": "Urban"},
+    {"code": "1381701010", "name": "Tabacalera", "value": 2853, "classification": "Urban"},
+    {"code": "1381701005", "name": "San Pedro", "value": 2252, "classification": "Urban"},
+    {"code": "1381701004", "name": "Poblacion", "value": 2089, "classification": "Urban"},
+    {"code": "1381701002", "name": "Magtanggol", "value": 1452, "classification": "Urban"}
+  ]
+}

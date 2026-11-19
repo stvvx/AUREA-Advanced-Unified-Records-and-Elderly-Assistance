@@ -21,6 +21,7 @@ from routes import register_lolo_routes
 from services.senior_categories import SENIOR_CATEGORIES
 from services.senior_profiles import with_senior_fields, income_source_patch
 from services.service_records import service_records
+from services.psa_population import get_population
 
 
 # ---------------------------------------------------------------------------
@@ -1487,6 +1488,11 @@ def admin_feedback():
         return jsonify({"message": str(exc)}), 500
 
 
+@app.get("/api/population/pateros")
+def pateros_population():
+    return jsonify(get_population()), 200
+
+
 @app.route("/api/announcements", methods=["GET", "POST", "OPTIONS"])
 def announcements():
     if request.method == "OPTIONS":
@@ -1499,7 +1505,7 @@ def announcements():
         except RuntimeError as exc:
             return jsonify({"message": str(exc)}), 503
 
-    user, error = require_admin_session({"osca admin", "super admin"})
+    user, error = require_admin_session({"osca admin"})
     if error:
         return error
     payload = request.get_json(silent=True) or {}
@@ -1513,9 +1519,9 @@ def announcements():
     if not title or len(title) > 160 or not body or len(body) > 5000:
         return jsonify({"message": "Enter a title and announcement text within the allowed limits."}), 400
     try:
-        created = supabase_rest("POST", "announcements", payload={
-            "title": title, "body": body, "image_url": image_url, "published": bool(payload.get("published", True)),
-            "created_by": user["id"],
+        created = supabase_rest("POST", "rpc/replace_announcement", payload={
+            "p_title": title, "p_body": body, "p_image_url": image_url,
+            "p_published": bool(payload.get("published", True)), "p_created_by": user["id"],
         })
         return jsonify({"announcement": created[0] if isinstance(created, list) and created else created}), 201
     except RuntimeError as exc:
@@ -1526,7 +1532,7 @@ def announcements():
 def update_announcement(announcement_id):
     if request.method == "OPTIONS":
         return ("", 204)
-    user, error = require_admin_session({"osca admin", "super admin"})
+    user, error = require_admin_session({"osca admin"})
     if error:
         return error
     try:

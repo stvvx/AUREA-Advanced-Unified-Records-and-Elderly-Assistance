@@ -11,3 +11,4 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 tts_cache/
+.cache/

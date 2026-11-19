@@ -17,6 +17,7 @@ import {
   AccessibilityInfo,
   Modal,
   Alert,
+  Linking,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -127,7 +128,7 @@ const SUPER_ADMIN_TABS = [
 function getActions(role: string) {
   if (role === 'super admin') return SUPER_ACTIONS;
   if (role === 'med admin')   return MED_ACTIONS;
-  return OSCA_ACTIONS;
+  return role === 'osca admin' ? OSCA_ACTIONS : [];
 }
 
 const BARANGAYS = [
@@ -141,18 +142,11 @@ const PATEROS_AGE_DISTRIBUTION = [
   { label: '65+ years', value: 3644, color: C.gold },
 ];
 
-const PATEROS_BARANGAY_POPULATION = [
-  { name: 'Santa Ana', value: 30950 },
-  { name: 'Aguho', value: 7448 },
-  { name: 'Santo Rosario-Kanluran', value: 5504 },
-  { name: 'Martires Del 96', value: 5130 },
-  { name: 'San Roque', value: 4897 },
-  { name: 'Santo Rosario-Silangan', value: 4744 },
-  { name: 'Tabacalera', value: 2853 },
-  { name: 'San Pedro', value: 2252 },
-  { name: 'Poblacion', value: 2089 },
-  { name: 'Magtanggol', value: 1452 },
-];
+type PsaPopulation = {
+  census: string; population: number; income_class: string; verified_at: string;
+  reference_date?: string; source_url: string; sync_status: 'verified' | 'saved';
+  barangays: { code: string; name: string; value: number; classification: string }[];
+};
 
 // Approximate barangay locations from the Location section of each PhilAtlas profile.
 // https://www.philatlas.com/luzon/ncr/pateros.html links to all ten profiles.
@@ -384,7 +378,10 @@ function buildBarangayMapHtml(counts: Record<string, number>, heatmap = false): 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 ${heatmap ? '<script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>' : ''}
 <script>
-  const map = L.map('map', {zoomControl:false, maxBoundsViscosity:1});
+  const map = L.map('map', {
+    zoomControl:false, maxBoundsViscosity:1, bounceAtZoomLimits:false,
+    zoomSnap:0.1, zoomDelta:1
+  });
   L.control.zoom({position:'bottomright'}).addTo(map);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution:'&copy; OpenStreetMap contributors', maxZoom:19, noWrap:true
@@ -443,10 +440,39 @@ ${heatmap ? '<script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat
     L.marker(barangay.coordinates, {icon:icon, title:label, alt:label}).addTo(map);
   });
   map.fitBounds(bounds, {
-    padding:[24,24], maxZoom:16
+    padding:[8,8], maxZoom:19
   });
-  map.setMinZoom(map.getZoom());
-  map.whenReady(function() { map.invalidateSize(); });
+  let overviewZoom = map.getZoom();
+  const overviewCenter = map.getCenter();
+  map.setMinZoom(overviewZoom);
+  function keepOverviewPosition() {
+    if (map.getZoom() <= overviewZoom) {
+      map.dragging.disable();
+      if (!map.getCenter().equals(overviewCenter)) {
+        map.setView(overviewCenter, overviewZoom, {animate:false});
+      }
+    } else {
+      map.dragging.enable();
+    }
+  }
+  map.on('zoomend moveend', keepOverviewPosition);
+  keepOverviewPosition();
+  // Recalculate the widest allowed view when the iframe/WebView changes size.
+  map.on('resize', function() {
+    const wasOverview = map.getZoom() <= overviewZoom;
+    overviewZoom = Math.min(19, map.getBoundsZoom(bounds, false, L.point(16,16)));
+    map.setMinZoom(overviewZoom);
+    if (wasOverview || map.getZoom() < overviewZoom) {
+      map.setView(overviewCenter, overviewZoom, {animate:false});
+    }
+    keepOverviewPosition();
+  });
+  if (window.ResizeObserver) {
+    const observer = new ResizeObserver(function() { map.invalidateSize({pan:false}); });
+    observer.observe(document.getElementById('map'));
+    window.addEventListener('pagehide', function() { observer.disconnect(); }, {once:true});
+  }
+  map.whenReady(function() { map.invalidateSize({pan:false}); });
 </script></body></html>`;
 }
 
@@ -844,7 +870,7 @@ export default function AdminDashboard() {
   const actionWidth = width >= 1000 ? '16.666666%' : width >= 600 ? '33.333333%' : '50%';
   const router = useRouter();
   const { user, logout } = useAuth();
-  const role = (user?.role ?? 'osca admin').toLowerCase();
+  const role = (user?.role ?? '').trim().toLowerCase();
   const meta = ROLE_META[role] ?? ROLE_META['osca admin'];
   const actions = getActions(role);
   const isSuperAdmin = role === 'super admin';
@@ -858,6 +884,8 @@ export default function AdminDashboard() {
   const [loadingUsers, setLoadingUsers] = useState(true);
   const [loadingTx, setLoadingTx]       = useState(false);
   const [refreshing, setRefreshing]     = useState(false);
+  const [psaPopulation, setPsaPopulation] = useState<PsaPopulation | null>(null);
+  const [psaError, setPsaError] = useState('');
   const [lastSynced, setLastSynced]     = useState<Date | null>(null);
   const [activeTab, setActiveTab] = useState<'users' | 'transactions' | 'seniors' | 'issues' | 'roles' | 'audit'>('users');
   const [issues, setIssues] = useState<any[]>([]);
@@ -997,10 +1025,32 @@ export default function AdminDashboard() {
       .catch(() => showToast('Could not load administrative records.', 'error'));
   }, [isSuperAdmin, activeTab, showToast, user?.token]);
 
+  const loadPopulation = useCallback(async (signal?: AbortSignal) => {
+    try {
+      const response = await fetch(`${getBaseUrl()}/api/population/pateros`, { signal });
+      if (!response.ok) throw new Error('Population data is unavailable.');
+      const data: PsaPopulation = await response.json();
+      if (!data.census || !Array.isArray(data.barangays) || !Number.isInteger(data.population)
+          || data.barangays.reduce((sum, row) => sum + row.value, 0) !== data.population) {
+        throw new Error('Population data could not be verified.');
+      }
+      if (!signal?.aborted) { setPsaPopulation(data); setPsaError(''); }
+    } catch {
+      if (!signal?.aborted) setPsaError('Unable to refresh PSA data.');
+    }
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void loadPopulation(controller.signal);
+    const timer = setInterval(() => { void loadPopulation(controller.signal); }, 60 * 60 * 1000);
+    return () => { controller.abort(); clearInterval(timer); };
+  }, [loadPopulation]);
+
   const onRefresh = async () => {
     if (!canLoadUsers) return;
     setRefreshing(true);
-    await loadUsers();
+    await Promise.all([loadUsers(), loadPopulation()]);
     setRefreshing(false);
   };
 
@@ -1391,25 +1441,25 @@ export default function AdminDashboard() {
         <View style={s.populationSection}>
           <SectionHeader
             title="Pateros at a glance"
-            subtitle="Reference population profile from the 2020 Census and 2024 barangay estimates."
+            subtitle="Official PSA census counts. Each dataset shows its own census year."
           />
-          <View style={s.populationCard}>
+          {psaPopulation ? <View style={s.populationCard}>
             <View style={s.populationSummary}>
               <View style={s.populationSummaryIcon}>
                 <Ionicons name="stats-chart" size={20} color={C.white} />
               </View>
               <View style={s.populationSummaryCopy}>
                 <Text style={s.populationEyebrow}>MUNICIPAL POPULATION</Text>
-                <Text style={s.populationTotal}>67,319</Text>
-                <Text style={s.populationMeta}>10 barangays · 1st class municipality · all barangays urban</Text>
+                <Text style={s.populationTotal}>{psaPopulation.population.toLocaleString()}</Text>
+                <Text style={s.populationMeta}>{psaPopulation.barangays.length} barangays · {psaPopulation.income_class} class municipality · {psaPopulation.census}{psaPopulation.reference_date ? ` · as of ${psaPopulation.reference_date}` : ''}</Text>
               </View>
             </View>
 
-            <View style={[s.populationColumns, width >= 850 && s.populationColumnsWide]}>
+            <View style={s.populationColumns}>
               <View style={s.populationPanel}>
                 <View style={s.populationPanelHeading}>
-                  <Text style={s.populationPanelTitle}>Age distribution</Text>
-                  <Text style={s.populationPanelCaption}>2020 Census</Text>
+                  <Text style={s.populationPanelTitle}>Historical age distribution</Text>
+                  <Text style={s.populationPanelCaption}>2020 CPH · household population</Text>
                 </View>
                 <View style={s.ageChart}>
                   {PATEROS_AGE_DISTRIBUTION.map((item) => (
@@ -1429,19 +1479,20 @@ export default function AdminDashboard() {
                     </View>
                   ))}
                 </View>
+                <Text style={s.populationSource}>2020 household population: 65,064. These historical age counts are separate from the newer total above.</Text>
               </View>
 
               <View style={s.populationPanel}>
                 <View style={s.populationPanelHeading}>
                   <Text style={s.populationPanelTitle}>Population by barangay</Text>
-                  <Text style={s.populationPanelCaption}>2024 estimate</Text>
+                  <Text style={s.populationPanelCaption}>{psaPopulation.census}</Text>
                 </View>
                 <View style={s.populationTable}>
                   <View style={s.populationTableHeader}>
                     <Text style={[s.populationTableHeaderText, s.populationBarangayColumn]}>Barangay</Text>
                     <Text style={s.populationTableHeaderText}>Population</Text>
                   </View>
-                  {PATEROS_BARANGAY_POPULATION.map((item, index) => (
+                  {psaPopulation.barangays.map((item, index) => (
                     <View key={item.name} style={[s.populationTableRow, index % 2 === 1 && s.populationTableRowAlt]}>
                       <Text style={[s.populationRowName, s.populationBarangayColumn]} numberOfLines={1}>{item.name}</Text>
                       <Text style={s.populationRowValue}>{item.value.toLocaleString()}</Text>
@@ -1453,16 +1504,20 @@ export default function AdminDashboard() {
 
             <View style={s.populationFooter}>
               <Ionicons name="information-circle-outline" size={14} color={C.inkFaint} />
-              <Text style={s.populationSource}>Sources: Philippine Statistics Authority (PSA), 2024 Census of Population and Housing; City Population, Pateros age distribution, 2020 Census.</Text>
+              <View style={{ flex: 1, gap: 8 }}>
+                <Text style={s.populationSource}>{psaError || (psaPopulation.sync_status === 'saved' ? 'Live PSA check unavailable. Showing saved verified counts.' : 'Checked against the PSA population page.')} Last verified: {psaPopulation.verified_at.slice(0, 10)}. Automatic checks run daily when this dashboard is in use.</Text>
+                <Pressable accessibilityRole="link" onPress={() => { void Linking.openURL(psaPopulation.source_url); }}><Text style={s.populationSource}>Source: PSA PSGC — municipal and barangay population ↗</Text></Pressable>
+                <Pressable accessibilityRole="link" onPress={() => { void Linking.openURL('https://rssoncr.psa.gov.ph/sites/default/files/CIF%20MUNICIPALITY%20OF%20PATEROS%202022.pdf'); }}><Text style={s.populationSource}>Age source: PSA Pateros Countryside in Figures 2022, Table 1.4 (2020 CPH) ↗</Text></Pressable>
+              </View>
             </View>
-          </View>
+          </View> : <View style={s.populationCard}><View style={s.populationFooter}>{psaError ? <><Text style={s.populationSource}>{psaError}</Text><Pressable onPress={() => { void loadPopulation(); }}><Text style={s.smallActionText}>Retry</Text></Pressable></> : <ActivityIndicator color={C.primary} />}</View></View>}
         </View>
 
         {/* ── SUPER ADMIN: MANAGEMENT ── */}
         {!isSuperAdmin && (
           <>
             {/* Users */}
-            {activeTab === 'users' && (
+            {role !== 'osca admin' && activeTab === 'users' && (
               <View style={s.listCard}>
                 <View style={s.listHeader}>
                   <Text style={s.listHeaderTxt}>{visibleUsers.length} of {users.length} registered users</Text>
@@ -2046,8 +2101,7 @@ const s = StyleSheet.create({
     marginTop: 3,
   },
   populationColumns: { gap: 18, padding: sp(4) },
-  populationColumnsWide: { flexDirection: 'row', alignItems: 'flex-start' },
-  populationPanel: { flex: 1, minWidth: 0 },
+  populationPanel: { width: '100%', minWidth: 0 },
   populationPanelHeading: {
     flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between',
     gap: 8, marginBottom: 10,
