@@ -1,14 +1,14 @@
+import { useSettings } from '../../context/SettingsContext';
+import { DARK_SURFACES } from '../../lib/appTheme';
 import React from 'react';
 import {
   View,
-  Text,
   ActivityIndicator,
   ScrollView,
   StyleSheet,
   StatusBar,
   TouchableOpacity,
   Pressable,
-  TextInput,
   Image,
   Modal,
   useWindowDimensions,
@@ -17,15 +17,29 @@ import {
   NativeSyntheticEvent,
   NativeScrollEvent,
 } from 'react-native';
+import { Text, TextInput } from '../../components/AppText';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../../context/AuthContext';
+import { getProfileCompletion } from '../../lib/profileCompletion';
 import Toast from '../../components/Toast';
-import { BENEFIT_ITEMS } from '../../data/benefits';
+import { BENEFIT_ITEMS, type BenefitDefinition } from '../../data/benefits';
+import { emergencyBenefit } from '../../data/benefits/emergency';
 import { fetchUnreadCount } from '../../services/chatApi';
 import Constants from 'expo-constants';
+
+const philHealthLogo = require('../../assets/images/philhealth-logo.png');
+
+function BenefitIcon({ benefit, size }: { benefit: BenefitDefinition; size: number }) {
+  if (benefit.id === 'philhealth') {
+    const imageSize = Math.round(size * 1.45);
+    return <Image source={philHealthLogo} style={{ width: imageSize, height: imageSize }} resizeMode="contain" accessible={false} />;
+  }
+
+  return <Ionicons name={benefit.icon as any} size={size} color={benefit.color} />;
+}
 
 function shadow(color: string, opacity: number, radius = 14, height = 6) {
   return Platform.select({
@@ -57,7 +71,10 @@ const C = {
   ai:          '#1E60FF',
   aiSoft:      '#EAF2FF',
   overlayBot:  'rgba(4,14,9,0.85)',
+  accent: '#1F5C3E',
 };
+const darkColors = { ...C, ...DARK_SURFACES, danger: '#FFAB9C', aiSoft: '#182B4D' };
+
 
 const sp = (n: number) => n * 4;
 
@@ -126,7 +143,7 @@ const PATEROS_FACTS = [
   },
   {
     icon: 'business',
-    color: C.primary,
+    color: C.accent,
     bg: C.primarySoft,
     title: 'Munisipyo ng Pateros',
     text: 'Dito matatagpuan ang Munisipyo, simbahan, at OSCA para sa mga senior.',
@@ -183,6 +200,7 @@ const PATEROS_PROFILE = {
 function SectionHeader({
   title, subtitle, actionLabel, onAction,
 }: { title: string; subtitle?: string; actionLabel?: string; onAction?: () => void }) {
+  const { C, s } = useScreenTheme();
   return (
     <View style={s.sectionHead}>
       <View style={{ flex: 1 }}>
@@ -198,7 +216,7 @@ function SectionHeader({
           style={s.sectionAction}
         >
           <Text style={s.sectionActionText}>{actionLabel}</Text>
-          <Ionicons name="chevron-forward" size={15} color={C.primary} />
+          <Ionicons name="chevron-forward" size={15} color={C.accent} />
         </TouchableOpacity>
       ) : null}
     </View>
@@ -206,6 +224,7 @@ function SectionHeader({
 }
 
 export default function DashboardScreen() {
+  const { C, s, dark } = useScreenTheme();
   const router = useRouter();
   const { user, logout } = useAuth();
   const { width } = useWindowDimensions();
@@ -260,22 +279,7 @@ export default function DashboardScreen() {
   const displayedUnreadChatCount = user?.id ? unreadChatCount : 0;
   const missingProfileFields = React.useMemo(() => {
     if (!user) return [];
-    return [
-      [user.firstName, 'first name'],
-      [user.lastName, 'last name'],
-      [user.email, 'email address'],
-      [user.dob, 'date of birth'],
-      [user.category && user.category !== 'Not Specified' ? user.category : '', 'senior citizen category'],
-      [user.gender, 'gender'],
-      [user.civilStatus, 'civil status'],
-      [user.sourceOfIncome, 'source of income'],
-      [user.sourceOfIncome === 'Working' ? user.occupation : 'provided', 'type of work'],
-      [user.spouse, 'spouse name'],
-      [user.monthlyIncome, 'monthly income'],
-      [user.contact, 'contact number'],
-      [user.address, 'address'],
-      [user.birthcert, 'birth certificate'],
-    ].filter(([value]) => !String(value ?? '').trim()).map(([, label]) => label);
+    return getProfileCompletion(user).filter(({ done }) => !done).map(({ label }) => label);
   }, [user]);
 
   React.useEffect(() => {
@@ -315,6 +319,10 @@ export default function DashboardScreen() {
   }, [searchQuery]);
 
   const openBenefit = (benefitId: string) => {
+    if (benefitId === emergencyBenefit.id) {
+      router.push('/emergency');
+      return;
+    }
     if (benefitId === 'movie-center') {
       router.push('/movie-book');
       return;
@@ -445,7 +453,7 @@ export default function DashboardScreen() {
 
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
-      <StatusBar barStyle="dark-content" />
+      <StatusBar barStyle={dark ? 'light-content' : 'dark-content'} />
       <Toast
         visible={toast.visible}
         message={toast.message}
@@ -496,7 +504,7 @@ export default function DashboardScreen() {
                     accessibilityRole="button"
                     accessibilityLabel="Open OSCA support chat"
                   >
-                    <Ionicons name="chatbubbles-outline" size={22} color={C.primaryDark} />
+                    <Ionicons name="chatbubbles-outline" size={22} color={dark ? C.accent : C.primaryDark} />
                     {displayedUnreadChatCount > 0 && (
                       <View style={s.chatBadge}>
                         <Text style={s.chatBadgeText}>
@@ -516,7 +524,7 @@ export default function DashboardScreen() {
                     accessibilityRole="button"
                     accessibilityLabel="Open menu"
                   >
-                    <Ionicons name={menuOpen ? 'close' : 'menu'} size={23} color={C.primaryDark} />
+                    <Ionicons name={menuOpen ? 'close' : 'menu'} size={23} color={dark ? C.accent : C.primaryDark} />
                   </TouchableOpacity>
                 )}
 
@@ -538,7 +546,7 @@ export default function DashboardScreen() {
                         style={s.avatarImg}
                       />
                     ) : (
-                      <Ionicons name="person-circle" size={42} color={C.primaryDark} />
+                      <Ionicons name="person-circle" size={42} color={dark ? C.accent : C.primaryDark} />
                     )}
                   </TouchableOpacity>
                 ) : (
@@ -584,20 +592,6 @@ export default function DashboardScreen() {
                       <View style={s.headerMenuDivider} />
                     </>
                   )}
-                  <TouchableOpacity
-                    style={[s.headerMenuItem, webPointer]}
-                    onPress={() => {
-                      setMenuOpen(false);
-                      router.push('/forum' as any);
-                    }}
-                    activeOpacity={0.8}
-                    accessibilityRole="button"
-                    accessibilityLabel="Open community forum"
-                  >
-                    <Ionicons name="people-outline" size={18} color={C.ink} />
-                    <Text style={s.headerMenuText}>Community forum</Text>
-                  </TouchableOpacity>
-                  <View style={s.headerMenuDivider} />
                   <TouchableOpacity
                     style={[s.headerMenuItem, webPointer]}
                     onPress={() => {
@@ -673,7 +667,7 @@ export default function DashboardScreen() {
           {/* ── Search ── */}
           <View style={s.searchWrap}>
             <View style={[s.searchBar, searchFocused && s.searchBarFocused]}>
-              <Ionicons name="search" size={22} color={searchFocused ? C.primary : C.inkFaint} />
+              <Ionicons name="search" size={22} color={searchFocused ? C.accent : C.inkFaint} />
               <TextInput
                 style={s.searchInput}
                 value={searchQuery}
@@ -722,7 +716,7 @@ export default function DashboardScreen() {
                     accessibilityLabel={`Open ${item.label}`}
                   >
                     <View style={[s.searchResultIcon, { backgroundColor: item.bg }]}>
-                      <Ionicons name={item.icon as any} size={17} color={item.color} />
+                      <BenefitIcon benefit={item} size={17} />
                     </View>
                     <Text style={s.searchResultText}>{item.label}</Text>
                     <Ionicons name="chevron-forward" size={16} color={C.inkFaint} />
@@ -797,6 +791,58 @@ export default function DashboardScreen() {
             ))}
           </View>
 
+          <TouchableOpacity
+            style={[s.aiCard, s.emergencyCard, webPointer]}
+            onPress={() => openBenefit(emergencyBenefit.id)}
+            activeOpacity={0.88}
+            accessibilityRole="button"
+            accessibilityLabel="Emergency"
+          >
+            <LinearGradient
+              colors={dark ? ['#472922', '#2E211D'] : [emergencyBenefit.bg, '#FFF8F6']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={s.aiCardGrad}
+            >
+              <View style={[s.aiIconWrap, s.emergencyAccent]}>
+                <Ionicons name="warning" size={28} color={C.white} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[s.aiTitle, s.emergencyTitle]}>{emergencyBenefit.label}</Text>
+                <Text style={[s.aiDesc, s.emergencyDesc]}>Tumawag sa 911 o mag-save ng report para sa OSCA follow-up.</Text>
+              </View>
+              <View style={[s.aiArrow, s.emergencyAccent]}>
+                <Ionicons name="arrow-forward" size={18} color={C.white} />
+              </View>
+            </LinearGradient>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[s.aiCard, s.forumCard, webPointer]}
+            onPress={() => router.push('/forum')}
+            activeOpacity={0.88}
+            accessibilityRole="button"
+            accessibilityLabel="Open Community Forum"
+          >
+            <LinearGradient
+              colors={dark ? ['#264435', '#192B21'] : ['#E2F1E7', '#F7FBF8']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={s.aiCardGrad}
+            >
+              <View style={[s.aiIconWrap, s.forumAccent]}>
+                <Ionicons name="people" size={28} color={C.white} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[s.aiTitle, s.forumTitle]}>Community Forum</Text>
+                <Text style={[s.aiDesc, s.forumDescription]}>Magtanong, magbahagi, at makipag-usap sa kapwa residente.</Text>
+              </View>
+              <View style={[s.aiArrow, s.forumAccent]}>
+                <Ionicons name="arrow-forward" size={18} color={C.white} />
+              </View>
+            </LinearGradient>
+          </TouchableOpacity>
+
           {/* ── Benefits + announcements ── */}
           <View style={[s.splitRow, isDesktop && s.splitRowDesktop]}>
             {user && (
@@ -816,7 +862,7 @@ export default function DashboardScreen() {
                   accessibilityLabel="Lolo Aurea AI Assistant"
                 >
                   <LinearGradient
-                    colors={[C.aiSoft, '#F8FAFF']}
+                    colors={[C.aiSoft, dark ? '#172133' : '#F8FAFF']}
                     start={{ x: 0, y: 0 }}
                     end={{ x: 1, y: 1 }}
                     style={s.aiCardGrad}
@@ -835,7 +881,7 @@ export default function DashboardScreen() {
                 </TouchableOpacity>
 
                 <View style={s.serviceGrid}>
-                  {BENEFIT_ITEMS.map((item) => (
+                  {BENEFIT_ITEMS.filter((item) => item.id !== emergencyBenefit.id).map((item) => (
                     <View key={item.label} style={{ width: tileWidthPct, padding: sp(1.5) }}>
                       <TouchableOpacity
                         style={[s.serviceItem, webPointer]}
@@ -850,7 +896,7 @@ export default function DashboardScreen() {
                             { width: tileCircle, height: tileCircle, borderRadius: tileCircle / 2, backgroundColor: item.bg },
                           ]}
                         >
-                          <Ionicons name={item.icon as any} size={tileIcon} color={item.color} />
+                          <BenefitIcon benefit={item} size={tileIcon} />
                         </View>
                         <Text style={s.serviceLabel} numberOfLines={2}>{item.label}</Text>
                       </TouchableOpacity>
@@ -949,7 +995,7 @@ export default function DashboardScreen() {
                   <Text style={s.paterosTableToggleText}>
                     {showAllBarangayPopulation ? 'Show top 5' : 'Show all 10 barangays'}
                   </Text>
-                  <Ionicons name={showAllBarangayPopulation ? 'chevron-up' : 'chevron-down'} size={15} color={C.primary} />
+                  <Ionicons name={showAllBarangayPopulation ? 'chevron-up' : 'chevron-down'} size={15} color={C.accent} />
                 </Pressable>
               </View>
             </View>
@@ -1018,7 +1064,7 @@ export default function DashboardScreen() {
                 >
                   <Text style={s.ctaTxt}>Register for AUREA</Text>
                   <View style={s.ctaArrow}>
-                    <Ionicons name="arrow-forward" size={18} color={C.primaryDark} />
+                    <Ionicons name="arrow-forward" size={18} color={dark ? C.accent : C.primaryDark} />
                   </View>
                 </LinearGradient>
               </TouchableOpacity>
@@ -1051,7 +1097,7 @@ export default function DashboardScreen() {
   );
 }
 
-const s = StyleSheet.create({
+const createStyles = (C: typeof darkColors, dark: boolean) => StyleSheet.create({
   safe:      { flex: 1, backgroundColor: C.bg },
   scroll:    { flex: 1 },
   scrollWeb: { backgroundColor: C.bgWeb },
@@ -1089,7 +1135,7 @@ const s = StyleSheet.create({
   brandText: {
     fontFamily: 'FraunTitle',
     fontSize: 30,
-    color: C.primary,
+    color: C.accent,
     letterSpacing: -1,
   },
   headerActionsWrap: {
@@ -1205,7 +1251,7 @@ const s = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    backgroundColor: '#FCE8E6',
+    backgroundColor: dark ? '#3E2925' : '#FCE8E6',
     borderWidth: 1,
     borderColor: '#E7AAA2',
     borderRadius: 18,
@@ -1218,7 +1264,7 @@ const s = StyleSheet.create({
     borderRadius: 19,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: C.card,
   },
   profileAlertTitle: { fontFamily: 'InterBody', fontSize: 15, fontWeight: '700', color: C.danger },
   profileAlertText: { fontFamily: 'InterBody', fontSize: 12.5, lineHeight: 18, color: C.inkSoft, marginTop: 2 },
@@ -1340,7 +1386,7 @@ const s = StyleSheet.create({
     fontFamily: 'InterBody', fontSize: 14, color: C.inkSoft, marginTop: 3,
   },
   sectionAction: { flexDirection: 'row', alignItems: 'center', gap: 2, paddingBottom: 3 },
-  sectionActionText: { fontFamily: 'InterBody', fontSize: 14, fontWeight: '700', color: C.primary },
+  sectionActionText: { fontFamily: 'InterBody', fontSize: 14, fontWeight: '700', color: C.accent },
 
   splitRow: { flexDirection: 'column' },
   splitRowDesktop: { flexDirection: 'row', alignItems: 'flex-start', gap: sp(6) },
@@ -1364,19 +1410,28 @@ const s = StyleSheet.create({
     alignItems: 'center',
     gap: sp(3),
     padding: sp(4),
+    minHeight: 116,
   },
   aiIconWrap: {
     width: 52, height: 52, borderRadius: 26,
     backgroundColor: C.ai,
     alignItems: 'center', justifyContent: 'center',
   },
-  aiTitle: { fontFamily: 'InterBody', fontWeight: '800', fontSize: 17, color: '#0A2540' },
-  aiDesc: { fontFamily: 'InterBody', fontSize: 13.5, lineHeight: 19, color: '#4A5F80', marginTop: 2 },
+  aiTitle: { fontFamily: 'InterBody', fontWeight: '800', fontSize: 17, color: dark ? '#E0ECFF' : '#0A2540' },
+  aiDesc: { fontFamily: 'InterBody', fontSize: 13.5, lineHeight: 19, color: dark ? '#B5C5DE' : '#4A5F80', marginTop: 2 },
   aiArrow: {
     width: 36, height: 36, borderRadius: 18,
     backgroundColor: C.ai,
     alignItems: 'center', justifyContent: 'center',
   },
+  emergencyCard: { borderColor: '#F2C7BC', ...shadow(C.danger, 0.12, 12, 4) },
+  emergencyAccent: { backgroundColor: dark ? '#9D402E' : C.danger },
+  emergencyTitle: { color: dark ? '#FFD1C8' : '#702B1D' },
+  emergencyDesc: { color: dark ? '#E6BCB3' : '#70473F' },
+  forumCard: { borderColor: '#C1DDCB', ...shadow(C.primary, 0.12, 12, 4) },
+  forumAccent: { backgroundColor: C.primary },
+  forumTitle: { color: dark ? C.accent : C.primaryDark },
+  forumDescription: { color: C.inkSoft },
 
   // Service grid
   serviceGrid: {
@@ -1492,7 +1547,7 @@ const s = StyleSheet.create({
     flexDirection: 'row', alignItems: 'baseline',
     justifyContent: 'space-between', gap: 8, marginBottom: 10,
   },
-  paterosProfileHeading: { fontFamily: 'InterBody', fontWeight: '700', fontSize: 14, color: C.primaryDark },
+  paterosProfileHeading: { fontFamily: 'InterBody', fontWeight: '700', fontSize: 14, color: dark ? C.accent : C.primaryDark },
   paterosProfileCaption: { fontFamily: 'InterBody', fontSize: 10.5, color: C.inkFaint },
   paterosRows: { gap: 14 },
   paterosChartRow: { gap: 6 },
@@ -1515,16 +1570,16 @@ const s = StyleSheet.create({
     paddingHorizontal: 12, paddingVertical: 8, minHeight: 34,
     borderTopWidth: 1, borderTopColor: C.lineSoft,
   },
-  paterosTableRowAlt: { backgroundColor: '#FAFCF9' },
+  paterosTableRowAlt: { backgroundColor: dark ? C.lineSoft : '#FAFCF9' },
   paterosBarangayColumn: { flex: 1, paddingRight: 10 },
   paterosTableToggle: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4,
     paddingVertical: 10,
   },
-  paterosTableToggleText: { fontFamily: 'InterBody', fontWeight: '700', fontSize: 12, color: C.primary },
+  paterosTableToggleText: { fontFamily: 'InterBody', fontWeight: '700', fontSize: 12, color: C.accent },
   paterosSource: { fontFamily: 'InterBody', fontSize: 11, lineHeight: 16, color: C.inkFaint, marginTop: 16, paddingHorizontal: sp(4) },
   sourceLinks: { flexDirection: 'row', flexWrap: 'wrap', gap: 14, marginTop: 8, paddingHorizontal: sp(4), paddingBottom: sp(4) },
-  sourceLink: { fontFamily: 'InterBody', fontSize: 11.5, fontWeight: '700', color: C.primary },
+  sourceLink: { fontFamily: 'InterBody', fontSize: 11.5, fontWeight: '700', color: C.accent },
 
   // How to use
   howToWrap: {
@@ -1556,7 +1611,7 @@ const s = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
     borderWidth: 2, borderColor: C.primaryDark,
   },
-  howToNumberText: { fontFamily: 'InterBody', fontWeight: '800', fontSize: 11, color: C.primaryDark },
+  howToNumberText: { fontFamily: 'InterBody', fontWeight: '800', fontSize: 11, color: dark ? C.accent : C.primaryDark },
   howToTitle: {
     fontFamily: 'InterBody', fontWeight: '700', fontSize: 16.5,
     color: C.white, marginBottom: 5,
@@ -1600,3 +1655,12 @@ const s = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
 });
+
+const lightTheme = { C, s: createStyles(C, false) };
+const darkTheme = { C: darkColors, s: createStyles(darkColors, true) };
+
+function useScreenTheme() {
+  const { colorScheme } = useSettings();
+  const dark = colorScheme === 'dark';
+  return { ...(dark ? darkTheme : lightTheme), dark };
+}

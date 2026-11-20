@@ -8,6 +8,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import re
 import requests
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request, send_file
@@ -20,6 +21,7 @@ import assistant_service
 from routes import register_lolo_routes
 from services.senior_categories import SENIOR_CATEGORIES
 from services.senior_profiles import with_senior_fields, income_source_patch
+from services import checkup_appointments, emergency_reports, financial_assistance, osca_transfer_applications, philhealth_applications, physical_ids, purchase_booklet_applications, social_pension_applications
 from services.service_records import service_records
 from services.psa_population import get_population
 
@@ -277,6 +279,8 @@ def add_cors(response):
         "GET, POST, PUT, PATCH, DELETE, OPTIONS"
     )
     response.headers["Access-Control-Max-Age"] = "86400"
+    if request.path.startswith(("/api/physical-id", "/api/philhealth", "/api/social-pension", "/api/purchase-booklet", "/api/osca-transfer", "/api/checkup-appointments", "/api/emergency-reports", "/api/financial-assistance")):
+        response.headers["Cache-Control"] = "no-store"
 
     return response
 
@@ -1320,6 +1324,383 @@ def require_admin_session(allowed_roles=ADMIN_ROLES):
     if role not in allowed_roles:
         return None, (jsonify({"message": "Administrator access is required."}), 403)
     return user, None
+
+
+@app.route("/api/emergency-reports", methods=["GET", "POST", "OPTIONS"])
+def resident_emergency_reports():
+    if request.method == "OPTIONS":
+        return "", 204
+    profile, error = require_admin_session({"user", "senior", "senior citizen"})
+    if error:
+        return error
+    request.max_content_length = 16 * 1024
+    reports = emergency_reports
+    params = {"user_id": f"eq.{profile['id']}", "select": reports.SUMMARY}
+    try:
+        if request.method == "GET":
+            rows = supabase_rest("GET", reports.TABLE, params={**params, "order": "created_at.desc,id.desc", "limit": "10"})
+            return jsonify({"reports": rows or [], "categories": reports.CATEGORIES})
+        data = request.get_json(silent=True)
+        key = data.get("requestKey") if isinstance(data, dict) else None
+        if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9_-]{12,80}", key):
+            raise ValueError("I-refresh ang Emergency screen at subukan ulit.")
+        details = reports.report_details(data)
+        details["reporter"] = " ".join(filter(None, (profile.get("firstName"), profile.get("lastName"))))
+        try:
+            rows = supabase_rest("POST", reports.TABLE, params={"select": reports.SUMMARY}, payload={
+                "user_id": profile["id"], "request_key": key, "details": details,
+            })
+        except RuntimeError:
+            existing = supabase_rest("GET", reports.TABLE, params={**params, "request_key": f"eq.{key}"})
+            if existing:
+                return jsonify({"report": existing[0]}), 200
+            raise
+        return jsonify({"report": rows[0]}), 201
+    except ValueError as exc:
+        return jsonify({"message": str(exc)}), 400
+    except RuntimeError:
+        app.logger.error("Emergency report storage request failed")
+        return jsonify({"message": "Hindi ma-save ngayon ang report. Kung kailangan ng agarang tulong, tumawag sa 911."}), 503
+
+
+@app.route("/api/emergency-reports/staff", methods=["GET", "OPTIONS"], defaults={"report_id": None})
+@app.route("/api/emergency-reports/staff/<uuid:report_id>", methods=["GET", "PATCH", "OPTIONS"])
+def staff_emergency_reports(report_id):
+    if request.method == "OPTIONS":
+        return "", 204
+    _, error = require_admin_session({"osca admin"})
+    if error:
+        return error
+    reports = emergency_reports
+    try:
+        if report_id is None:
+            offset = max(0, request.args.get("offset", default=0, type=int))
+            rows = supabase_rest("GET", reports.TABLE, params={
+                "select": f"{reports.SUMMARY},reporter:details->>reporter", "status": "in.(Submitted,Acknowledged)",
+                "order": "created_at.desc,id.desc", "limit": "26", "offset": str(offset),
+            }) or []
+            return jsonify({"reports": rows[:25], "hasMore": len(rows) > 25, "categories": reports.CATEGORIES})
+        params = {"id": f"eq.{report_id}"}
+        rows = supabase_rest("GET", reports.TABLE, params=params)
+        if not rows:
+            return jsonify({"message": "Hindi makita ang report."}), 404
+        report = rows[0]
+        if request.method == "GET":
+            return jsonify({"report": report})
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            raise ValueError("Ilagay ang status ng report.")
+        status, note = data.get("status"), data.get("note", "")
+        if not status or status != reports.TRANSITIONS.get(report["status"]):
+            return jsonify({"message": "Nagbago na ang status. I-refresh ang listahan."}), 409
+        if not isinstance(note, str) or len(note) > 500 or (status == "Closed" and not note.strip()):
+            raise ValueError("Ilagay ang follow-up note bago isara ang report. Hanggang 500 characters.")
+        update = {"status": status, "review_note": note.strip() or None}
+        supabase_rest("PATCH", reports.TABLE, params={**params, "status": f"eq.{report['status']}"}, payload=update)
+        updated = supabase_rest("GET", reports.TABLE, params={**params, "select": reports.SUMMARY})
+        if not updated or any(updated[0].get(key) != value for key, value in update.items()):
+            return jsonify({"message": "Nagbago na ang status. I-refresh ang listahan."}), 409
+        return jsonify({"report": updated[0]})
+    except ValueError as exc:
+        return jsonify({"message": str(exc)}), 400
+    except RuntimeError:
+        app.logger.error("Emergency report staff queue storage request failed")
+        return jsonify({"message": "Hindi ma-process ngayon ang report. Subukan ulit."}), 503
+
+
+@app.route("/api/checkup-appointments", methods=["GET", "POST", "OPTIONS"])
+def resident_checkup_appointments():
+    if request.method == "OPTIONS":
+        return "", 204
+    profile, error = require_admin_session({"user", "senior", "senior citizen"})
+    if error:
+        return error
+    request.max_content_length = 64 * 1024
+    appointments = checkup_appointments
+    params = {"user_id": f"eq.{profile['id']}", "select": appointments.SUMMARY, "order": "created_at.desc", "limit": "1"}
+    try:
+        rows = supabase_rest("GET", appointments.TABLE, params=params)
+        latest = rows[0] if rows else None
+        if request.method == "GET":
+            return jsonify({"appointment": latest, "centers": appointments.centers()})
+        if latest and latest["status"] in appointments.OPEN:
+            return jsonify({"message": "May active check-up request ka na. I-check ang status nito."}), 409
+        missing, age_error = physical_ids.senior_profile_requirements(profile, "Para sa edad 60 pataas ang service na ito.")
+        if age_error or physical_ids.PROFILE_FIELDS["dob"] in missing:
+            raise ValueError(age_error or "I-check ang petsa ng kapanganakan sa profile mo.")
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            raise ValueError("Pakikumpleto ang check-up form.")
+        center_id = data.get("centerId")
+        if not isinstance(center_id, str) or center_id not in appointments.CENTERS:
+            raise ValueError("Piliin ang health center para sa barangay mo.")
+        details = appointments.patient_details(data)
+        details["dateOfBirth"] = profile["dob"]
+        try:
+            rows = supabase_rest("POST", appointments.TABLE, params={"select": appointments.SUMMARY}, payload={
+                "user_id": profile["id"], "center_id": center_id, "details": details,
+            })
+        except RuntimeError:
+            existing = supabase_rest("GET", appointments.TABLE, params={**params, "status": "in.(Pending,Confirmed)"})
+            if existing:
+                return jsonify({"appointment": existing[0]}), 200
+            raise
+        return jsonify({"appointment": rows[0]}), 201
+    except ValueError as exc:
+        return jsonify({"message": str(exc)}), 400
+    except RuntimeError:
+        app.logger.error("Check-up appointment storage request failed")
+        return jsonify({"message": "Hindi ma-process ngayon ang check-up request. Subukan ulit."}), 503
+
+
+@app.route("/api/checkup-appointments/staff", methods=["GET", "OPTIONS"], defaults={"appointment_id": None})
+@app.route("/api/checkup-appointments/staff/<uuid:appointment_id>", methods=["GET", "PATCH", "OPTIONS"])
+def staff_checkup_appointments(appointment_id):
+    if request.method == "OPTIONS":
+        return "", 204
+    _, error = require_admin_session({"med admin"})
+    if error:
+        return error
+    appointments = checkup_appointments
+    try:
+        if appointment_id is None:
+            offset = max(0, request.args.get("offset", default=0, type=int))
+            rows = supabase_rest("GET", appointments.TABLE, params={
+                "select": f"{appointments.SUMMARY},name:details->>name", "status": "in.(Pending,Confirmed)",
+                "order": "created_at.asc,id.asc", "limit": "26", "offset": str(offset),
+            }) or []
+            return jsonify({"appointments": rows[:25], "hasMore": len(rows) > 25, "centers": appointments.centers()})
+        params = {"id": f"eq.{appointment_id}"}
+        rows = supabase_rest("GET", appointments.TABLE, params=params)
+        if not rows:
+            return jsonify({"message": "Hindi makita ang appointment."}), 404
+        current = rows[0]
+        if request.method == "GET":
+            return jsonify({"appointment": current})
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            raise ValueError("Piliin ang bagong status ng appointment.")
+        status, note = data.get("status"), data.get("note", "")
+        allowed = {"Pending": ("Confirmed", "Cancelled"), "Confirmed": ("Completed", "Cancelled")}
+        if status not in allowed.get(current["status"], ()):
+            return jsonify({"message": "Nagbago na ang status. I-refresh ang appointment list."}), 409
+        if not isinstance(note, str) or len(note) > 500 or (status == "Cancelled" and not note.strip()):
+            raise ValueError("Ilagay ang dahilan ng cancellation. Hanggang 500 characters ang note.")
+        update = {"status": status, "review_note": note.strip() or None}
+        if status == "Confirmed":
+            update["scheduled_at"] = appointments.schedule(data.get("date"), data.get("time"))
+        if status == "Completed" and datetime.fromisoformat(current["scheduled_at"]) > datetime.now(timezone.utc):
+            raise ValueError("Hindi pa nagsisimula ang naka-schedule na appointment.")
+        supabase_rest("PATCH", appointments.TABLE, params={**params, "status": f"eq.{current['status']}"}, payload=update)
+        updated = supabase_rest("GET", appointments.TABLE, params={**params, "select": appointments.SUMMARY})
+        if not updated or any(updated[0].get(key) != value for key, value in update.items() if key != "scheduled_at"):
+            return jsonify({"message": "Nagbago na ang status. I-refresh ang appointment list."}), 409
+        if status == "Confirmed" and datetime.fromisoformat(updated[0]["scheduled_at"]) != datetime.fromisoformat(update["scheduled_at"]):
+            return jsonify({"message": "Nagbago na ang schedule. I-refresh ang appointment list."}), 409
+        return jsonify({"appointment": updated[0]})
+    except ValueError as exc:
+        return jsonify({"message": str(exc)}), 400
+    except RuntimeError:
+        app.logger.error("Check-up staff queue storage request failed")
+        return jsonify({"message": "Hindi ma-process ngayon ang appointment. Subukan ulit."}), 503
+
+
+OSCA_DOCUMENT_SERVICES = {
+    "physical-id": (physical_ids, ("Pending", "Ready for pickup"), None),
+    "philhealth": (philhealth_applications, ("Pending", "Endorsed"), "coverage"),
+    "social-pension": (social_pension_applications, ("Pending", "Endorsed", "Approved"), "social-pension"),
+    "purchase-booklet": (purchase_booklet_applications, ("Pending", "Ready for pickup"), None),
+    "osca-transfer": (osca_transfer_applications, ("Pending", "Ready for pickup", "Released"), "transfer"),
+    "financial-assistance": (financial_assistance, ("Pending", "Endorsed", "Ready for pickup"), None),
+}
+OSCA_DOCUMENT_ROUTE = '/api/<any("physical-id",philhealth,"social-pension","purchase-booklet","osca-transfer","financial-assistance"):service>'
+
+
+@app.route(OSCA_DOCUMENT_ROUTE, methods=["GET", "POST", "OPTIONS"])
+def osca_document_application(service):
+    if request.method == "OPTIONS":
+        return "", 204
+    profile, error = require_admin_session({"user", "senior", "senior citizen"})
+    if error:
+        return error
+    request.max_content_length = 9 * 1024 * 1024
+    data = request.get_json(silent=True) if request.method == "POST" else request.args
+    if data is None or not hasattr(data, "get"):
+        return jsonify({"message": "Ilagay ang mga detalye ng application mo."}), 400
+    application_service, open_statuses, fixed_type = OSCA_DOCUMENT_SERVICES[service]
+    table = application_service.TABLE
+    financial = service == "financial-assistance"
+    request_type = fixed_type or data.get("requestType", "medical" if financial else "new")
+    request_types = financial_assistance.REQUEST_TYPES if financial else physical_ids.REQUEST_TYPES
+    if not fixed_type and (not isinstance(request_type, str) or request_type not in request_types):
+        return jsonify({"message": "Piliin ang uri ng application mo."}), 400
+    representative = data.get("representative", "")
+    if not isinstance(representative, str) or len(representative) > 160:
+        return jsonify({"message": "Ilagay ang pangalan ng immediate family member na pinapayagan mong mag-apply."}), 400
+    representative = representative.strip()
+    if service in {"social-pension", "financial-assistance"} and representative:
+        return jsonify({"message": "Gamitin ang sariling account ng applicant para i-submit ito."}), 400
+    represented = data.get("represented") == "true" if request.method == "GET" else bool(representative)
+    if service == "social-pension":
+        requirements, reused = social_pension_applications.requirement_check(profile)
+    elif service == "philhealth":
+        requirements, reused = philhealth_applications.requirement_check(profile, represented)
+    elif service == "purchase-booklet":
+        requirements, reused = purchase_booklet_applications.requirement_check(profile, represented)
+    elif service == "osca-transfer":
+        requirements, reused = osca_transfer_applications.requirement_check(profile, represented)
+    elif financial:
+        requirements, reused = financial_assistance.requirement_check(profile, request_type)
+    else:
+        requirements, reused = physical_ids.requirement_check(profile, request_type, represented)
+    params = {
+        "user_id": f"eq.{profile['id']}", "select": physical_ids.SUMMARY,
+        "order": "created_at.desc", "limit": "1",
+    }
+    try:
+        rows = supabase_rest("GET", table, params=params)
+        latest = rows[0] if rows else None
+        retained = {}
+        previous_destination = None
+        previous_beneficiary = None
+        if latest and latest["status"] == "Returned" and latest["request_type"] == request_type:
+            select = "attachments"
+            if service == "osca-transfer":
+                select += ",destination:applicant->>destination"
+            elif financial and request_type == "burial":
+                select += ",beneficiary:applicant->>beneficiary"
+            previous = supabase_rest("GET", table, params={
+                "id": f"eq.{latest['id']}", "user_id": params["user_id"], "select": select,
+            })
+            if previous:
+                previous_destination = previous[0].get("destination")
+                previous_beneficiary = previous[0].get("beneficiary")
+                retained = {
+                    key: document for key, document in previous[0]["attachments"].items()
+                    if key not in {"authorization", "representative_id"} and document.get("jpeg")
+                }
+        if service == "philhealth" and not (latest and latest["status"] in open_statuses) and "government_id" not in retained:
+            try:
+                released = supabase_rest("GET", physical_ids.TABLE, params={
+                    **params, "status": "eq.Released", "select": "government_id:attachments->government_id",
+                })
+            except RuntimeError as exc:
+                if "Could not find the table 'public.physical_id_applications'" not in str(exc):
+                    raise
+                released = []
+            if released and (released[0].get("government_id") or {}).get("jpeg"):
+                retained["government_id"] = released[0]["government_id"]
+        if request.method == "GET":
+            for document in requirements["documents"]:
+                document["previouslyAttached"] = not document["onFile"] and document["key"] in retained
+            if previous_destination:
+                requirements["previousDestination"] = previous_destination
+            if previous_beneficiary:
+                requirements["previousBeneficiary"] = previous_beneficiary
+            return jsonify({"requirements": requirements, "application": latest})
+        if latest and latest["status"] in open_statuses:
+            return jsonify({"message": "May application ka na para sa serbisyong ito. I-check ang status nito."}), 409
+        if requirements["eligibilityMessage"]:
+            raise ValueError(requirements["eligibilityMessage"])
+        if requirements["missingProfile"]:
+            raise ValueError("Kumpletuhin muna ang kulang na detalye sa profile.")
+        if requirements["needsSignature"]:
+            raise ValueError("Lagyan muna ng pirma ang Digital ID mo.")
+        if data.get("confirmed") is not True:
+            raise ValueError("I-confirm muna ang mga detalye bago i-submit ang application.")
+        beneficiary = data.get("beneficiary")
+        if financial and request_type == "burial" and (
+            not isinstance(beneficiary, str) or not beneficiary.strip() or len(beneficiary) > 160
+        ):
+            raise ValueError("Ilagay ang buong pangalan ng yumaong senior citizen.")
+        if financial and request_type == "burial" and beneficiary.strip() != previous_beneficiary:
+            retained.pop("death_certificate", None)
+            retained.pop("deceased_id", None)
+        destination = data.get("destination")
+        if service == "osca-transfer":
+            if not isinstance(destination, str) or not destination.strip() or len(destination) > 400:
+                raise ValueError("Ilagay ang kumpletong bagong address, kasama ang barangay at lungsod o munisipalidad.")
+            destination = destination.strip()
+            if destination != previous_destination:
+                retained.pop("transfer_residency", None)
+        attachments = physical_ids.application_attachments(requirements, reused, retained, data.get("attachments"))
+        applicant = physical_ids.applicant_snapshot(profile, representative)
+        if service != "physical-id":
+            applicant.pop("signature", None)
+        if service in {"social-pension", "philhealth"}:
+            applicant["indigency_declared"] = True
+        if service == "osca-transfer":
+            applicant["destination"] = destination
+        if financial and request_type == "burial":
+            applicant["beneficiary"] = beneficiary.strip()
+        try:
+            rows = supabase_rest("POST", table, params={"select": physical_ids.SUMMARY}, payload={
+                "user_id": profile["id"], "request_type": request_type,
+                "applicant": applicant,
+                "attachments": attachments,
+            })
+        except RuntimeError:
+            existing = supabase_rest("GET", table, params={
+                **params, "status": f"in.({','.join(open_statuses)})",
+            })
+            if existing:
+                return jsonify({"application": existing[0]}), 200
+            raise
+        return jsonify({"application": rows[0]}), 201
+    except ValueError as exc:
+        return jsonify({"message": str(exc)}), 400
+    except RuntimeError:
+        app.logger.exception("OSCA document application request failed")
+        return jsonify({"message": "Hindi ma-process ngayon ang application mo. Subukan ulit."}), 503
+
+
+@app.route(f"{OSCA_DOCUMENT_ROUTE}/admin", methods=["GET", "OPTIONS"], defaults={"application_id": None})
+@app.route(f"{OSCA_DOCUMENT_ROUTE}/admin/<uuid:application_id>", methods=["GET", "PATCH", "OPTIONS"])
+def review_osca_document_application(service, application_id):
+    if request.method == "OPTIONS":
+        return "", 204
+    _, error = require_admin_session({"osca admin"} if service == "financial-assistance" else {"osca admin", "super admin"})
+    if error:
+        return error
+    application_service, _, _ = OSCA_DOCUMENT_SERVICES[service]
+    table = application_service.TABLE
+    transitions = application_service.TRANSITIONS
+    try:
+        if application_id is None:
+            offset = request.args.get("offset", default=0, type=int)
+            if offset < 0:
+                return jsonify({"message": "Invalid request queue page."}), 400
+            rows = supabase_rest("GET", table, params={
+                "select": f"{physical_ids.SUMMARY},first_name:applicant->>firstName,last_name:applicant->>lastName",
+                "order": "created_at.desc,id.desc", "limit": "51", "offset": str(offset),
+                "status": f"in.({','.join(transitions)})",
+            })
+            return jsonify({"applications": rows[:50], "hasMore": len(rows) > 50})
+        params = {"id": f"eq.{application_id}"}
+        rows = supabase_rest("GET", table, params=params)
+        if not rows:
+            return jsonify({"message": "Application not found."}), 404
+        record = rows[0]
+        if request.method == "GET":
+            return jsonify({"application": record})
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify({"message": "Enter a review decision."}), 400
+        status, note = data.get("status"), data.get("note", "")
+        if not isinstance(status, str) or status not in transitions.get(record["status"], set()):
+            return jsonify({"message": "This application status has changed. Refresh the queue."}), 409
+        if not isinstance(note, str) or len(note) > 500 or (status != "Released" and not note.strip()):
+            return jsonify({"message": "Enter a review note with the next steps or corrections needed."}), 400
+        supabase_rest("PATCH", table, params={**params, "status": f"eq.{record['status']}"}, payload={
+            "status": status, "review_note": note.strip() or None,
+        })
+        updated = supabase_rest("GET", table, params={**params, "select": "status"})
+        if not updated or updated[0]["status"] != status:
+            return jsonify({"message": "This application status has changed. Refresh the queue."}), 409
+        return jsonify({"message": "Application updated."})
+    except RuntimeError:
+        app.logger.exception("OSCA document application review request failed")
+        return jsonify({"message": "Unable to load or review requests. Please try again."}), 503
 
 
 @app.route("/api/admin/service-records", methods=["GET", "OPTIONS"])

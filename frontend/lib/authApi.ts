@@ -333,16 +333,18 @@ export async function enrollFace(payload: {
 }
 
 
-export async function validateUserSession(token: string): Promise<boolean> {
+export async function getUserSessionProfile(token: string): Promise<(UserProfile & { role?: string }) | null> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10000);
   try {
     const response = await fetch(`${API_BASE_URL}/api/auth/session`, {
       headers: { Authorization: `Bearer ${token}` }, signal: controller.signal,
     });
-    if (response.status === 401) return false;
+    if (response.status === 401) return null;
     if (!response.ok) throw new Error('Could not validate session.');
-    return true;
+    const data = await response.json();
+    if (!data.user) throw new Error('Session response is missing the user profile.');
+    return data.user;
   } finally { clearTimeout(timeout); }
 }
 

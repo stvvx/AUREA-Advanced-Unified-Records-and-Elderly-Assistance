@@ -1,13 +1,13 @@
 import React from 'react';
 import {
   View,
-  Text,
   StyleSheet,
   ScrollView,
   TouchableOpacity,
   StatusBar,
   Platform,
 } from 'react-native';
+import { Text } from '../components/AppText';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -59,7 +59,7 @@ export default function BenefitSelectionScreen() {
           onPress={() => router.back()}
           activeOpacity={0.8}
           accessibilityRole="button"
-          accessibilityLabel="Go back"
+          accessibilityLabel="Bumalik"
         >
           <Ionicons name="arrow-back" size={18} color="#FFFFFF" />
         </TouchableOpacity>
@@ -67,23 +67,23 @@ export default function BenefitSelectionScreen() {
         {!user ? (
           <View style={s.lockCard}>
             <Ionicons name="lock-closed-outline" size={24} color="#FFFFFF" style={{ marginBottom: 10 }} />
-            <Text style={s.lockTitle}>Login required</Text>
-            <Text style={s.lockText}>Please log in first to view and apply for available benefits.</Text>
+            <Text style={s.lockTitle}>Kailangang mag-log in</Text>
+            <Text style={s.lockText}>Mag-log in muna para makita ang benefits at makapag-apply.</Text>
             <TouchableOpacity
               style={s.lockButton}
               onPress={() => router.replace('/login')}
               activeOpacity={0.85}
               accessibilityRole="button"
-              accessibilityLabel="Go to login"
+              accessibilityLabel="Mag-log in"
             >
-              <Text style={s.lockButtonText}>Go to Login</Text>
+              <Text style={s.lockButtonText}>Mag-log in</Text>
             </TouchableOpacity>
           </View>
         ) : !isSenior ? (
           <View style={s.lockCard}>
             <Ionicons name="lock-closed-outline" size={24} color="#FFFFFF" style={{ marginBottom: 10 }} />
-            <Text style={s.lockTitle}>Senior services unavailable</Text>
-            <Text style={s.lockText}>Senior citizen services and benefits are available only to users aged 60 and above.</Text>
+            <Text style={s.lockTitle}>Para sa senior citizens</Text>
+            <Text style={s.lockText}>Para sa edad 60 pataas ang senior citizen services at benefits.</Text>
           </View>
         ) : (
           <View style={s.list}>
@@ -93,7 +93,7 @@ export default function BenefitSelectionScreen() {
               style={s.benefitItem}
               activeOpacity={0.8}
               accessibilityRole="button"
-              accessibilityLabel={item.applicationValue}
+              accessibilityLabel={item.id === 'movie-center' ? 'Mag-book sa Movie Center' : `Mag-apply para sa ${item.label}`}
               
              onPress={() => {
   console.log('Selected benefit:', item.id);
@@ -109,14 +109,14 @@ export default function BenefitSelectionScreen() {
   }
 }}
             >
-              <Text style={s.itemText}>{item.applicationValue}</Text>
+              <Text style={s.itemText}>{item.id === 'movie-center' ? 'Mag-book sa Movie Center' : `Mag-apply para sa ${item.label}`}</Text>
             </TouchableOpacity>
           ))}
 
           {filteredBenefits.length === 0 && (
             <View style={s.emptyState}>
-              <Text style={s.emptyTitle}>No matching benefit found.</Text>
-              <Text style={s.emptyText}>Try another keyword like Medicine or Check-up.</Text>
+              <Text style={s.emptyTitle}>Walang benefit na tugma sa hinahanap mo.</Text>
+              <Text style={s.emptyText}>Subukan ang ibang keyword gaya ng Medicine o Check-up.</Text>
             </View>
           )}
           </View>

@@ -2,7 +2,6 @@ import { formatSeniorId } from '../lib/seniorId';
 import React, { useEffect, useState, useRef } from 'react';
 import {
   View,
-  Text,
   StyleSheet,
   ScrollView,
   StatusBar,
@@ -16,6 +15,7 @@ import {
   Alert,
   useWindowDimensions,
 } from 'react-native';
+import { Text } from '../components/AppText';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';

@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { revokeUserSession, validateUserSession, type ChildProfile } from '../lib/authApi';
+import { getUserSessionProfile, revokeUserSession, type ChildProfile } from '../lib/authApi';
 
 type User = {
   id: number;
@@ -67,15 +67,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             await AsyncStorage.removeItem(STORAGE_KEY);
             return;
           }
+          let restored = saved;
           try {
-            if (!(await validateUserSession(saved.token))) {
+            const profile = await getUserSessionProfile(saved.token);
+            if (!active) return;
+            if (!profile || profile.id !== saved.id) {
               await AsyncStorage.removeItem(STORAGE_KEY);
               return;
             }
+            restored = {
+              ...saved,
+              ...profile,
+              token: saved.token,
+              tokenExpiresAt: saved.tokenExpiresAt,
+              profilePhoto: profile.profilePhoto ?? profile.avatarUrl ?? saved.profilePhoto,
+            };
+            await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(restored)).catch(() => undefined);
           } catch {
             // Keep a locally unexpired session available during a network outage.
           }
-          if (active) setUser(saved);
+          if (active) setUser(restored);
         } catch {
           AsyncStorage.removeItem(STORAGE_KEY).catch(() => undefined);
         }

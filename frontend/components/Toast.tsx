@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
-import { Modal, Pressable, ScrollView, Text, StyleSheet, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Text } from './AppText';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 

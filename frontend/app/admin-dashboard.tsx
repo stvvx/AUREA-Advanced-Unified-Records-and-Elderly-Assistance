@@ -1,15 +1,15 @@
+import { useSettings } from '../context/SettingsContext';
+import { DARK_SURFACES } from '../lib/appTheme';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Image,
-  Text,
   ScrollView,
   StyleSheet,
   StatusBar,
   Pressable,
   Platform,
   ActivityIndicator,
-  TextInput,
   RefreshControl,
   useWindowDimensions,
   Animated,
@@ -19,6 +19,7 @@ import {
   Alert,
   Linking,
 } from 'react-native';
+import { Text, TextInput } from '../components/AppText';
 import { WebView } from 'react-native-webview';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -60,7 +61,10 @@ const C = {
   lineSoft:    '#EDF3EA',
   danger:      '#B3432E',
   dangerSoft:  '#FDECEA',
+  accent: '#1F5C3E',
 };
+const darkColors = { ...C, ...DARK_SURFACES, danger: '#FFAB9C', dangerSoft: '#3E2925' };
+
 
 const sp = (n: number) => n * 4;
 
@@ -72,9 +76,9 @@ const ROLE_META: Record<string, { label: string; color: string; icon: string }> 
 
 const ROLE_BADGE: Record<string, { bg: string; fg: string }> = {
   'super admin': { bg: '#F3E3CC', fg: '#6D3B00' },
-  'osca admin':  { bg: C.primarySoft, fg: C.primaryDark },
+  'osca admin':  { bg: C.primarySoft, fg: C.accent },
   'med admin':   { bg: '#DCEAF4', fg: '#1A5276' },
-  admin:         { bg: C.primarySoft, fg: C.primaryDark },
+  admin:         { bg: C.primarySoft, fg: C.accent },
   user:          { bg: '#EEF1EC', fg: C.inkSoft },
 };
 
@@ -94,15 +98,21 @@ const OSCA_ACTIONS: Action[] = [
   { icon: 'megaphone',      label: 'Announcements',      desc: 'Create and manage resident updates', route: '/admin-announcements' },
   { icon: 'people',        label: 'Senior Citizens',     desc: 'View all senior citizen details', route: '/admin-senior-citizens' },
   { icon: 'chatbubbles',   label: 'Senior Support Chat', desc: 'Chat with seniors in real time', route: '/chat' },
-  { icon: 'gift',          label: 'Birthday Benefits',   desc: 'Manage benefit distributions',   route: '/admin-benefits' },
-  { icon: 'card',          label: 'ID Requests',         desc: 'Process digital ID requests' },
+  { icon: 'gift',          label: 'Birthday Benefits',   desc: 'Manage benefit distributions',   route: '/osca-birthday-benefits' },
+  { icon: 'card',          label: 'ID Requests',         desc: 'Review physical senior citizen ID requests', route: '/osca-physical-id' },
+  { icon: 'shield-checkmark', label: 'PhilHealth Coverage', desc: 'Review requests for enrollment assistance', route: '/osca-philhealth' },
+  { icon: 'wallet', label: 'Social Pension', desc: 'Review and track Social Pension applications', route: '/osca-social-pension' },
+  { icon: 'cash', label: 'Financial Assistance', desc: 'Review and track AICS referrals', route: '/osca-financial-assistance' },
+  { icon: 'book', label: 'Purchase Booklet', desc: 'Review requests for new and replacement booklets', route: '/osca-purchase-booklet' },
+  { icon: 'swap-horizontal', label: 'OSCA Transfer', desc: 'Review transfer and membership cancellation requests', route: '/osca-transfer' },
+  { icon: 'warning', label: 'Emergency Reports', desc: 'Review resident reports for follow-up', route: '/osca-emergency' },
   { icon: 'document-text', label: 'Records',             desc: 'View services availed by seniors', route: '/admin-records' },
-  { icon: 'film',          label: 'Movie Center',        desc: 'Movies, screenings, reservations', route: '/admin-movie-center' },
+  { icon: 'film',          label: 'Movie Center',        desc: 'Movies, screenings, reservations', route: '/osca-movie-center' },
 ];
 
 const MED_ACTIONS: Action[] = [
   { icon: 'medkit',   label: 'Medical Records', desc: 'View health records' },
-  { icon: 'calendar', label: 'Appointments',    desc: 'Manage health appointments' },
+  { icon: 'calendar', label: 'Appointments',    desc: 'Manage health appointments', route: '/admin-checkup-appointments' },
   { icon: 'flask',    label: 'Prescriptions',   desc: 'Track prescriptions' },
   { icon: 'pulse',    label: 'Health Reports',  desc: 'Generate health summaries' },
 ];
@@ -477,6 +487,7 @@ ${heatmap ? '<script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat
 }
 
 function BarangayMap({ html, title = 'Pateros senior citizen counts by barangay' }: { html: string; title?: string }) {
+  const { s } = useScreenTheme();
   if (Platform.OS === 'web') {
     return React.createElement('iframe', {
       title,
@@ -785,6 +796,7 @@ function SeniorAvatar({ person, index, size = 48 }: { person: any; index: number
 // Small building blocks
 // ---------------------------------------------------------------------------
 function SectionHeader({ title, subtitle, right }: { title: string; subtitle?: string; right?: React.ReactNode }) {
+  const { s } = useScreenTheme();
   return (
     <View style={s.sectionHead}>
       <View style={{ flex: 1 }}>
@@ -799,6 +811,7 @@ function SectionHeader({ title, subtitle, right }: { title: string; subtitle?: s
 function EmptyState({
   icon, title, hint, cartoon,
 }: { icon: string; title: string; hint?: string; cartoon?: CartoonKind }) {
+  const { C, s } = useScreenTheme();
   return (
     <View style={s.empty}>
       {cartoon ? (
@@ -817,6 +830,7 @@ function EmptyState({
 }
 
 function Avatar({ initials, tone = 'green' }: { initials: string; tone?: 'green' | 'gold' }) {
+  const { C, s } = useScreenTheme();
   return (
     <View style={[s.avatar, tone === 'gold' && { backgroundColor: C.goldSoft }]}>
       <Text style={[s.avatarTxt, tone === 'gold' && { color: C.goldDark }]}>{initials}</Text>
@@ -825,8 +839,9 @@ function Avatar({ initials, tone = 'green' }: { initials: string; tone?: 'green'
 }
 
 function Chip({ icon, label, tone }: { icon?: string; label: string; tone: 'green' | 'gold' | 'neutral' | 'danger' }) {
+  const { C, s } = useScreenTheme();
   const palette = {
-    green:   { bg: C.primarySoft, fg: C.primaryDark },
+    green:   { bg: C.primarySoft, fg: C.accent },
     gold:    { bg: C.goldSoft,    fg: C.goldDark },
     neutral: { bg: C.lineSoft,    fg: C.inkSoft },
     danger:  { bg: C.dangerSoft,  fg: C.danger },
@@ -840,6 +855,7 @@ function Chip({ icon, label, tone }: { icon?: string; label: string; tone: 'gree
 }
 
 function ListSkeleton({ rows = 3 }: { rows?: number }) {
+  const { C, s } = useScreenTheme();
   return (
     <View>
       {Array.from({ length: rows }).map((_, i) => (
@@ -859,6 +875,7 @@ function ListSkeleton({ rows = 3 }: { rows?: number }) {
 // Screen
 // ---------------------------------------------------------------------------
 export default function AdminDashboard() {
+  const { C, s, dark } = useScreenTheme();
   const [heatCategory, setHeatCategory] = useState(SENIOR_CATEGORIES[0]);
   const mainScroll = useRef<React.ElementRef<typeof ScrollView>>(null);
   const categoryScroll = useRef<React.ElementRef<typeof ScrollView>>(null);
@@ -867,7 +884,6 @@ export default function AdminDashboard() {
     categoryScroll.current?.scrollTo({ x: Math.max(0, categoryScrollOffset.current + direction * 240), animated: true });
   };
   const { width } = useWindowDimensions();
-  const actionWidth = width >= 1000 ? '16.666666%' : width >= 600 ? '33.333333%' : '50%';
   const router = useRouter();
   const { user, logout } = useAuth();
   const role = (user?.role ?? '').trim().toLowerCase();
@@ -1042,9 +1058,9 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     const controller = new AbortController();
-    void loadPopulation(controller.signal);
+    const initial = setTimeout(() => { void loadPopulation(controller.signal); }, 0);
     const timer = setInterval(() => { void loadPopulation(controller.signal); }, 60 * 60 * 1000);
-    return () => { controller.abort(); clearInterval(timer); };
+    return () => { controller.abort(); clearTimeout(initial); clearInterval(timer); };
   }, [loadPopulation]);
 
   const onRefresh = async () => {
@@ -1076,9 +1092,6 @@ export default function AdminDashboard() {
   }, [seniors]);
 
   const mappedSeniorCount = Object.values(barangayCounts).reduce((total, count) => total + count, 0);
-  const unmappedSeniorCount = seniors.length - mappedSeniorCount;
-  const enrolledCount = seniors.filter((senior) => senior.avatarUrl).length;
-  const enrolledPct = seniors.length ? Math.round((enrolledCount / seniors.length) * 100) : 0;
   const barangayMapHtml = useMemo(() => buildBarangayMapHtml(barangayCounts), [barangayCounts]);
   const categoryCounts = useMemo(() => {
     const counts = Object.fromEntries(BARANGAYS.map(name => [name, 0]));
@@ -1131,15 +1144,10 @@ export default function AdminDashboard() {
     const category = String(transaction.category ?? transaction.type ?? '').toLowerCase();
     return category.includes(transactionCategory);
   });
-  const stats = [
-    { value: seniors.length,       label: 'Senior citizens',     icon: 'people' },
-    { value: enrolledCount,        label: 'Face enrolled',       icon: 'scan' },
-    { value: unmappedSeniorCount,  label: 'Need address review', icon: 'location' },
-  ];
 
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
-      <StatusBar barStyle="dark-content" />
+      <StatusBar barStyle={dark ? 'light-content' : 'dark-content'} />
       <Toast
         visible={toast.visible}
         message={toast.message}
@@ -1864,7 +1872,7 @@ export default function AdminDashboard() {
 // ---------------------------------------------------------------------------
 // Styles
 // ---------------------------------------------------------------------------
-const s = StyleSheet.create({
+const createStyles = (C: typeof darkColors, dark: boolean) => StyleSheet.create({
   safe:   { flex: 1, backgroundColor: C.bg },
   scroll: { flex: 1 },
   container: { paddingHorizontal: sp(5), paddingTop: sp(2), paddingBottom: sp(10) },
@@ -2029,7 +2037,7 @@ const s = StyleSheet.create({
     backgroundColor: C.white, alignItems: 'center', justifyContent: 'center',
   },
   categoryCountActive: { backgroundColor: 'rgba(255,255,255,0.2)' },
-  categoryCountText: { fontFamily: 'InterBody', fontWeight: '700', fontSize: 11, color: C.primaryDark },
+  categoryCountText: { fontFamily: 'InterBody', fontWeight: '700', fontSize: 11, color: dark ? C.accent : C.primaryDark },
   categoryCountTextActive: { color: C.white },
   categoryLegend: { padding: 16 },
   categorySummary: { fontFamily: 'InterBody', fontSize: 13, fontWeight: '600', color: C.ink },
@@ -2054,13 +2062,13 @@ const s = StyleSheet.create({
     paddingHorizontal: 10, paddingVertical: 6,
     ...shadow(C.ink, 0.15, 6, 2),
   },
-  mapBadgeTxt: { fontFamily: 'InterBody', fontWeight: '600', fontSize: 11.5, color: C.primaryDark },
+  mapBadgeTxt: { fontFamily: 'InterBody', fontWeight: '600', fontSize: 11.5, color: dark ? C.accent : C.primaryDark },
   rankList: { paddingHorizontal: sp(4), paddingTop: sp(4), paddingBottom: sp(1), gap: sp(3) },
   rankRow: { flexDirection: 'row', alignItems: 'center', gap: sp(2.5) },
   rankName: { fontFamily: 'InterBody', fontWeight: '600', fontSize: 12.5, color: C.ink, width: 108 },
   rankTrack: { flex: 1, height: 10, borderRadius: 5, backgroundColor: C.lineSoft, overflow: 'hidden' },
   rankFill: { height: 10, borderRadius: 5 },
-  rankCount: { fontFamily: 'InterBody', fontWeight: '700', fontSize: 12.5, color: C.primaryDark, width: 22, textAlign: 'right' },
+  rankCount: { fontFamily: 'InterBody', fontWeight: '700', fontSize: 12.5, color: dark ? C.accent : C.primaryDark, width: 22, textAlign: 'right' },
   rankShare: { fontFamily: 'InterBody', fontSize: 11, color: C.inkFaint, width: 32, textAlign: 'right' },
   rankToggle: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4,
@@ -2119,7 +2127,7 @@ const s = StyleSheet.create({
     fontFamily: 'InterBody', fontSize: 12, color: C.inkSoft,
   },
   populationRowValue: {
-    fontFamily: 'InterBody', fontWeight: '700', fontSize: 12, color: C.primaryDark,
+    fontFamily: 'InterBody', fontWeight: '700', fontSize: 12, color: dark ? C.accent : C.primaryDark,
   },
   populationBarTrack: {
     height: 11, borderRadius: 6, backgroundColor: C.lineSoft, overflow: 'hidden',
@@ -2141,7 +2149,7 @@ const s = StyleSheet.create({
     paddingHorizontal: 12, paddingVertical: 8, minHeight: 34,
     borderTopWidth: 1, borderTopColor: C.lineSoft,
   },
-  populationTableRowAlt: { backgroundColor: '#FAFCF9' },
+  populationTableRowAlt: { backgroundColor: dark ? C.lineSoft : '#FAFCF9' },
   populationBarangayColumn: { flex: 1, paddingRight: 10 },
   populationFooter: {
     flexDirection: 'row', alignItems: 'flex-start', gap: 6,
@@ -2154,7 +2162,7 @@ const s = StyleSheet.create({
 
   // Segmented control
   segment: {
-    flexDirection: 'row', backgroundColor: '#E4ECE1',
+    flexDirection: 'row', backgroundColor: dark ? C.lineSoft : '#E4ECE1',
     borderRadius: 18, padding: 4, marginBottom: sp(3),
   },
   segmentItem: {
@@ -2163,7 +2171,7 @@ const s = StyleSheet.create({
   },
   segmentItemActive: { backgroundColor: C.white, ...shadow(C.ink, 0.12, 6, 2) },
   segmentTxt: { fontFamily: 'InterBody', fontWeight: '600', fontSize: 13, color: C.inkFaint },
-  segmentTxtActive: { color: C.primaryDark },
+  segmentTxtActive: { color: dark ? C.accent : C.primaryDark },
 
   // Lists
   listCard: {
@@ -2211,20 +2219,20 @@ const s = StyleSheet.create({
     backgroundColor: C.primarySoft,
     alignItems: 'center', justifyContent: 'center',
   },
-  avatarTxt: { fontFamily: 'InterBody', fontWeight: '700', fontSize: 14, color: C.primaryDark },
+  avatarTxt: { fontFamily: 'InterBody', fontWeight: '700', fontSize: 14, color: dark ? C.accent : C.primaryDark },
   listName: { fontFamily: 'InterBody', fontWeight: '700', fontSize: 14.5, color: C.ink },
   listSub:  { fontFamily: 'InterBody', fontSize: 12.5, color: C.inkSoft, marginTop: 2 },
   listMeta: { fontFamily: 'InterBody', fontSize: 12, lineHeight: 17, color: C.inkFaint, marginTop: 3 },
   roleBadge: { borderRadius: 10, paddingHorizontal: 9, paddingVertical: 4 },
   roleBadgeTxt: { fontFamily: 'InterBody', fontWeight: '700', fontSize: 11 },
   smallAction: { borderRadius: 10, backgroundColor: C.primarySoft, paddingHorizontal: 9, paddingVertical: 6 },
-  smallActionText: { fontFamily: 'InterBody', fontWeight: '700', fontSize: 11, color: C.primaryDark },
+  smallActionText: { fontFamily: 'InterBody', fontWeight: '700', fontSize: 11, color: dark ? C.accent : C.primaryDark },
   statsRow: { flexDirection: 'row', gap: 8, marginTop: 10 },
   statCard: { flex: 1, backgroundColor: C.lineSoft, borderRadius: 12, padding: 10 },
-  statValue: { fontFamily: 'FraunTitle', fontSize: 22, color: C.primaryDark },
+  statValue: { fontFamily: 'FraunTitle', fontSize: 22, color: dark ? C.accent : C.primaryDark },
   statLabel: { fontFamily: 'InterBody', fontSize: 11, color: C.inkSoft, marginTop: 2 },
   roleRow: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: sp(4) },
-  roleCount: { fontFamily: 'FraunTitle', fontSize: 22, color: C.primaryDark },
+  roleCount: { fontFamily: 'FraunTitle', fontSize: 22, color: dark ? C.accent : C.primaryDark },
   roleTitleLine: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   roleBar: { height: 6, borderRadius: 3, backgroundColor: C.lineSoft, overflow: 'hidden', marginTop: 8 },
   roleBarFill: { height: 6, borderRadius: 3, minWidth: 3 },
@@ -2267,13 +2275,13 @@ const s = StyleSheet.create({
   emptyHint:  { fontFamily: 'InterBody', fontSize: 13, color: C.inkSoft, textAlign: 'center', marginTop: 4 },
 
   // Footer
-  footer: { marginTop: sp(4), marginHorizontal: -sp(5), marginBottom: -sp(10), backgroundColor: '#FAFBFA', borderTopWidth: 2, borderTopColor: C.primaryDark },
+  footer: { marginTop: sp(4), marginHorizontal: -sp(5), marginBottom: -sp(10), backgroundColor: dark ? C.card : '#FAFBFA', borderTopWidth: 2, borderTopColor: C.primaryDark },
   footerColumns: { paddingHorizontal: sp(6), paddingVertical: sp(7), gap: sp(6) },
   footerColumnsWide: { flexDirection: 'row', alignItems: 'flex-start' },
   footerColumn: { flex: 1, alignItems: 'center', gap: 10 },
   footerLogo: { width: 100, height: 100 },
   footerAureaLogo: { width: 160, height: 100 },
-  footerBrand: { fontFamily: 'InterBody', fontSize: 14, fontWeight: '700', color: C.primaryDark, textAlign: 'center' },
+  footerBrand: { fontFamily: 'InterBody', fontSize: 14, fontWeight: '700', color: dark ? C.accent : C.primaryDark, textAlign: 'center' },
   footerOffice: { fontFamily: 'InterBody', fontSize: 12, color: C.inkSoft, textAlign: 'center', lineHeight: 20 },
   footerMessage: { fontFamily: 'InterBody', fontSize: 12, lineHeight: 20, color: C.inkSoft, textAlign: 'center', maxWidth: 380 },
   footerActions: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 20, backgroundColor: C.primaryDark, paddingHorizontal: 20, paddingVertical: 16 },
@@ -2281,3 +2289,12 @@ const s = StyleSheet.create({
   footerActionTxt: { fontFamily: 'InterBody', fontWeight: '600', fontSize: 12, color: '#FFFFFF' },
   footerCopy: { fontFamily: 'InterBody', fontSize: 11, color: C.inkSoft, textAlign: 'center', paddingHorizontal: 20, paddingBottom: 20 },
 });
+
+const lightTheme = { C, s: createStyles({ ...C, bgWeb: C.bg }, false) };
+const darkTheme = { C: darkColors, s: createStyles(darkColors, true) };
+
+function useScreenTheme() {
+  const { colorScheme } = useSettings();
+  const dark = colorScheme === 'dark';
+  return { ...(dark ? darkTheme : lightTheme), dark };
+}

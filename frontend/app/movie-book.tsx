@@ -2,7 +2,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
-  Text,
   ScrollView,
   TouchableOpacity,
   StyleSheet,
@@ -11,6 +10,7 @@ import {
   useWindowDimensions,
   ActivityIndicator,
 } from 'react-native';
+import { Text } from '../components/AppText';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
@@ -92,12 +92,39 @@ function isCurrentReservation(reservation: Reservation, today = new Date().toLoc
   return !reservation.screening_date || reservation.screening_date.slice(0, 10) >= today;
 }
 
+const reservationStatusLabels: Record<string, string> = {
+  Pending: 'Naghihintay ng confirmation',
+  Confirmed: 'Confirmed na',
+  Cancelled: 'Na-cancel na',
+};
+
+const reservationErrorMessages: Record<string, string> = {
+  'User was not found.': 'Hindi makita ang account mo. Mag-log in ulit.',
+  'You already have an active reservation. Cancel it before booking another screening.': 'May active reservation ka na. I-cancel muna iyon bago mag-book ng ibang screening.',
+  'Select between one and five available seats.': 'Pumili ng isa hanggang limang bakanteng seat.',
+  'Choose between one and five distinct seats.': 'Pumili ng isa hanggang limang magkakaibang seat.',
+  'A selected seat has already been reserved. Refresh the seat map and choose another seat.': 'May nauna nang nag-reserve ng napili mong seat. I-refresh ang seat map at pumili ng iba.',
+  'At least one attendee is required.': 'Pumili ng kahit isang seat.',
+  'This screening is unavailable.': 'Hindi available ang screening na ito. Pumili ng iba.',
+  'This screening date has already passed.': 'Tapos na ang screening na ito. Pumili ng ibang schedule.',
+  'Reservation was not found.': 'Hindi makita ang reservation mo.',
+  'This reservation is already cancelled.': 'Na-cancel na ang reservation na ito.',
+  'You cannot update this reservation.': 'Hindi mo puwedeng baguhin ang reservation na ito.',
+  'You may only cancel your own reservation.': 'Sarili mong reservation lang ang puwede mong i-cancel.',
+};
+
+function requestErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error && !(error instanceof TypeError) ? error.message : fallback;
+}
+
 async function parseResponse(response: Response) {
   const data = await response.json().catch(() => ({}));
 
   if (!response.ok || data.success === false) {
     throw new Error(
-      data.error || data.message || `Request failed (${response.status})`
+      reservationErrorMessages[data.error || data.message] ||
+      (response.status === 409 ? 'Nagbago ang availability o reservation status. I-check ulit bago mag-reserve.'
+        : 'Hindi natuloy ang request. Subukan ulit.')
     );
   }
 
@@ -125,9 +152,10 @@ export default function MovieBookScreen() {
   const [seatError, setSeatError] = useState('');
   const [loadedSeatScreening, setLoadedSeatScreening] = useState<string>('');
   const [seatRefresh, setSeatRefresh] = useState(0);
+  const selectedShowtimeId = selectedShowtime?.id;
 
   useEffect(() => {
-    if (!selectedShowtime || !userId) return;
+    if (!selectedShowtimeId || !userId) return;
     const controller = new AbortController();
     let active = true;
     let busy = false;
@@ -136,26 +164,25 @@ export default function MovieBookScreen() {
       busy = true;
       const timeout = setTimeout(() => controller.abort(), 20000);
       try {
-        const response = await fetch(`${API_BASE}/api/movie-center/screenings/${selectedShowtime.id}/seats?user_id=${userId}`, { signal: controller.signal });
+        const response = await fetch(`${API_BASE}/api/movie-center/screenings/${selectedShowtimeId}/seats?user_id=${userId}`, { signal: controller.signal });
         const data = await parseResponse(response);
         if (!active) return;
         const booked: string[] = data.reserved_seats || [];
         setReservedSeats(booked);
-        setLoadedSeatScreening(String(selectedShowtime.id));
+        setLoadedSeatScreening(String(selectedShowtimeId));
         setSelectedSeats(previous => previous.filter(seat => !booked.includes(seat)));
         setSeatError('');
       } catch {
-        if (active) setSeatError('Could not load reserved seats. Tap retry before choosing seats.');
+        if (active) setSeatError('Hindi ma-load ang mga naka-reserve na seat. Subukan ulit bago pumili.');
       } finally { clearTimeout(timeout); busy = false; if (active) setLoadingSeats(false); }
     };
     const start = setTimeout(() => { setLoadingSeats(true); setReservedSeats([]); setSelectedSeats([]); void load(); }, 0);
     const poll = setInterval(() => { void load(); }, 10000);
     return () => { active = false; clearTimeout(start); clearInterval(poll); controller.abort(); };
-  }, [selectedShowtime?.id, userId, seatRefresh]);
+  }, [selectedShowtimeId, userId, seatRefresh]);
 
 
-  const [showConfirmation, setShowConfirmation] = useState(false);
-  const [reservationCode, setReservationCode] = useState('');
+  const [submittedReservationCode, setSubmittedReservationCode] = useState('');
 
   const [loadingMovies, setLoadingMovies] = useState(true);
   const [loadingScreenings, setLoadingScreenings] = useState(false);
@@ -182,13 +209,13 @@ export default function MovieBookScreen() {
     const controller = new AbortController();
     setCheckingReservation(true);
     const timeout = setTimeout(() => {
-      setReservationError('Could not check your reservation. Please try again.');
+      setReservationError('Hindi ma-check ang reservation mo. Subukan ulit.');
       setCheckingReservation(false);
       controller.abort();
     }, 25000);
     loadExistingReservation(controller.signal)
       .catch(() => {
-        if (!controller.signal.aborted) setReservationError('Could not check your reservation. Please try again.');
+        if (!controller.signal.aborted) setReservationError('Hindi ma-check ang reservation mo. Subukan ulit.');
       })
       .finally(() => {
         clearTimeout(timeout);
@@ -196,6 +223,17 @@ export default function MovieBookScreen() {
       });
     return () => { clearTimeout(timeout); controller.abort(); };
   }, [loadExistingReservation]));
+
+  const refreshReservation = async () => {
+    setCheckingReservation(true);
+    try {
+      await loadExistingReservation();
+    } catch {
+      setReservationError('Hindi ma-check ang reservation mo. Subukan ulit.');
+    } finally {
+      setCheckingReservation(false);
+    }
+  };
 
   const handleCancelReservation = async () => {
     if (!existingReservation || reservationBusy.current) return;
@@ -213,7 +251,7 @@ export default function MovieBookScreen() {
       // Recheck in case older data contains another active reservation.
       await loadExistingReservation();
     } catch (err) {
-      Alert.alert('Cancellation failed', err instanceof Error ? err.message : 'Please try again.');
+      Alert.alert('Hindi na-cancel ang reservation', requestErrorMessage(err, 'Hindi makakonekta. Subukan ulit.'));
     } finally {
       reservationBusy.current = false;
       setCancelling(false);
@@ -254,7 +292,7 @@ export default function MovieBookScreen() {
         });
       } catch (err: any) {
         if (mounted) {
-          setError(err.message || 'Unable to load movies.');
+          setError(requestErrorMessage(err, 'Hindi ma-load ang mga movie.'));
         }
       } finally {
         if (mounted) setLoadingMovies(false);
@@ -269,28 +307,29 @@ export default function MovieBookScreen() {
   }, [userId]);
 
   // Load screenings for the selected movie.
+  const selectedMovieId = selectedMovie?.id;
   useEffect(() => {
-    if (!userId || !selectedMovie) {
-      setScreenings([]);
-      setSelectedDate('');
-      setSelectedShowtime(null);
-      clearSeats();
-      return;
-    }
-
     let mounted = true;
 
     const loadScreenings = async () => {
+      if (!userId || !selectedMovieId) {
+        setScreenings([]);
+        setSelectedDate('');
+        setSelectedShowtime(null);
+        setSelectedSeats([]);
+        setLoadingScreenings(false);
+        return;
+      }
       try {
         setLoadingScreenings(true);
         setSelectedShowtime(null);
         setSelectedDate('');
-        clearSeats();
+        setSelectedSeats([]);
 
         const response = await fetch(
           `${API_BASE}/api/movie-center/screenings?user_id=${encodeURIComponent(
             String(userId)
-          )}&movie_id=${encodeURIComponent(String(selectedMovie.id))}`
+          )}&movie_id=${encodeURIComponent(String(selectedMovieId))}`
         );
 
         const data = await parseResponse(response);
@@ -310,19 +349,20 @@ export default function MovieBookScreen() {
       } catch (err: any) {
         if (mounted) {
           setScreenings([]);
-          setError(err.message || 'Unable to load screenings.');
+          setError(requestErrorMessage(err, 'Hindi ma-load ang mga screening.'));
         }
       } finally {
         if (mounted) setLoadingScreenings(false);
       }
     };
 
-    loadScreenings();
+    const initial = setTimeout(() => { void loadScreenings(); }, 0);
 
     return () => {
       mounted = false;
+      clearTimeout(initial);
     };
-  }, [userId, selectedMovie?.id]);
+  }, [userId, selectedMovieId]);
 
   // Dates are based on actual admin-created screenings.
   const dates = useMemo(() => {
@@ -404,8 +444,8 @@ export default function MovieBookScreen() {
 
     if (selectedSeats.length >= maxSelectable) {
       Alert.alert(
-        'Reservation limit',
-        `You can select up to ${maxSelectable} attendee(s) for this screening.`
+        'Limit sa reservation',
+        `Hanggang ${maxSelectable} na manonood lang ang puwedeng piliin para sa screening na ito.`
       );
       return;
     }
@@ -416,29 +456,29 @@ export default function MovieBookScreen() {
   const handleReserve = async () => {
     if (reservationBusy.current || existingReservation || checkingReservation || reservationError || loadingSeats || seatError || loadedSeatScreening !== String(selectedShowtime?.id)) return;
     if (!userId) {
-      Alert.alert('Login required', 'Please log in again to make a reservation.');
+      Alert.alert('Kailangang mag-log in', 'Mag-log in ulit para makapag-reserve.');
       return;
     }
 
     if (!selectedMovie) {
-      Alert.alert('Select a movie', 'Please select a movie first.');
+      Alert.alert('Pumili ng movie', 'Pumili muna ng movie.');
       return;
     }
 
     if (!selectedShowtime) {
-      Alert.alert('Select a showtime', 'Please choose your preferred screening time.');
+      Alert.alert('Pumili ng showtime', 'Piliin ang oras ng screening na gusto mo.');
       return;
     }
 
     if (selectedSeats.length === 0) {
-      Alert.alert('Select attendees', 'Please select at least one attendee.');
+      Alert.alert('Piliin ang seats', 'Pumili ng kahit isang seat.');
       return;
     }
 
     if (selectedSeats.length > Number(selectedShowtime.available_slots)) {
       Alert.alert(
-        'Not enough available slots',
-        'Please select fewer attendees.'
+        'Kulang ang available na slots',
+        'Bawasan ang bilang ng manonood.'
       );
       return;
     }
@@ -471,9 +511,9 @@ export default function MovieBookScreen() {
         reservation?.reservation?.confirmation_code ||
         reservation?.id ||
         reservation?.reservation_id ||
-        'Submitted';
+        'Na-submit na';
 
-      setReservationCode(String(code));
+      setSubmittedReservationCode(String(code));
       const saved = reservation?.reservation || (Array.isArray(reservation) ? reservation[0] : reservation);
       setExistingReservation({
         ...saved,
@@ -485,16 +525,15 @@ export default function MovieBookScreen() {
         screening_time: selectedShowtime.screening_time,
         attendee_count: selectedSeats.length,
       });
-      setShowConfirmation(false);
       // The successful booking stays visible even if this follow-up fails.
       await loadExistingReservation().catch(() => undefined);
     } catch (err: any) {
       setSeatRefresh(value => value + 1);
-      setReservationError('Please check your reservation before trying again.');
+      setReservationError('I-check muna ang reservation mo bago sumubok ulit.');
       await loadExistingReservation().catch(() => undefined);
       Alert.alert(
-        'Reservation failed',
-        err.message || 'Something went wrong. Please try again.'
+        'Hindi na-submit ang reservation',
+        requestErrorMessage(err, 'Hindi makakonekta. Subukan ulit.')
       );
     } finally {
       reservationBusy.current = false;
@@ -523,8 +562,8 @@ export default function MovieBookScreen() {
         disabled={isReserved || seatsUnavailable}
         accessibilityState={{ disabled: isReserved || seatsUnavailable, selected: isSelected }}
         accessibilityRole="button"
-        accessibilityLabel={`Attendee ${id}, ${
-          isReserved ? 'reserved' : isSelected ? 'selected' : 'available'
+        accessibilityLabel={`Seat ${id}, ${
+          isReserved ? 'naka-reserve' : isSelected ? 'napili mo' : 'bakante'
         }`}
         style={[
           styles.seat,
@@ -546,37 +585,42 @@ export default function MovieBookScreen() {
       <SafeAreaView style={styles.container}>
         <StatusBar barStyle="dark-content" />
         <View style={styles.header}>
-          <TouchableOpacity style={styles.backButton} onPress={() => router.back()} accessibilityLabel="Go back">
+          <TouchableOpacity style={styles.backButton} onPress={() => router.back()} accessibilityLabel="Bumalik">
             <Ionicons name="arrow-back" size={25} color="#252525" />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>My Movie Reservation</Text>
+          <Text style={styles.headerTitle}>Reservation ko sa Movie Center</Text>
         </View>
         <ScrollView contentContainerStyle={styles.scrollContent}>
-          {checkingReservation ? <ActivityIndicator size="large" color="#7652A5" /> : reservationError ? (
+          {checkingReservation ? <ActivityIndicator size="large" color="#7652A5" /> : reservationError && !existingReservation ? (
             <View style={styles.confirmationDetails}>
               <Text style={styles.confirmationValue}>{reservationError}</Text>
-              <TouchableOpacity style={styles.doneButton} onPress={async () => {
-                setCheckingReservation(true);
-                try { await loadExistingReservation(); }
-                catch { setReservationError('Could not check your reservation. Please try again.'); }
-                finally { setCheckingReservation(false); }
-              }}><Text style={styles.doneButtonText}>Try again</Text></TouchableOpacity>
+              <TouchableOpacity style={styles.doneButton} accessibilityRole="button" onPress={() => void refreshReservation()}>
+                <Text style={styles.doneButtonText}>Subukan ulit</Text>
+              </TouchableOpacity>
             </View>
           ) : existingReservation && (
             <View style={styles.confirmationDetails}>
-              <Text style={styles.confirmationTitle}>Your existing reservation</Text>
+              <Text style={styles.confirmationTitle} accessibilityLiveRegion="polite">
+                {submittedReservationCode === String(existingReservation.confirmation_code || existingReservation.id)
+                  ? 'Na-submit na ang reservation mo'
+                  : 'Kasalukuyan mong reservation'}
+              </Text>
               <Text style={styles.confirmationLabel}>Confirmation code</Text>
               <Text style={styles.confirmationCode}>{existingReservation.confirmation_code || existingReservation.id}</Text>
               <Text style={styles.confirmationLabel}>Movie</Text>
-              <Text style={styles.confirmationValue}>{existingReservation.movie_title || 'Movie screening'}</Text>
+              <Text style={styles.confirmationValue}>{existingReservation.movie_title || 'Screening ng movie'}</Text>
               <Text style={styles.confirmationLabel}>Schedule</Text>
               <Text style={styles.confirmationValue}>{existingReservation.screening_date} {formatTime(existingReservation.screening_time || '')}</Text>
-              <Text style={styles.confirmationLabel}>Attendees</Text>
+              <Text style={styles.confirmationLabel}>Bilang ng manonood</Text>
               <Text style={styles.confirmationValue}>{existingReservation.attendee_count}</Text>
               <Text style={styles.confirmationLabel}>Status</Text>
-              <Text style={styles.confirmationValue}>{existingReservation.status}</Text>
+              <Text style={styles.confirmationValue}>{reservationStatusLabels[existingReservation.status] ?? existingReservation.status}</Text>
+              {!!reservationError && <Text style={styles.confirmationValue} accessibilityRole="alert">{reservationError}</Text>}
+              <TouchableOpacity style={styles.doneButton} accessibilityRole="button" disabled={cancelling} onPress={() => void refreshReservation()}>
+                <Text style={styles.doneButtonText}>I-refresh ang status</Text>
+              </TouchableOpacity>
               <TouchableOpacity style={[styles.doneButton, { backgroundColor: '#B3432E' }]} disabled={cancelling} onPress={handleCancelReservation} accessibilityRole="button">
-                {cancelling ? <ActivityIndicator color="#fff" /> : <Text style={styles.doneButtonText}>Cancel reservation</Text>}
+                {cancelling ? <ActivityIndicator color="#fff" /> : <Text style={styles.doneButtonText}>I-cancel ang reservation</Text>}
               </TouchableOpacity>
             </View>
           )}
@@ -601,7 +645,7 @@ export default function MovieBookScreen() {
         <View style={styles.headerText}>
           <Text style={styles.headerTitle}>Movie Center</Text>
           <Text style={styles.headerSubtitle}>
-            Reserve your movie screening
+            Mag-reserve para sa movie screening
           </Text>
         </View>
 
@@ -617,9 +661,9 @@ export default function MovieBookScreen() {
         {/* Welcome Banner */}
         <View style={styles.banner}>
           <View style={styles.bannerTextContainer}>
-            <Text style={styles.bannerTitle}>Enjoy a movie day!</Text>
+            <Text style={styles.bannerTitle}>Tara, manood ng sine!</Text>
             <Text style={styles.bannerDescription}>
-              Choose a movie, pick a showtime, and select your attendees.
+              Pumili ng movie, showtime, at seat para sa bawat manonood.
             </Text>
           </View>
           <Ionicons name="ticket-outline" size={54} color="#FFFFFF" />
@@ -627,22 +671,22 @@ export default function MovieBookScreen() {
 
         {/* Movie Selection */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Now Showing</Text>
+          <Text style={styles.sectionTitle}>Mga palabas ngayon</Text>
           <Text style={styles.sectionDescription}>
-            Select a movie you want to watch.
+            Piliin ang movie na gusto mong panoorin.
           </Text>
 
           {loadingMovies ? (
             <View style={styles.loadingContainer}>
               <ActivityIndicator size="large" color="#7652A5" />
-              <Text style={styles.loadingText}>Loading movies...</Text>
+              <Text style={styles.loadingText}>Nilo-load ang mga movie…</Text>
             </View>
           ) : movies.length === 0 ? (
             <View style={styles.emptyCard}>
               <Ionicons name="film-outline" size={34} color="#A99BC0" />
-              <Text style={styles.emptyTitle}>No movies available</Text>
+              <Text style={styles.emptyTitle}>Walang available na movie</Text>
               <Text style={styles.emptyDescription}>
-                There are currently no active movies available for reservation.
+                Wala pang movie na puwedeng i-reserve ngayon.
               </Text>
             </View>
           ) : (
@@ -683,7 +727,7 @@ export default function MovieBookScreen() {
                   <View style={styles.movieInfo}>
                     <Text style={styles.movieTitle}>{movie.title}</Text>
                     <Text style={styles.movieMeta}>
-                      {movie.age_rating || 'Not rated'}
+                      {movie.age_rating || 'Walang rating'}
                     </Text>
                     {!!movie.description && (
                       <Text style={styles.movieDescription}>
@@ -691,7 +735,7 @@ export default function MovieBookScreen() {
                       </Text>
                     )}
                     <Text style={styles.rating}>
-                      Rated {movie.age_rating || 'Not specified'}
+                      Rating: {movie.age_rating || 'Walang nakalagay'}
                     </Text>
                   </View>
 
@@ -719,16 +763,16 @@ export default function MovieBookScreen() {
         {/* Date Selection */}
         {!!selectedMovie && (
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Select a Date</Text>
+            <Text style={styles.sectionTitle}>Pumili ng petsa</Text>
             <Text style={styles.sectionDescription}>
-              Choose your preferred screening date.
+              Piliin ang petsa ng screening na gusto mo.
             </Text>
 
             {loadingScreenings ? (
               <View style={styles.loadingContainer}>
                 <ActivityIndicator size="small" color="#7652A5" />
                 <Text style={styles.loadingText}>
-                  Loading screening dates...
+                  Nilo-load ang mga petsa ng screening…
                 </Text>
               </View>
             ) : dates.length === 0 ? (
@@ -738,9 +782,9 @@ export default function MovieBookScreen() {
                   size={30}
                   color="#A99BC0"
                 />
-                <Text style={styles.emptyTitle}>No screenings scheduled</Text>
+                <Text style={styles.emptyTitle}>Wala pang schedule</Text>
                 <Text style={styles.emptyDescription}>
-                  There are no available screening schedules for this movie yet.
+                  Wala pang screening schedule para sa movie na ito.
                 </Text>
               </View>
             ) : (
@@ -797,17 +841,17 @@ export default function MovieBookScreen() {
         {/* Showtime Selection */}
         {!!selectedMovie && !loadingScreenings && dates.length > 0 && (
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Available Showtimes</Text>
+            <Text style={styles.sectionTitle}>Mga available na showtime</Text>
             <Text style={styles.sectionDescription}>
-              Select your preferred screening time.
+              Piliin ang oras ng screening na gusto mo.
             </Text>
 
             {showtimes.length === 0 ? (
               <View style={styles.emptyCard}>
                 <Ionicons name="time-outline" size={30} color="#A99BC0" />
-                <Text style={styles.emptyTitle}>No showtimes for this date</Text>
+                <Text style={styles.emptyTitle}>Walang showtime sa petsang ito</Text>
                 <Text style={styles.emptyDescription}>
-                  Please select another screening date.
+                  Pumili ng ibang petsa ng screening.
                 </Text>
               </View>
             ) : (
@@ -842,8 +886,8 @@ export default function MovieBookScreen() {
                         </Text>
                         <Text style={styles.showtimeAvailability}>
                           {isFull
-                            ? 'No slots available'
-                            : `${available} slots available`}
+                            ? 'Wala nang bakanteng slot'
+                            : `${available} na bakanteng slot`}
                         </Text>
                       </View>
                     </View>
@@ -862,7 +906,7 @@ export default function MovieBookScreen() {
                           isFull && styles.fullStatusText,
                         ]}
                       >
-                        {isFull ? 'FULL' : 'AVAILABLE'}
+                        {isFull ? 'PUNO NA' : 'MAY BAKANTE'}
                       </Text>
                     </View>
                   </TouchableOpacity>
@@ -874,10 +918,10 @@ export default function MovieBookScreen() {
 
         {/* Attendee Selection */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Select Seats</Text>
+          <Text style={styles.sectionTitle}>Pumili ng seats</Text>
           <Text style={styles.sectionDescription}>
-            Select one marker for each attendee. Up to {MAX_SEATS} attendees
-            per reservation.
+            Pumili ng isang seat para sa bawat manonood. Hanggang {MAX_SEATS} manonood
+            sa bawat reservation.
           </Text>
 
           {selectedShowtime ? (
@@ -912,15 +956,15 @@ export default function MovieBookScreen() {
               </View>
 
               {loadingSeats && <ActivityIndicator color="#7652A5" />}
-              {!!seatError && <TouchableOpacity onPress={() => setSeatRefresh(value => value + 1)}><Text style={styles.footerNote}>{seatError} Retry</Text></TouchableOpacity>}
+              {!!seatError && <TouchableOpacity accessibilityRole="button" onPress={() => setSeatRefresh(value => value + 1)}><Text style={styles.footerNote}>{seatError} I-tap para subukan ulit.</Text></TouchableOpacity>}
               <View style={styles.legend}>
                 <View style={styles.legendItem}>
                   <View style={[styles.legendSwatch, styles.seatReserved]} />
-                  <Text style={styles.legendText}>Reserved</Text>
+                  <Text style={styles.legendText}>Naka-reserve</Text>
                 </View>
                 <View style={styles.legendItem}>
                   <View style={[styles.legendSwatch, styles.seat]} />
-                  <Text style={styles.legendText}>Available</Text>
+                  <Text style={styles.legendText}>Bakante</Text>
                 </View>
                 <View style={styles.legendItem}>
                   <View
@@ -930,17 +974,15 @@ export default function MovieBookScreen() {
                       styles.seatSelected,
                     ]}
                   />
-                  <Text style={styles.legendText}>Selected</Text>
+                  <Text style={styles.legendText}>Napili mo</Text>
                 </View>
               </View>
 
               <View style={styles.selectedSeatsBar}>
                 <Text style={styles.selectedSeatsLabel}>
                   {selectedSeats.length === 0
-                    ? 'No attendees selected'
-                    : `${selectedSeats.length} attendee${
-                        selectedSeats.length > 1 ? 's' : ''
-                      } selected`}
+                    ? 'Wala pang napiling seat'
+                    : `${selectedSeats.length} na seat ang napili mo`}
                 </Text>
 
                 {sortedSeats.length > 0 && (
@@ -971,29 +1013,29 @@ export default function MovieBookScreen() {
                 color="#A99BC0"
               />
               <Text style={styles.seatPlaceholderText}>
-                Select a showtime to choose your attendees.
+                Pumili muna ng showtime para makapili ng seats.
               </Text>
             </View>
           )}
         </View>
 
-        {/* Reservation Summary */}
+        {/* Detalye ng reservation */}
         <View style={styles.summaryCard}>
-          <Text style={styles.summaryTitle}>Reservation Summary</Text>
+          <Text style={styles.summaryTitle}>Detalye ng reservation</Text>
 
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>Movie</Text>
             <Text style={styles.summaryValue}>
-              {selectedMovie?.title || 'Not selected'}
+              {selectedMovie?.title || 'Wala pang napili'}
             </Text>
           </View>
 
           <View style={styles.summaryRow}>
-            <Text style={styles.summaryLabel}>Date</Text>
+            <Text style={styles.summaryLabel}>Petsa</Text>
             <Text style={styles.summaryValue}>
               {selectedDateInfo
                 ? `${selectedDateInfo.month} ${selectedDateInfo.number}`
-                : 'Not selected'}
+                : 'Wala pang napili'}
             </Text>
           </View>
 
@@ -1002,16 +1044,16 @@ export default function MovieBookScreen() {
             <Text style={styles.summaryValue}>
               {selectedShowtime
                 ? formatTime(selectedShowtime.screening_time)
-                : 'Not selected'}
+                : 'Wala pang napili'}
             </Text>
           </View>
 
           <View style={styles.summaryRow}>
-            <Text style={styles.summaryLabel}>Attendees</Text>
+            <Text style={styles.summaryLabel}>Bilang ng manonood</Text>
             <Text style={styles.summaryValue}>
               {selectedSeats.length > 0
-                ? `${selectedSeats.length} attendee(s)`
-                : 'Not selected'}
+                ? `${selectedSeats.length} na manonood`
+                : 'Wala pang napili'}
             </Text>
           </View>
 
@@ -1022,7 +1064,7 @@ export default function MovieBookScreen() {
               color="#7652A5"
             />
             <Text style={styles.noPaymentText}>
-              This is a free reservation. No payment is required.
+              Libre ang reservation. Wala kang kailangang bayaran.
             </Text>
           </View>
 
@@ -1039,7 +1081,7 @@ export default function MovieBookScreen() {
             ) : (
               <>
                 <Text style={styles.reserveButtonText}>
-                  Reserve Now
+                  Mag-reserve na
                 </Text>
                 <Ionicons
                   name="arrow-forward"
@@ -1052,74 +1094,10 @@ export default function MovieBookScreen() {
         </View>
 
         <Text style={styles.footerNote}>
-          Please arrive at the Movie Center before your scheduled screening.
+          Dumating sa Movie Center bago ang oras ng screening mo.
         </Text>
       </ScrollView>
 
-      {/* Confirmation Modal */}
-      {showConfirmation && (
-        <View style={styles.modalOverlay}>
-          <View style={styles.confirmationCard}>
-            <View style={styles.successIcon}>
-              <Ionicons name="checkmark" size={42} color="#FFFFFF" />
-            </View>
-
-            <Text style={styles.confirmationTitle}>
-              Reservation Submitted!
-            </Text>
-
-            <Text style={styles.confirmationDescription}>
-              Your movie screening reservation has been successfully submitted.
-            </Text>
-
-            <View style={styles.confirmationDetails}>
-              <Text style={styles.confirmationLabel}>
-                Confirmation Code
-              </Text>
-              <Text style={styles.confirmationCode}>
-                {reservationCode}
-              </Text>
-
-              <Text style={styles.confirmationLabel}>Movie</Text>
-              <Text style={styles.confirmationValue}>
-                {selectedMovie?.title || '—'}
-              </Text>
-
-              <Text style={styles.confirmationLabel}>Schedule</Text>
-              <Text style={styles.confirmationValue}>
-                {selectedDateInfo
-                  ? `${selectedDateInfo.month} ${selectedDateInfo.number}`
-                  : '—'}{' '}
-                ·{' '}
-                {selectedShowtime
-                  ? formatTime(selectedShowtime.screening_time)
-                  : '—'}
-              </Text>
-
-              <Text style={styles.confirmationLabel}>Attendees</Text>
-              <Text style={styles.confirmationValue}>
-                {selectedSeats.length}
-              </Text>
-            </View>
-
-            <Text style={styles.pendingNote}>
-              Your reservation has been recorded in the system. Please check
-              your reservation status for updates.
-            </Text>
-
-            <TouchableOpacity
-              style={styles.doneButton}
-              onPress={() => {
-                setShowConfirmation(false);
-                setSelectedShowtime(null);
-                clearSeats();
-              }}
-            >
-              <Text style={styles.doneButtonText}>Done</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      )}
     </SafeAreaView>
   );
 }
@@ -1499,42 +1477,11 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     paddingHorizontal: 15,
   },
-  modalOverlay: {
-    ...StyleSheet.absoluteFill,
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 22,
-    zIndex: 10,
-  },
-  confirmationCard: {
-    width: '100%',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 22,
-    padding: 23,
-    alignItems: 'center',
-  },
-  successIcon: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: '#389B68',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 16,
-  },
   confirmationTitle: {
     color: '#29252E',
     fontSize: 21,
     fontWeight: '800',
     textAlign: 'center',
-  },
-  confirmationDescription: {
-    color: '#77717E',
-    fontSize: 13,
-    textAlign: 'center',
-    marginTop: 8,
-    lineHeight: 19,
   },
   confirmationDetails: {
     width: '100%',
@@ -1555,16 +1502,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
     marginTop: 3,
-  },
-  pendingNote: {
-    color: '#287B48',
-    backgroundColor: '#E4F4E9',
-    padding: 10,
-    borderRadius: 9,
-    fontSize: 11,
-    textAlign: 'center',
-    marginTop: 15,
-    lineHeight: 16,
   },
   doneButton: {
     width: '100%',

@@ -18,11 +18,8 @@ export type OctogenarianBenefitApplication = {
   is_dual_citizen: boolean;
   dual_citizenship_details?: string;
   full_body_picture_submitted: boolean;
-  endorsed_list_submitted: boolean;
   full_body_picture_base64: string;
   full_body_picture_mime_type: string;
-  endorsed_list_base64?: string;
-  endorsed_list_mime_type?: string;
   applicant_signature?: string;
   applicant_signature_date?: string;
 };
@@ -40,13 +37,13 @@ export async function submitOctogenarianBenefitApplication(
     });
   } catch {
     throw new Error(
-      `Cannot reach API server at ${API_BASE_URL}. Ensure the backend is running and your phone is on the same Wi-Fi.`,
+      `Hindi makakonekta sa application server. I-check ang internet connection mo at subukan ulit.`,
     );
   }
 
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(data?.error || 'Unable to submit the benefit application.');
+    throw new Error((response.status < 500 && data?.error) || 'Hindi ma-submit ang application para sa benefit. Subukan ulit.');
   }
 
   return data as { success: boolean; application: Record<string, unknown> };

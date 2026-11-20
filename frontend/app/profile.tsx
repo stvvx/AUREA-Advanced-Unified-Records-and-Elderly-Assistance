@@ -1,4 +1,7 @@
+import { useSettings } from '../context/SettingsContext';
+import { DARK_SURFACES } from '../lib/appTheme';
 import { formatSeniorId } from '../lib/seniorId';
+import { getProfileCompletion } from '../lib/profileCompletion';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -10,12 +13,11 @@ import {
   ScrollView,
   StatusBar,
   StyleSheet,
-  Text,
-  TextInput,
   TextInputProps,
   TouchableOpacity,
   View,
 } from 'react-native';
+import { Text, TextInput } from '../components/AppText';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -105,7 +107,10 @@ const C = {
   lineSoft: '#EBF1E8',
   error: '#B42318',
   errorSoft: '#FCE8E6',
+  accent: '#2B6B4A',
 };
+const darkColors = { ...C, ...DARK_SURFACES, error: '#FFAB9C', errorSoft: '#3E2925' };
+
 
 const sp = (n: number) => n * 4;
 const isWeb = Platform.OS === 'web';
@@ -131,7 +136,7 @@ const webPointer = isWeb ? ({ cursor: 'pointer' } as any) : {};
 const webNoOutline = isWeb ? ({ outlineStyle: 'none' } as any) : {};
 
 const webDateStyle = {
-  backgroundColor: C.white,
+  backgroundColor: C.card,
   border: `1px solid ${C.line}`,
   borderRadius: 14,
   padding: '12px 14px',
@@ -191,11 +196,12 @@ function Section({
 }: {
   icon: string; title: string; subtitle?: string; right?: React.ReactNode; children: React.ReactNode;
 }) {
+  const { C, styles } = useScreenTheme();
   return (
     <View style={[styles.section, shadow(C.ink, 0.06, 14, 3)]}>
       <View style={styles.sectionHead}>
         <View style={styles.sectionIcon}>
-          <Ionicons name={icon as any} size={17} color={C.primaryDark} />
+          <Ionicons name={icon as any} size={17} color={C.accent} />
         </View>
         <View style={{ flex: 1 }}>
           <Text style={styles.sectionTitle}>{title}</Text>
@@ -209,6 +215,7 @@ function Section({
 }
 
 function FieldLabel({ label, required, missing = false }: { label: string; required?: boolean; missing?: boolean }) {
+  const { styles } = useScreenTheme();
   return (
     <Text style={[styles.label, missing && styles.missingText]}>
       {label}
@@ -220,6 +227,7 @@ function FieldLabel({ label, required, missing = false }: { label: string; requi
 function TextField({
   label, required, style, ...inputProps
 }: TextInputProps & { label: string; required?: boolean }) {
+  const { C, styles } = useScreenTheme();
   const [focused, setFocused] = useState(false);
   const missing = !String(inputProps.value ?? '').trim();
   return (
@@ -241,6 +249,7 @@ function TextField({
 function SelectField({
   label, value, placeholder, onPress, missing,
 }: { label: string; value: string; placeholder: string; onPress: () => void; missing?: boolean }) {
+  const { C, styles } = useScreenTheme();
   const isMissing = missing ?? !value.trim();
   return (
     <View style={styles.field}>
@@ -260,6 +269,7 @@ function SelectField({
 }
 
 function ReadOnlyField({ label, value, icon }: { label: string; value: string; icon?: string }) {
+  const { C, styles } = useScreenTheme();
   return (
     <View style={styles.field}>
       <FieldLabel label={label} missing={!value.trim()} />
@@ -278,6 +288,7 @@ function PickerModal({
   visible: boolean; title: string; options: string[]; value: string;
   onSelect: (v: string) => void; onClose: () => void;
 }) {
+  const { C, styles } = useScreenTheme();
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={onClose}>
@@ -296,7 +307,7 @@ function PickerModal({
                 accessibilityState={{ selected: active }}
               >
                 <Text style={[styles.modalItemText, active && styles.modalItemTextActive]}>{item}</Text>
-                {active && <Ionicons name="checkmark-circle" size={22} color={C.primaryDark} />}
+                {active && <Ionicons name="checkmark-circle" size={22} color={C.accent} />}
               </TouchableOpacity>
             );
           })}
@@ -314,6 +325,7 @@ const snapshotOf = (f: Record<string, any>, kids: ChildProfile[]) =>
   JSON.stringify([f.firstName, f.middleName, f.lastName, f.email, f.dob, f.gender, f.civilStatus, f.category, f.spouse, f.monthlyIncome, f.sourceOfIncome, f.occupation, f.contact, f.address, kids]);
 
 export default function ProfileScreen() {
+  const { C, styles, dark } = useScreenTheme();
   const router = useRouter();
   const { user, updateProfile, logout } = useAuth();
   const [loading, setLoading] = useState(false);
@@ -621,10 +633,10 @@ export default function ProfileScreen() {
   if (!ready || !user) {
     return (
       <SafeAreaView style={styles.safe}>
-        <StatusBar barStyle="dark-content" />
+        <StatusBar barStyle={dark ? 'light-content' : 'dark-content'} />
         <View style={styles.emptyState}>
           <View style={styles.emptyIcon}>
-            <Ionicons name="person-outline" size={30} color={C.primaryDark} />
+            <Ionicons name="person-outline" size={30} color={C.accent} />
           </View>
           <Text style={styles.emptyTitle}>Log in to see your profile</Text>
           <Text style={styles.emptyText}>Your details, Digital ID, and documents are saved to your account.</Text>
@@ -643,24 +655,14 @@ export default function ProfileScreen() {
   const canHaveSeniorQr = profileAge !== null && profileAge >= 60;
   const birthcertIsPdf = !!birthcert && birthcert.toLowerCase().includes('.pdf');
 
-  const completion = [
-    { done: !!form.firstName.trim(), hint: 'Add your first name' },
-    { done: !!form.lastName.trim(), hint: 'Add your last name' },
-    { done: !!form.email.trim(), hint: 'Add your email' },
-    { done: !!form.dob, hint: 'Add your date of birth' },
-    { done: !!form.gender, hint: 'Choose your gender' },
-    { done: !!form.civilStatus, hint: 'Choose your civil status' },
-    { done: !!form.contact.trim(), hint: 'Add a contact number' },
-    { done: !!form.address.trim(), hint: 'Add your address' },
-    { done: !!birthcert, hint: 'Upload your birth certificate' },
-  ];
+  const completion = getProfileCompletion({ ...form, birthcert });
   const completeCount = completion.filter((c) => c.done).length;
   const completePct = Math.round((completeCount / completion.length) * 100);
   const nextHint = completion.find((c) => !c.done)?.hint;
 
   return (
     <SafeAreaView style={styles.safe}>
-      <StatusBar barStyle="dark-content" />
+      <StatusBar barStyle={dark ? 'light-content' : 'dark-content'} />
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
         <ScrollView
           contentContainerStyle={styles.container}
@@ -732,7 +734,7 @@ export default function ProfileScreen() {
                     <Text style={styles.metaLabel}>Status</Text>
                     <View style={styles.statusRow}>
                       <View style={styles.statusDot} />
-                      <Text style={[styles.metaVal, { color: C.primary, marginTop: 0 }]}>Active</Text>
+                      <Text style={[styles.metaVal, { color: C.accent, marginTop: 0 }]}>Active</Text>
                     </View>
                   </View>
                 </View>
@@ -756,7 +758,7 @@ export default function ProfileScreen() {
               {canHaveSeniorQr ? (
                 <View style={[styles.qrCard, shadow(C.ink, 0.08, 16, 4)]}>
                   <View style={styles.qrHeader}>
-                    <Ionicons name="card-outline" size={18} color={C.primaryDark} />
+                    <Ionicons name="card-outline" size={18} color={C.accent} />
                     <Text style={styles.qrTitle}>Digital ID</Text>
                   </View>
                   <Text style={styles.qrDesc}>View your Senior Citizen ID card and QR code.</Text>
@@ -957,11 +959,11 @@ export default function ProfileScreen() {
                         activeOpacity={0.8}
                       >
                         {birthcertUploading ? (
-                          <ActivityIndicator size="small" color={C.primaryDark} />
+                          <ActivityIndicator size="small" color={C.accent} />
                         ) : (
-                          <Ionicons name="swap-horizontal-outline" size={16} color={C.primaryDark} />
+                          <Ionicons name="swap-horizontal-outline" size={16} color={C.accent} />
                         )}
-                        <Text style={[styles.docActionText, { color: C.primaryDark }]}>Replace</Text>
+                        <Text style={[styles.docActionText, { color: dark ? C.accent : C.primaryDark }]}>Replace</Text>
                       </TouchableOpacity>
                       <TouchableOpacity
                         style={[styles.docActionBtn, webPointer]}
@@ -1015,7 +1017,7 @@ export default function ProfileScreen() {
                   children.map((child) => (
                     <View key={child.id} style={styles.childRow}>
                       <View style={styles.childIcon}>
-                        <Ionicons name="person-outline" size={16} color={C.primaryDark} />
+                        <Ionicons name="person-outline" size={16} color={C.accent} />
                       </View>
                       <View style={styles.childFields}>
                         <TextField
@@ -1292,11 +1294,11 @@ export default function ProfileScreen() {
                 activeOpacity={0.85}
               >
                 {birthcertUploading ? (
-                  <ActivityIndicator size="small" color={C.primaryDark} />
+                  <ActivityIndicator size="small" color={C.accent} />
                 ) : (
-                  <Ionicons name="swap-horizontal-outline" size={18} color={C.primaryDark} />
+                  <Ionicons name="swap-horizontal-outline" size={18} color={C.accent} />
                 )}
-                <Text style={[styles.viewerFooterText, { color: C.primaryDark }]}>Replace</Text>
+                <Text style={[styles.viewerFooterText, { color: dark ? C.accent : C.primaryDark }]}>Replace</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -1323,7 +1325,7 @@ export default function ProfileScreen() {
 // ---------------------------------------------------------------------------
 // Styles
 // ---------------------------------------------------------------------------
-const styles = StyleSheet.create({
+const createStyles = (C: typeof darkColors, dark: boolean) => StyleSheet.create({
   safe: { flex: 1, backgroundColor: C.bg },
   container: {
     flexGrow: 1,
@@ -1388,7 +1390,7 @@ const styles = StyleSheet.create({
     borderColor: C.card,
   },
   avatarImage: { width: 104, height: 104, borderRadius: 52, backgroundColor: C.primarySoft },
-  avatarInitials: { fontFamily: 'FraunTitle', fontSize: 34, color: C.primaryDark },
+  avatarInitials: { fontFamily: 'FraunTitle', fontSize: 34, color: dark ? C.accent : C.primaryDark },
   avatarOverlay: {
     position: 'absolute', top: 0, right: 0, bottom: 0, left: 0,
     backgroundColor: 'rgba(15, 51, 35, 0.55)',
@@ -1451,7 +1453,7 @@ const styles = StyleSheet.create({
   },
   completionTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' },
   completionTitle: { fontFamily: 'InterBody', fontWeight: '600', fontSize: 12.5, color: C.inkSoft },
-  completionPct: { fontFamily: 'FraunTitle', fontSize: 16, color: C.primaryDark },
+  completionPct: { fontFamily: 'FraunTitle', fontSize: 16, color: dark ? C.accent : C.primaryDark },
   completionTrack: {
     height: 8,
     borderRadius: 4,
@@ -1538,7 +1540,7 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   input: {
-    backgroundColor: C.white,
+    backgroundColor: C.card,
     borderWidth: 1,
     borderColor: C.line,
     borderRadius: 14,
@@ -1555,7 +1557,7 @@ const styles = StyleSheet.create({
   inputFocused: {
     borderColor: C.primaryMid,
     borderWidth: 1.5,
-    backgroundColor: '#FBFDFA',
+    backgroundColor: dark ? C.card : '#FBFDFA',
   },
   selectInput: {
     flexDirection: 'row',
@@ -1763,7 +1765,7 @@ const styles = StyleSheet.create({
   },
   modalItemActive: { backgroundColor: C.primarySoft },
   modalItemText: { fontFamily: 'InterBody', fontSize: 15.5, color: C.ink },
-  modalItemTextActive: { fontWeight: '700', color: C.primaryDark },
+  modalItemTextActive: { fontWeight: '700', color: dark ? C.accent : C.primaryDark },
 
   // Viewer
   viewerOverlay: { flex: 1, backgroundColor: 'rgba(10, 20, 16, 0.96)' },
@@ -1846,3 +1848,12 @@ const styles = StyleSheet.create({
     maxWidth: 300,
   },
 });
+
+const lightTheme = { C, styles: createStyles({ ...C, bgWeb: C.bg }, false) };
+const darkTheme = { C: darkColors, styles: createStyles(darkColors, true) };
+
+function useScreenTheme() {
+  const { colorScheme } = useSettings();
+  const dark = colorScheme === 'dark';
+  return { ...(dark ? darkTheme : lightTheme), dark };
+}

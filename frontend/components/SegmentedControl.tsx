@@ -1,5 +1,6 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, TouchableOpacity, StyleSheet } from 'react-native';
+import { Text } from './AppText';
 import { colors, space } from '../theme/tokens';
 
 type Option = { value: string; label: string };

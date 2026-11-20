@@ -36,9 +36,7 @@ APPLICANT_FIELDS = {
     "is_dual_citizen",
     "dual_citizenship_details",
     "full_body_picture_submitted",
-    "endorsed_list_submitted",
     "full_body_picture_url",
-    "endorsed_list_url",
     "applicant_signature",
     "applicant_signature_date",
 }
@@ -132,18 +130,18 @@ def application_milestone(application, dob):
 def birthday_application_eligibility(dob, applications, reviewed_ids):
     benefit_type = classify_benefit_type(dob)
     if not benefit_type:
-        return {"can_apply": False, "benefit_type": None, "message": "You are not yet eligible for a birthday benefit."}
+        return {"can_apply": False, "benefit_type": None, "message": "Hindi ka pa qualified para sa Birthday Benefits."}
     if any(item.get("benefit_status") != "Released" for item in applications):
-        return {"can_apply": False, "benefit_type": benefit_type, "message": "Track your existing application until your benefit is released."}
+        return {"can_apply": False, "benefit_type": benefit_type, "message": "I-check ang status ng application mo habang hinihintay na ma-release ang benefit."}
     # The tracking view and feedback requirement both refer to the latest application.
     if applications and str(applications[0].get("id")) not in reviewed_ids:
-        return {"can_apply": False, "benefit_type": benefit_type, "message": "Submit feedback for your released benefit before applying again."}
+        return {"can_apply": False, "benefit_type": benefit_type, "message": "Magbigay muna ng feedback tungkol sa na-release na benefit bago mag-apply ulit."}
     milestone = birthday_benefit_milestone(dob)
     if any(application_milestone(item, dob) == milestone for item in applications):
         next_age = {80: 85, 85: 90, 90: 95, 95: 100}.get(milestone)
-        message = f"You may apply for your next birthday benefit when you turn {next_age}." if next_age else "You have already applied for the Centenarian benefit."
+        message = f"Puwede kang mag-apply ulit sa Birthday Benefits kapag edad {next_age} ka na." if next_age else "Nakapag-apply ka na para sa Centenarian benefit."
         return {"can_apply": False, "benefit_type": benefit_type, "message": message}
-    return {"can_apply": True, "benefit_type": benefit_type, "message": f"You are eligible to apply for the age {milestone} birthday benefit."}
+    return {"can_apply": True, "benefit_type": benefit_type, "message": f"Qualified kang mag-apply para sa Birthday Benefits sa edad na {milestone}."}
 
 
 def load_birthday_eligibility(user_id, dob, applications):
@@ -177,7 +175,7 @@ def create_benefit_application():
         return jsonify({"success": False, "error": str(exc)}), 500
 
     if not isinstance(users, list) or not users:
-        return jsonify({"success": False, "error": "Applicant was not found."}), 404
+        return jsonify({"success": False, "error": "Hindi makita ang record ng applicant."}), 404
 
     profile = users[0]
     try:
@@ -188,7 +186,7 @@ def create_benefit_application():
         if not eligibility["can_apply"]:
             return jsonify({"error": eligibility["message"]}), 409
     except Exception:
-        return jsonify({"error": "Could not check application eligibility. Please try again."}), 503
+        return jsonify({"error": "Hindi ma-check ngayon kung qualified ka. Subukan ulit."}), 503
     applicant_dob = str(profile.get("dob") or "").strip()
     try:
         try:
@@ -200,34 +198,33 @@ def create_benefit_application():
             (today.month, today.day) < (applicant_birth_date.month, applicant_birth_date.day)
         )
     except ValueError:
-        return jsonify({"success": False, "error": "A valid date of birth is required."}), 400
+        return jsonify({"success": False, "error": "Pakilagay ang tamang petsa ng kapanganakan."}), 400
 
     if applicant_age < 60:
         return jsonify({
             "success": False,
-            "error": "Only users aged 60 and above may avail senior citizen services.",
+            "error": "Para sa edad 60 pataas ang senior citizen services.",
         }), 403
 
     # Eligibility uses the saved profile DOB, not a client-supplied age.
     date_of_birth = str(profile.get("dob") or "").strip()
     benefit_type = classify_benefit_type(date_of_birth)
     if not date_of_birth:
-        return jsonify({"success": False, "error": "date_of_birth is required."}), 400
+        return jsonify({"success": False, "error": "Pakilagay ang petsa ng kapanganakan."}), 400
 
     if not benefit_type:
         return jsonify({
             "success": False,
-            "error": "The applicant must be at least 80 years old for this benefit.",
+            "error": "Kailangang edad 80 pataas ang applicant para sa benefit na ito.",
         }), 400
 
     required = ("permanent_address_philippines", "contact_number", "email_address")
     if any(not str(data.get(field) or "").strip() for field in required):
-        return jsonify({"success": False, "error": "Please complete the required application fields."}), 400
+        return jsonify({"success": False, "error": "Pakikumpleto ang mga kailangang detalye sa application."}), 400
 
     full_body_picture = str(data.get("full_body_picture_base64") or "").strip()
-    endorsed_list = str(data.get("endorsed_list_base64") or "").strip()
     if not full_body_picture:
-        return jsonify({"success": False, "error": "Full-body picture attachment is required."}), 400
+        return jsonify({"success": False, "error": "Kailangang mag-attach ng full-body photo."}), 400
 
     payload = {field: data[field] for field in APPLICANT_FIELDS if field in data}
     payload["user_id"] = user_id
@@ -252,7 +249,6 @@ def create_benefit_application():
     payload["valid_id_submitted"] = has_digital_id
     payload["id_picture_submitted"] = has_id_picture
     payload["full_body_picture_submitted"] = True
-    payload["endorsed_list_submitted"] = bool(endorsed_list)
 
     try:
         payload["full_body_picture_url"] = upload_benefit_document(
@@ -261,13 +257,6 @@ def create_benefit_application():
             full_body_picture,
             str(data.get("full_body_picture_mime_type") or "image/jpeg"),
         )
-        if endorsed_list:
-            payload["endorsed_list_url"] = upload_benefit_document(
-                user_id,
-                "endorsed_list",
-                endorsed_list,
-                str(data.get("endorsed_list_mime_type") or "image/jpeg"),
-            )
         created = _supabase(
             "POST",
             "octogenarian_benefit_applications",
@@ -416,7 +405,7 @@ def get_user_benefit_applications(user_id: int):
         )
         users = _supabase("GET", "users", params={"id": f"eq.{user_id}", "select": "id,dob", "limit": "1"}) or []
         if not users:
-            return jsonify({"error": "Applicant not found."}), 404
+            return jsonify({"error": "Hindi makita ang record ng applicant."}), 404
         eligibility = load_birthday_eligibility(user_id, users[0].get("dob"), applications or [])
         return jsonify({"success": True, "applications": applications or [],
                         "feedback": eligibility.pop("latest_feedback", None), "eligibility": eligibility}), 200
@@ -548,19 +537,19 @@ def birthday_benefit_feedback(application_id):
         if request.method == "GET":
             return jsonify({"feedback": existing[0] if existing else None}), 200
         if applications[0].get("benefit_status") != "Released":
-            return jsonify({"error": "Feedback is available after your benefit is released."}), 409
+            return jsonify({"error": "Puwede kang magbigay ng feedback kapag na-release na ang benefit."}), 409
         if existing:
             return jsonify({"feedback": existing[0]}), 200
         rating = data.get("rating")
         comments = data.get("comments")
         if isinstance(rating, bool) or not isinstance(rating, int) or not 1 <= rating <= 5:
-            return jsonify({"error": "Choose a rating from 1 to 5."}), 400
+            return jsonify({"error": "Pumili ng rating mula 1 hanggang 5."}), 400
         if not isinstance(comments, str) or not 1 <= len(comments.strip()) <= 2000:
-            return jsonify({"error": "Enter feedback between 1 and 2000 characters."}), 400
+            return jsonify({"error": "Maglagay ng feedback na may 1 hanggang 2,000 characters."}), 400
         rows = _supabase("POST", "service_feedback", payload={
             "user_id": user_id, "service_key": "birthday_benefits", "service_record_id": application_id,
             "rating": rating, "comments": comments.strip(),
         })
         return jsonify({"feedback": rows[0] if isinstance(rows, list) and rows else rows}), 201
     except Exception:
-        return jsonify({"error": "Could not load or save feedback. Please try again."}), 503
+        return jsonify({"error": "Hindi ma-load o ma-save ang feedback. Subukan ulit."}), 503

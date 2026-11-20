@@ -36,8 +36,6 @@ export type BirthdayBenefitApplicationPdfData = {
   id_picture_url?: string | null;
   full_body_picture_submitted?: boolean;
   full_body_picture_url?: string | null;
-  endorsed_list_submitted?: boolean;
-  endorsed_list_url?: string | null;
 
   // OSCA review
   validation_status?: string;
@@ -445,7 +443,6 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
   const hasPrimaryDoc = Boolean(data.birth_certificate_submitted || data.valid_id_submitted);
   const hasIdPic = Boolean(data.id_picture_submitted || data.applicant?.avatarUrl || data.id_picture_url);
   const hasFullBody = Boolean(data.full_body_picture_submitted || data.full_body_picture_url);
-  const hasEndorsed = Boolean(data.endorsed_list_submitted || data.endorsed_list_url);
 
   // Initial Assessment
   const validationStatus = (data.validation_status || 'Pending').trim();
@@ -1395,7 +1392,7 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
       <tbody>
         <!-- LOCAL APPLICANTS -->
         <tr>
-          <td rowspan="5" class="col-applicant-type">Local<br>Applicants</td>
+          <td rowspan="4" class="col-applicant-type">Local<br>Applicants</td>
           <td class="col-req-desc">
             <strong>a.)</strong> Duly accomplished application form "Annex A";
           </td>
@@ -1431,19 +1428,11 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
         </tr>
         <tr>
           <td class="col-req-desc">
-            <strong>d.)</strong> Full body picture of the applicant printed on an A4 size bond/photo paper; and
+            <strong>d.)</strong> Full body picture of the applicant printed on an A4 size bond/photo paper.
           </td>
           <td class="col-complied">${hasFullBody ? '✓' : ''}</td>
           <td class="col-complied">${!hasFullBody ? '✓' : ''}</td>
           <td class="col-remarks">${hasFullBody ? 'Full-body photo submitted.' : 'Pending submission.'}</td>
-        </tr>
-        <tr>
-          <td class="col-req-desc">
-            <strong>e.)</strong> Applicant's inclusion to the endorsed list for validation issued by the Local Chief Executive.
-          </td>
-          <td class="col-complied">${hasEndorsed ? '✓' : ''}</td>
-          <td class="col-complied">${!hasEndorsed ? '✓' : ''}</td>
-          <td class="col-remarks">${hasEndorsed ? 'LGU Pateros Endorsement List' : 'Subject to LGU validation'}</td>
         </tr>
 
         <!-- LIVING ABROAD (Part 1) -->
@@ -1501,7 +1490,7 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
       </thead>
       <tbody>
         <tr>
-          <td rowspan="3" class="col-applicant-type">Applicants<br>Living Abroad</td>
+          <td rowspan="2" class="col-applicant-type">Applicants<br>Living Abroad</td>
           <td class="col-req-desc">
             <strong>c.)</strong> Recent 5.08 cm x 5.08 cm (2"x 2") ID picture
           </td>
@@ -1511,15 +1500,7 @@ export function generateBirthdayBenefitsFormHtml(data: BirthdayBenefitApplicatio
         </tr>
         <tr>
           <td class="col-req-desc">
-            <strong>d.)</strong> Full body picture of the applicant printed on an A4 size bond/photo paper; and
-          </td>
-          <td class="col-complied"></td>
-          <td class="col-complied"></td>
-          <td class="col-remarks"></td>
-        </tr>
-        <tr>
-          <td class="col-req-desc">
-            <strong>e.)</strong> Applicant's inclusion to the endorsed list issued by the PE/Consulate or the DFA or the Department of Migrant Workers (DMW) or the Commission on Filipinos Overseas (CFO).
+            <strong>d.)</strong> Full body picture of the applicant printed on an A4 size bond/photo paper.
           </td>
           <td class="col-complied"></td>
           <td class="col-complied"></td>

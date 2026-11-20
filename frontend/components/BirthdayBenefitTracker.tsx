@@ -1,5 +1,6 @@
 import React, { useCallback, useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { Text, TextInput } from './AppText';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { API_BASE_URL } from '../services/loloApi';
@@ -10,9 +11,27 @@ type Application = {
   findings_concerns_recommendations?: string;
 };
 type Feedback = { rating: number; comments: string };
+const statusLabels: Record<string, string> = {
+  Pending: 'Naghihintay ng review',
+  'Under Review': 'Nire-review na',
+  Eligible: 'Qualified',
+  Ineligible: 'Hindi qualified',
+  'For Processing': 'Para sa processing',
+  Approved: 'Na-approve na',
+  Rejected: 'Hindi na-approve',
+  Released: 'Na-release na',
+  Cancelled: 'Na-cancel na',
+};
+
+function statusLabel(status = 'Pending') {
+  return statusLabels[status] ?? status;
+}
+
 async function read(response: Response) {
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || 'Could not load your application. Please try again.');
+  const data = await response.json().catch(() => null);
+  if (!response.ok || !data) {
+    throw new Error((response.status < 500 && data?.error) || 'Hindi ma-load ang application mo. Subukan ulit.');
+  }
   return data;
 }
 export default function BirthdayBenefitTracker({ userId, renderForm }: {
@@ -29,6 +48,7 @@ export default function BirthdayBenefitTracker({ userId, renderForm }: {
   const [comments, setComments] = useState('');
   const [saving, setSaving] = useState(false);
   const [eligibility, setEligibility] = useState<{ can_apply: boolean; message: string } | null>(null);
+  const [submittedId, setSubmittedId] = useState<string | null>(null);
 
   useFocusEffect(useCallback(() => {
     let active = true;
@@ -50,7 +70,7 @@ export default function BirthdayBenefitTracker({ userId, renderForm }: {
         setFeedback(data.feedback || null);
         setFeedbackReady(true);
       } catch (err) {
-        if (active) setError(err instanceof Error ? err.message : 'Could not connect. Please try again.');
+        if (active) setError(err instanceof Error ? err.message : 'Hindi makakonekta. Subukan ulit.');
       } finally { clearTimeout(timeout); busy = false; }
     };
     void load();
@@ -72,42 +92,51 @@ export default function BirthdayBenefitTracker({ userId, renderForm }: {
       setEligibility(null);
       setRefresh(value => value + 1);
       setError('');
-    } catch (err) { setError(err instanceof Error ? err.message : 'Could not save feedback.'); }
+    } catch (err) { setError(err instanceof Error ? err.message : 'Hindi na-save ang feedback mo.'); }
     finally { setSaving(false); }
   };
 
   if (checked && !error && (!application || (eligibility?.can_apply && feedback))) {
-    return <>{renderForm((item) => { setApplication(item); setEligibility(null); setFeedback(null); setFeedbackReady(false); setRefresh(v => v + 1); })}</>;
+    return <>{renderForm((item) => {
+      setSubmittedId(item.id);
+      setApplication(item);
+      setEligibility(null);
+      setFeedback(null);
+      setFeedbackReady(false);
+      setRefresh(v => v + 1);
+    })}</>;
   }
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
       <ScrollView contentContainerStyle={s.content}>
-        <TouchableOpacity onPress={() => router.back()} accessibilityRole="button"><Text style={s.link}>Back</Text></TouchableOpacity>
+        <TouchableOpacity onPress={() => router.back()} accessibilityRole="button"><Text style={s.link}>Bumalik</Text></TouchableOpacity>
         <Text style={s.title}>Birthday Benefits</Text>
-        <Text style={s.subtitle}>Application status tracking</Text>
-        {error ? <View style={s.card}><Text style={s.error}>{error}</Text><TouchableOpacity onPress={() => setRefresh(v => v + 1)}><Text style={s.link}>Try again</Text></TouchableOpacity></View> : null}
+        <Text style={s.subtitle} accessibilityLiveRegion="polite">
+          {submittedId !== null && application?.id === submittedId ? 'Na-submit na ang application mo' : 'Status ng application mo'}
+        </Text>
+        {error ? <View style={s.card}><Text style={s.error}>{error}</Text><TouchableOpacity onPress={() => setRefresh(v => v + 1)}><Text style={s.link}>Subukan ulit</Text></TouchableOpacity></View> : null}
         {!checked && !error ? <ActivityIndicator color="#1F5C3E" /> : null}
         {application && <>
           {feedback && eligibility && <View style={s.card}><Text style={s.detail}>{eligibility.message}</Text></View>}
           <View style={s.card}>
-            <Text style={s.heading}>{application.benefit_type} application{application.benefit_milestone ? ` (age ${application.benefit_milestone})` : ''}</Text>
+            <Text style={s.heading}>Application para sa {application.benefit_type}{application.benefit_milestone ? ` (edad ${application.benefit_milestone})` : ''}</Text>
             <Text selectable style={s.detail}>Reference: {application.id}</Text>
-            <Text style={s.detail}>Submitted: {application.created_at?.slice(0, 10) || 'Submitted'}</Text>
-            <Text style={s.label}>VALIDATION STATUS</Text><Text style={s.status}>{application.validation_status || 'Pending'}</Text>
-            <Text style={s.label}>PROCESSING STATUS</Text><Text style={s.status}>{application.benefit_status || 'Pending'}</Text>
-            {application.benefit_amount != null && <Text style={s.detail}>Benefit amount: ?{Number(application.benefit_amount).toLocaleString('en-PH')}</Text>}
-            {application.date_released && <Text style={s.detail}>Date released: {application.date_released}</Text>}
+            <Text style={s.detail}>{application.created_at ? `Na-submit noong ${application.created_at.slice(0, 10)}` : 'Na-submit na'}</Text>
+            <Text style={s.label}>STATUS NG VERIFICATION</Text><Text style={s.status}>{statusLabel(application.validation_status)}</Text>
+            <Text style={s.label}>STATUS NG APPLICATION</Text><Text style={s.status}>{statusLabel(application.benefit_status)}</Text>
+            {application.benefit_amount != null && <Text style={s.detail}>Halaga ng benefit: ₱{Number(application.benefit_amount).toLocaleString('en-PH')}</Text>}
+            {application.date_released && <Text style={s.detail}>Na-release noong {application.date_released}</Text>}
             {application.findings_concerns_recommendations && <Text style={s.detail}>{application.findings_concerns_recommendations}</Text>}
-            <TouchableOpacity onPress={() => setRefresh(v => v + 1)}><Text style={s.link}>Refresh status</Text></TouchableOpacity>
+            <TouchableOpacity onPress={() => setRefresh(v => v + 1)}><Text style={s.link}>I-refresh ang status</Text></TouchableOpacity>
           </View>
           {application.benefit_status === 'Released' && <View style={s.card}>
-            <Text style={s.heading}>{feedback ? 'Thank you for your feedback' : 'Feedback required'}</Text>
-            <Text style={s.detail}>Service: Birthday Benefits</Text>
-            {feedback ? <><Text style={s.status}>{feedback.rating} / 5</Text><Text style={s.detail}>{feedback.comments}</Text></> : !feedbackReady ? <Text style={s.detail}>Loading feedback status?</Text> : <>
-              <Text style={s.detail}>Your benefit has been released. Please rate the service and share your experience.</Text>
-              <View style={s.ratings}>{[1, 2, 3, 4, 5].map(value => <TouchableOpacity key={value} onPress={() => setRating(value)} accessibilityRole="button" accessibilityLabel={`Rate ${value} out of 5`} accessibilityState={{ selected: rating === value }} style={[s.rating, rating === value && s.selected]}><Text style={rating === value ? s.white : s.status}>{value}</Text></TouchableOpacity>)}</View>
-              <TextInput style={s.input} multiline value={comments} onChangeText={setComments} maxLength={2000} placeholder="Tell us about your experience" accessibilityLabel="Required service feedback" />
-              <TouchableOpacity style={[s.button, (!rating || !comments.trim() || saving) && { opacity: 0.5 }]} onPress={submitFeedback} disabled={!rating || !comments.trim() || saving}><Text style={s.white}>{saving ? 'Submitting?' : 'Submit feedback'}</Text></TouchableOpacity>
+            <Text style={s.heading}>{feedback ? 'Salamat sa feedback mo' : 'Kailangan ang feedback'}</Text>
+            <Text style={s.detail}>Serbisyo: Birthday Benefits</Text>
+            {feedback ? <><Text style={s.status}>{feedback.rating} / 5</Text><Text style={s.detail}>{feedback.comments}</Text></> : !feedbackReady ? <Text style={s.detail}>Nilo-load ang feedback status…</Text> : <>
+              <Text style={s.detail}>Na-release na ang benefit mo. I-rate ang serbisyo at ikuwento ang experience mo.</Text>
+              <View style={s.ratings}>{[1, 2, 3, 4, 5].map(value => <TouchableOpacity key={value} onPress={() => setRating(value)} accessibilityRole="button" accessibilityLabel={`I-rate ng ${value} sa 5`} accessibilityState={{ selected: rating === value }} style={[s.rating, rating === value && s.selected]}><Text style={rating === value ? s.white : s.status}>{value}</Text></TouchableOpacity>)}</View>
+              <TextInput style={s.input} multiline value={comments} onChangeText={setComments} maxLength={2000} placeholder="Ikuwento ang experience mo" accessibilityLabel="Kailangang feedback tungkol sa serbisyo" />
+              <TouchableOpacity style={[s.button, (!rating || !comments.trim() || saving) && { opacity: 0.5 }]} onPress={submitFeedback} disabled={!rating || !comments.trim() || saving}><Text style={s.white}>{saving ? 'Sine-submit na…' : 'I-submit ang feedback'}</Text></TouchableOpacity>
             </>}
           </View>}
         </>}
