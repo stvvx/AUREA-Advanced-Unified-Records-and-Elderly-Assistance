@@ -7,6 +7,7 @@ import requests
 from flask import Blueprint, jsonify, request
 
 from config import Config
+from services.email_notifications import notify_activity
 from services.memory_service import _supabase
 
 from concurrent.futures import ThreadPoolExecutor
@@ -500,6 +501,7 @@ def create_reservation():
             return error_response(message, 409)
 
         result = response.json()
+        notify_activity("POST", "movie_reservations", result, owner_id=user["id"])
 
         return jsonify({
             "success": True,

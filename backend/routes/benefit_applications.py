@@ -130,7 +130,7 @@ def application_milestone(application, dob):
 def birthday_application_eligibility(dob, applications, reviewed_ids):
     benefit_type = classify_benefit_type(dob)
     if not benefit_type:
-        return {"can_apply": False, "benefit_type": None, "message": "Hindi ka pa qualified para sa Birthday Benefits."}
+        return {"can_apply": False, "benefit_type": None, "message": "Para sa edad 80 pataas ang Birthday Benefits. I-check ang petsa ng kapanganakan sa profile mo kung qualified ka na."}
     if any(item.get("benefit_status") != "Released" for item in applications):
         return {"can_apply": False, "benefit_type": benefit_type, "message": "I-check ang status ng application mo habang hinihintay na ma-release ang benefit."}
     # The tracking view and feedback requirement both refer to the latest application.
@@ -424,7 +424,7 @@ def update_admin_benefit_application(application_id: str):
             "GET",
             "octogenarian_benefit_applications",
             params={
-                "select": "benefit_status,benefit_amount,date_released",
+                "select": "validation_status,benefit_status,benefit_amount,date_validated,date_released,findings_concerns_recommendations",
                 "id": f"eq.{application_id}",
                 "limit": "1",
             },
@@ -484,6 +484,7 @@ def update_admin_benefit_application(application_id: str):
             "PATCH",
             f"octogenarian_benefit_applications?id=eq.{application_id}",
             payload=payload,
+            previous=current,
         )
         updated = _supabase(
             "GET",

@@ -31,10 +31,12 @@ class SeniorOnlyFieldTests(unittest.TestCase):
         tree = ast.parse(Path(__file__).with_name("app.py").read_text(encoding="utf-8"))
         node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "save_digital_signature")
         node.decorator_list = []
-        rest = Mock(side_effect=[[{"user_id": 7}], [], [{"id": 7, "digital_signature": "signed"}]])
+        rest = Mock(side_effect=[[{"user_id": 7}], [], [{"id": 7, "digital_signature": "signed",
+                                                       "email": "registered@example.test"}]])
+        notify = Mock()
         context = {"request": SimpleNamespace(method="POST", get_json=lambda **kw: {"signature": "signed"}),
                    "ensure_users_table": lambda: None, "supabase_rest": rest, "SUPABASE_USERS_TABLE": "users",
-                   "jsonify": lambda x: x, "_serialize_user": lambda x: x}
+                   "jsonify": lambda x: x, "_serialize_user": lambda x: x, "notify_profile": notify}
         exec(compile(ast.Module(body=[node], type_ignores=[]), "signature-contract", "exec"), context)
         result, status = context["save_digital_signature"](7)
         self.assertEqual(status, 200)
@@ -44,6 +46,7 @@ class SeniorOnlyFieldTests(unittest.TestCase):
         self.assertEqual(writes[0].kwargs["params"], {"user_id": "eq.7"})
         self.assertEqual(writes[0].kwargs["payload"], {"signature": "signed"})
         self.assertEqual(result["user"]["id"], 7)
+        notify.assert_called_once_with(7, email="registered@example.test")
 
     def test_income_source_requires_work_details(self):
         for occupation in (None, "", "  ", "x" * 201):

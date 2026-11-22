@@ -18,11 +18,13 @@ class UserSessionTests(unittest.TestCase):
         for node in functions:
             node.decorator_list = []
         self.db = Mock(return_value=[])
+        self.notify = Mock()
         self.request = SimpleNamespace(remote_addr="192.168.1.20", headers={})
         self.context = {"request": self.request, "os": os, "ipaddress": ipaddress, "secrets": secrets,
                         "datetime": datetime, "timedelta": timedelta, "timezone": timezone,
                         "supabase_rest": self.db, "SUPABASE_USERS_TABLE": "users",
-                        "_serialize_user": lambda u: {"id": u["id"]}, "jsonify": lambda x: x}
+                        "_serialize_user": lambda u: {"id": u["id"]}, "jsonify": lambda x: x,
+                        "notify_user": self.notify, "PROFILE_CHECKLIST": ("Kumpletuhin ang profile.",)}
         exec(compile(ast.Module(body=functions, type_ignores=[]), "session-contract", "exec"), self.context)
 
     def test_token_rotation_and_ip(self):
@@ -33,6 +35,8 @@ class UserSessionTests(unittest.TestCase):
         payload = self.db.call_args.kwargs["payload"]
         self.assertEqual(payload["ip_address"], "192.168.1.20")
         self.assertGreater(datetime.fromisoformat(payload["token_expires_at"]), datetime.now(timezone.utc))
+        self.assertEqual(self.notify.call_count, 2)
+        self.assertEqual(self.notify.call_args.kwargs["requirements"], self.context["PROFILE_CHECKLIST"])
 
     def test_forwarded_ip_requires_explicit_trust(self):
         self.request.headers = {"X-Forwarded-For": "203.0.113.10, 10.0.0.1"}

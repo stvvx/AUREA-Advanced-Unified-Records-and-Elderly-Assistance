@@ -21,6 +21,8 @@ from typing import Any, Optional
 import requests
 
 from config import Config
+from services.birthday_benefit_table import renamed_birthday_benefit_path
+from services.email_notifications import ACTIVITY_LABELS, notify_activity
 from services.senior_profiles import with_senior_fields
 
 # ─── Constants ────────────────────────────────────────────────────────────────
@@ -107,13 +109,19 @@ def _supabase(
     *,
     params: dict | None = None,
     payload: dict | list | None = None,
+    previous: dict | None = None,
 ) -> list | dict:
     """Lightweight Supabase REST wrapper (reuses Config credentials)."""
     if not Config.SUPABASE_URL or not Config.SUPABASE_SERVICE_ROLE_KEY:
         raise RuntimeError("Supabase is not configured (missing URL or key).")
 
     url     = f"{Config.SUPABASE_URL}/rest/v1/{path}"
-    headers = Config.supabase_headers(prefer_return=(method.upper() == "POST"))
+    table = path.partition("?")[0]
+    headers = Config.supabase_headers(prefer_return=(
+        method.upper() == "POST" or
+        (table in ACTIVITY_LABELS and method.upper() in {"PATCH", "DELETE"}
+         and bool(os.environ.get("SMTP_HOST", "").strip()))
+    ))
 
     # Retry reads only: retrying writes after a timeout can create duplicates.
     attempts = 2 if method.upper() == "GET" else 1
@@ -134,6 +142,9 @@ def _supabase(
         break
 
     if not resp.ok:
+        renamed_path = renamed_birthday_benefit_path(path, resp)
+        if renamed_path:
+            return _supabase(method, renamed_path, params=params, payload=payload, previous=previous)
         try:
             body   = resp.json()
             detail = body.get("message") or body.get("hint") or body.get("details") or str(body)
@@ -144,6 +155,8 @@ def _supabase(
     rows = resp.json() if resp.content else []
     if method.upper() == "GET" and path == Config.SUPABASE_USERS_TABLE:
         return with_senior_fields(rows, _supabase)
+    notify_activity(method.upper(), table, rows, changes=payload if isinstance(payload, dict) else None,
+                    previous=previous)
     return rows
 
 

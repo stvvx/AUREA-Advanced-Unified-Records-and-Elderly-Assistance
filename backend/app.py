@@ -11,6 +11,8 @@ from pathlib import Path
 import re
 import requests
 from dotenv import load_dotenv
+from services.birthday_benefit_table import renamed_birthday_benefit_path
+from services.email_notifications import ACTIVITY_LABELS, PROFILE_CHECKLIST, notify_activity, notify_profile, notify_user
 from flask import Flask, jsonify, request, send_file
 from itsdangerous import URLSafeTimedSerializer, BadSignature
 from services.registration_id import scan_registration_id
@@ -182,7 +184,9 @@ def supabase_rest(
             method.upper(),
             url,
             headers=_rest_headers(
-                prefer_return=(method.upper() == "POST")
+                prefer_return=(method.upper() == "POST" or
+                               (table in ACTIVITY_LABELS and method.upper() in {"PATCH", "DELETE"}
+                                and bool(os.environ.get("SMTP_HOST", "").strip())))
             ),
             params=params,
             json=payload,
@@ -195,6 +199,9 @@ def supabase_rest(
         ) from exc
 
     if not response.ok:
+        renamed_path = renamed_birthday_benefit_path(table, response)
+        if renamed_path:
+            return supabase_rest(method, renamed_path, params=params, payload=payload)
         try:
             body = response.json()
 
@@ -217,6 +224,9 @@ def supabase_rest(
             rows = response.json()
             if method.upper() == "GET" and table == SUPABASE_USERS_TABLE:
                 return with_senior_fields(rows, supabase_rest)
+            owner_id = payload.get("user_id") if method.upper() == "POST" and isinstance(payload, dict) else None
+            notify_activity(method.upper(), table, rows, owner_id=owner_id,
+                            changes=payload if isinstance(payload, dict) else None)
             return rows
         except ValueError:
             return []
@@ -475,6 +485,9 @@ def register():
             supabase_rest("DELETE", SUPABASE_USERS_TABLE, params={"id": f"eq.{user['id']}"})
             return jsonify({"message": "Could not attach your existing ID. Please contact OSCA or try again."}), 503
 
+    notify_user(user.get("id"), "Welcome po sa AUREA!",
+                "Ready na ang AUREA account mo. Narito ang checklist para makapagsimula sa mga serbisyo ng Pateros.",
+                email=user.get("email"), requirements=PROFILE_CHECKLIST)
     return jsonify({
         "message": "Account created successfully.",
         "userId": user.get("id"),
@@ -498,6 +511,11 @@ def issue_user_session(user):
     supabase_rest("PATCH", SUPABASE_USERS_TABLE, params={"id": f"eq.{user['id']}"}, payload={
         "token": token, "token_expires_at": expires.isoformat(), "ip_address": client_ip_address(),
     })
+    role = (user.get("role") or "user").strip().lower()
+    notify_user(user["id"], "May bagong sign-in sa AUREA",
+                "Hi po! May bagong sign-in sa AUREA account mo. Kung hindi ikaw ito, makipag-ugnayan sa AUREA support.",
+                email=user.get("email"),
+                requirements=PROFILE_CHECKLIST if role in {"user", "senior", "senior citizen"} else ())
     return {**_serialize_user(user), "token": token, "tokenExpiresAt": expires.isoformat()}
 
 
@@ -870,6 +888,7 @@ def enroll_face():
             rows = patch_resp.json()
             if rows:
                 updated_user = rows[0]
+                notify_profile(user_id, email=updated_user.get("email"))
 
         return jsonify({
             "success": True,
@@ -1034,6 +1053,7 @@ def user_profile(user_id):
             supabase_rest("PATCH", "seniors", params={"user_id": f"eq.{user_id}"}, payload=senior_income)
         if sig_val is not None or senior_income is not None:
             rows = supabase_rest("GET", SUPABASE_USERS_TABLE, params={"id": f"eq.{user_id}", "select": "*", "limit": "1"})
+            notify_profile(user_id, email=rows[0].get("email"))
             return jsonify({"message": "Profile updated.", "user": _serialize_user(rows[0])}), 200
         return jsonify({"message": "No fields to update."}), 400
 
@@ -1063,6 +1083,8 @@ def user_profile(user_id):
             return jsonify({"message": str(exc)}), 500
     u = updated[0] if updated else {}
     u = with_senior_fields([u], supabase_rest)[0] if u else u
+    if u:
+        notify_profile(user_id, email=u.get("email"))
     return jsonify({"message": "Profile updated.", "user": _serialize_user(u)}), 200
 
 
@@ -1127,13 +1149,15 @@ def upload_avatar(user_id):
     # Save URL to users table
     try:
         patch_url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_USERS_TABLE}"
-        requests.patch(
+        saved_avatar = requests.patch(
             patch_url,
-            headers=_rest_headers(),
+            headers=_rest_headers(prefer_return=True),
             params={"id": f"eq.{user_id}"},
             json={"avatar_url": public_url},
             timeout=15,
         )
+        if saved_avatar.ok and saved_avatar.content and (rows := saved_avatar.json()):
+            notify_profile(user_id, email=rows[0].get("email"))
     except Exception:
         pass  # URL is still returned even if DB update fails
 
@@ -1184,6 +1208,8 @@ def upload_birth_certificate(user_id):
             except Exception:
                 pass
 
+            if patch_response.content and (rows := patch_response.json()):
+                notify_profile(user_id, email=rows[0].get("email"))
             return jsonify({
                 "message": "Birth certificate removed successfully.",
                 "birthcert": None,
@@ -1244,6 +1270,8 @@ def upload_birth_certificate(user_id):
             detail = patch_response.json().get("message", patch_response.text) if patch_response.content else patch_response.text
             return jsonify({"message": f"Could not save birth certificate: {detail}"}), 500
 
+        if patch_response.content and (rows := patch_response.json()):
+            notify_profile(user_id, email=rows[0].get("email"))
         return jsonify({
             "birthcert": public_url,
             "birth_certificate": public_url,
@@ -1281,6 +1309,8 @@ def save_digital_signature(user_id):
             return jsonify({"message": "Senior profile not found."}), 404
         supabase_rest("PATCH", "seniors", params={"user_id": f"eq.{user_id}"}, payload={"signature": signature_data})
         users = supabase_rest("GET", SUPABASE_USERS_TABLE, params={"id": f"eq.{user_id}", "select": "*", "limit": "1"})
+        if users:
+            notify_profile(user_id, email=users[0].get("email"))
         return jsonify({"success": True, "message": "Digital signature saved successfully!",
                         "signature": signature_data, "user": _serialize_user(users[0]) if users else {}}), 200
     except RuntimeError as exc:
@@ -1791,6 +1821,9 @@ def manage_admin_user(user_id):
         if request.method == "DELETE":
             supabase_rest("DELETE", SUPABASE_USERS_TABLE, params={"id": f"eq.{user_id}"})
             write_audit_log(actor, "deleted user account", "user", user_id, {"email": target.get("email")})
+            if target.get("email"):
+                notify_user(user_id, "Na-delete ang AUREA account mo", "Na-delete na ang AUREA account mo.",
+                            email=target["email"])
             return jsonify({"message": "User account deleted."}), 200
         data = request.get_json(silent=True) or {}
         payload = {}
@@ -1811,6 +1844,8 @@ def manage_admin_user(user_id):
         write_audit_log(actor, "updated user account", "user", user_id, {
             "email": target.get("email"), "changes": payload,
         })
+        if any(target.get(field) != value for field, value in payload.items()):
+            notify_profile(user_id)
         return jsonify({"user": _serialize_user(updated[0] if updated else {**target, **payload})}), 200
     except RuntimeError as exc:
         return jsonify({"message": str(exc)}), 500

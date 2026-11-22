@@ -1,5 +1,31 @@
 # AUREA backend
 
+## Email notifications
+
+Configure the SMTP relay in `backend/.env` using a sender verified by your provider.
+
+```dotenv
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_SECURITY=starttls
+SMTP_USERNAME=
+SMTP_PASSWORD=
+SMTP_FROM=AUREA <notifications@example.com>
+```
+
+Use `SMTP_SECURITY=ssl` and port 465 for implicit TLS. Restart Flask after
+configuring SMTP. Email delivery uses the existing accounts and needs zero
+database migrations or separate processes.
+
+Flask sends branded Taglish emails to the registered address after successful
+sign-ups, sign-ins, profile edits, and service or community transactions handled
+by the API. Keep `assets/email/` with the backend deployment because the logos
+are embedded in each email. Onboarding messages and applicable service notices
+include a submission checklist. SMTP failures are logged and the original
+action stays saved. Delivery is attempted once.
+
+## Local setup
+
 Install Python 3.12 or newer with PATH enabled. From PowerShell in `backend`, run:
 
 ```powershell
