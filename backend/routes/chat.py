@@ -189,6 +189,21 @@ def lolo_chat():
         except Exception as ext_exc:
             print(f"[LOLO Memory] Could not start extraction thread: {ext_exc}")
 
+        # ── Inline TTS: generate audio in the same round-trip ─────────────────
+        audio_b64 = None
+        try:
+            from services.tts_service import TTSService
+            tts_result = TTSService.process_tts_request(
+                text=reply_text,
+                language=language,
+                speech_rate=Config.LOLO_TTS_RATE,
+                speech_pitch=Config.LOLO_TTS_PITCH,
+            )
+            if tts_result.get("success"):
+                audio_b64 = tts_result.get("audioBase64")
+        except Exception as tts_exc:
+            print(f"[LOLO TTS] Inline TTS failed: {tts_exc}")
+
         return jsonify({
             "success":        True,
             "message":        reply_text,
@@ -196,6 +211,7 @@ def lolo_chat():
             "conversationId": conversation_id,
             "action":         action,
             "source":         source,
+            "audioBase64":    audio_b64,
         }), 200
 
     except Exception as exc:

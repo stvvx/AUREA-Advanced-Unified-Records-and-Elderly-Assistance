@@ -152,24 +152,33 @@ export default function AssistantScreen() {
         (err) => {
           console.warn('[Assistant] hands-free error:', err);
           setIsListening(false);
+          if (err?.message === 'quota_exceeded') {
+            speechEngine.speak(
+              'Pasensya na po, naubos na ang aming AI quota ngayon. Subukan po bukas o mag-type na lamang.',
+              () => setIsSpeaking(true),
+              () => { setIsSpeaking(false); }
+            );
+            return;
+          }
+          // retry after a short pause so a mic error doesn't permanently kill listening
+          setTimeout(() => resumeListening(), 1500);
         }
       );
-    }, 200);
+    }, 150);
   };
 
-  // Speak, and start listening again when finished
-  const speakAndResume = (text: string) => {
-    speechEngine.speak(
-      text,
-      () => {
-        setIsSpeaking(true);
-        setIsListening(false);
-      },
-      () => {
-        setIsSpeaking(false);
-        resumeListening();
-      }
-    );
+  // Speak, and start listening again when finished.
+  // busyRef stays true until TTS ends so the mic never starts mid-speech.
+  const speakAndResume = (text: string, audioBase64?: string) => {
+    busyRef.current = true;
+    const onStart = () => { setIsSpeaking(true); setIsListening(false); };
+    const onEnd   = () => { setIsSpeaking(false); busyRef.current = false; resumeListening(); };
+
+    if (audioBase64) {
+      speechEngine.speakFromBase64(audioBase64, text, onStart, onEnd);
+    } else {
+      speechEngine.speak(text, onStart, onEnd);
+    }
   };
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -184,6 +193,9 @@ export default function AssistantScreen() {
     useState<Emotion>('happy');
 
   const [inputText, setInputText] = useState('');
+
+  // In-session conversation history sent to the AI for context
+  const conversationHistoryRef = useRef<{ role: string; content: string }[]>([]);
 
   const [currentSpeech, setCurrentSpeech] = useState(
     'Magandang araw po! Ako si Lolo Aurea. Pindutin lamang po ang mikropono o magtanong sa akin.'
@@ -307,19 +319,17 @@ export default function AssistantScreen() {
       if (data.emotion) setCurrentEmotion(data.emotion);
 
       setCurrentSpeech(speechToPlay);
-      busyRef.current = false;
-      speakAndResume(speechToPlay);
+      speakAndResume(speechToPlay, data.audioBase64);
 
       if (actionFromAI) handleSystemAction(actionFromAI);
     } catch {
       speechEngine.stop();
       setCurrentSpeech(topic.speechText);
-      busyRef.current = false;
       speakAndResume(topic.speechText);
 
       if (topic.action) handleSystemAction(topic.action);
     } finally {
-      busyRef.current = false;
+      // busyRef is cleared by speakAndResume's onEnd.
       setIsLoading(false);
     }
   };
@@ -345,18 +355,12 @@ export default function AssistantScreen() {
       'Sandali lang po, iniisip ni Lolo Aurea ang inyong tanong...'
     );
 
-    // filler: plain speak, no resume
-    speechEngine.speak(
-      'Sandali lang po, iniisip ko ang inyong tanong.',
-      () => setIsSpeaking(true),
-      () => setIsSpeaking(false)
-    );
-
     try {
       const data = await sendLoloMessage({
         userId: Number((user as any)?.id || 0),
         message: textToSend,
         language: 'fil',
+        history: conversationHistoryRef.current,
         userProfile: user
           ? {
               firstName: user.firstName,
@@ -372,11 +376,17 @@ export default function AssistantScreen() {
         const responseText =
           data.message || 'Opo, naintindihan ko po kayo.';
 
+        // Append this exchange to session history (keep last 20 turns)
+        conversationHistoryRef.current = [
+          ...conversationHistoryRef.current,
+          { role: 'user', content: textToSend },
+          { role: 'assistant', content: responseText },
+        ].slice(-20);
+
         setCurrentEmotion(data.emotion ? data.emotion : 'happy');
         setCurrentSpeech(responseText);
 
-        busyRef.current = false;
-        speakAndResume(responseText);
+        speakAndResume(responseText, data.audioBase64);
 
         if (data.action) handleSystemAction(data.action);
       } else {
@@ -389,10 +399,10 @@ export default function AssistantScreen() {
         'Pasensya na po, medyo mahina ang signal. Subukan po nating muli o magtanong ulit.';
 
       setCurrentSpeech(fallbackText);
-      busyRef.current = false;
       speakAndResume(fallbackText);
     } finally {
-      busyRef.current = false;
+      // busyRef is cleared by speakAndResume's onEnd, not here.
+      // Only clear the loading spinner.
       setIsLoading(false);
     }
   };

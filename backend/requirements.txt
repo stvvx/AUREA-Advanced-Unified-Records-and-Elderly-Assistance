@@ -8,6 +8,7 @@ pillow==12.3.0
 numpy==2.5.4
 google-genai>=1.14.0
 flask-cors==5.0.1
+groq>=1.7.0
 edge-tts
 
 reportlab>=4.4,<5

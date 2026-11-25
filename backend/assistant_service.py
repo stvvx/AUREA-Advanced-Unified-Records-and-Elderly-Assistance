@@ -271,33 +271,22 @@ def _fallback_generate(
     }
 
 
-# ─── Gemini Client ────────────────────────────────────────────────────────────
+# ─── Groq Client ─────────────────────────────────────────────────────────────
 
-def _get_gemini_client():
-    """
-    Lazily initialise and return the Gemini client.
-    Returns None if no API key is configured — callers fall back gracefully.
-    """
-    api_key = (
-        os.environ.get("GEMINI_API_KEY")
-        or os.environ.get("GOOGLE_API_KEY")
-        or ""
-    ).strip()
-
-    if not api_key or api_key == "your_gemini_api_key_here":
+def _get_groq_client():
+    api_key = (os.environ.get("GROQ_API_KEY") or "").strip()
+    if not api_key or api_key == "your_groq_api_key_here":
         return None
-
     try:
-        from google import genai  # google-genai >= 1.14
-        return genai.Client(api_key=api_key)
+        from groq import Groq
+        return Groq(api_key=api_key)
     except Exception as exc:
-        print(f"[AUREA Assistant] Gemini client init error: {exc}")
+        print(f"[AUREA Assistant] Groq client init error: {exc}")
         return None
 
 
 def _get_model_name() -> str:
-    """Return the configured Gemini model name with a sensible default."""
-    return os.environ.get("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+    return os.environ.get("GROQ_CHAT_MODEL", "llama-3.3-70b-versatile").strip() or "llama-3.3-70b-versatile"
 
 
 # ─── Build Conversation Contents ─────────────────────────────────────────────
@@ -389,90 +378,71 @@ def generate_assistant_response(
     message: str,
     history: Optional[List[Dict[str, str]]] = None,
     user_profile: Optional[Dict[str, Any]] = None,
-    memories: Optional[List[dict]] = None,    # Phase 6: long-term memory injection
+    memories: Optional[List[dict]] = None,
 ) -> Dict[str, Any]:
-    """
-    Generate a synchronous AI response for Lolo Aurea.
-
-    Phase 5: Gemini structured JSON output — emotion comes from the model.
-    Phase 6: Relevant memories are injected into the system prompt.
-
-    Returns:
-        {
-            "text":    str,          # AUREA's reply
-            "emotion": str,          # One of SUPPORTED_EMOTIONS
-            "action":  str | None,   # Optional navigation action tag
-            "source":  str,          # "gemini" | "knowledge_engine" | ...
-        }
-    """
-    client = _get_gemini_client()
+    client = _get_groq_client()
 
     if not client:
         return _fallback_generate(message, user_profile)
 
     try:
         system_instruction = _build_system_instruction(user_profile, memories)
-        contents           = _build_contents(message, history)
-        model              = _get_model_name()
 
-        response = client.models.generate_content(
-            model=model,
-            contents=contents,
-            config={
-                "system_instruction": system_instruction,
-                "temperature": 0.75,
-                "max_output_tokens": 600,
-                # ── Structured JSON output (Phase 5 upgrade) ──────────────
-                "response_mime_type": "application/json",
-                "response_schema": _LOLO_RESPONSE_SCHEMA,
-            },
+        # Tell the model to return JSON explicitly in the system prompt
+        system_instruction += (
+            "\n\nIMPORTANTE: Sumagot LAGI sa JSON format na ito at wala nang iba:\n"
+            '{"message": "<iyong sagot>", "emotion": "<emotion>", "action": null}\n'
+            "Ang emotion ay isa sa: neutral, happy, excited, sad, thinking, surprised, sleepy.\n"
+            "Huwag magdagdag ng anumang teksto bago o pagkatapos ng JSON."
         )
 
-        raw_text = (response.text or "").strip()
+        messages = [{"role": "system", "content": system_instruction}]
 
-        # ── Parse structured response ──────────────────────────────────────
+        # Add conversation history
+        if history:
+            for turn in history[-(10 * 2):]:
+                role = "user" if turn.get("role") == "user" else "assistant"
+                content = (turn.get("content") or "").strip()
+                if content:
+                    messages.append({"role": role, "content": content})
+
+        messages.append({"role": "user", "content": message})
+
+        response = client.chat.completions.create(
+            model=_get_model_name(),
+            messages=messages,
+            temperature=0.75,
+            max_tokens=600,
+            response_format={"type": "json_object"},
+        )
+
+        raw_text = (response.choices[0].message.content or "").strip()
         parsed   = json.loads(raw_text)
         reply    = str(parsed.get("message") or "").strip()
         emotion  = str(parsed.get("emotion") or "neutral").lower()
         action   = parsed.get("action") or None
 
-        # Sanitise emotion — ensure it's always a valid value
         if emotion not in SUPPORTED_EMOTIONS:
             emotion = "neutral"
-
-        # Sanitise action — strip whitespace / null strings
         if isinstance(action, str):
             action = action.strip() or None
-        if action not in (
-            None,
-            "NAVIGATE_DIGITAL_ID",
-            "NAVIGATE_BENEFITS",
-            "NAVIGATE_FACE_VERIFICATION",
-            "NAVIGATE_PROFILE",
-            "CALL_HOTLINE",
-        ):
+        if action not in (None, "NAVIGATE_DIGITAL_ID", "NAVIGATE_BENEFITS",
+                          "NAVIGATE_FACE_VERIFICATION", "NAVIGATE_PROFILE", "CALL_HOTLINE"):
             action = None
 
-        return {
-            "text":    reply,
-            "emotion": emotion,
-            "action":  action,
-            "source":  "gemini",
-        }
+        return {"text": reply, "emotion": emotion, "action": action, "source": "groq"}
 
     except json.JSONDecodeError as exc:
-        # Gemini returned non-JSON (shouldn't happen with response_schema, but be safe)
         print(f"[AUREA Assistant] JSON parse error: {exc} — raw: {raw_text[:200]}")
-        # Extract plain text and detect emotion from keywords as fallback
         return {
             "text":    raw_text or _fallback_generate(message, user_profile)["text"],
             "emotion": _keyword_emotion(raw_text),
             "action":  _extract_action(raw_text),
-            "source":  "gemini_plain",
+            "source":  "groq_plain",
         }
 
     except Exception as exc:
-        print(f"[AUREA Assistant] Gemini error: {exc} — falling back to knowledge engine.")
+        print(f"[AUREA Assistant] Groq error ({type(exc).__name__}): {exc}")
         return _fallback_generate(message, user_profile)
 
 
@@ -483,14 +453,7 @@ def stream_assistant_response(
     history: Optional[List[Dict[str, str]]] = None,
     user_profile: Optional[Dict[str, Any]] = None,
 ) -> Generator[str, None, None]:
-    """
-    Stream token chunks for real-time TTS (Phase 7).
-
-    NOTE: Streaming does not support response_schema (JSON isn't valid mid-stream).
-    This function uses plain text output and is used only for TTS chunking.
-    The non-streaming path is used for all chat + emotion logic.
-    """
-    client = _get_gemini_client()
+    client = _get_groq_client()
 
     if not client:
         fallback = _fallback_generate(message, user_profile)
@@ -501,22 +464,26 @@ def stream_assistant_response(
 
     try:
         system_instruction = _build_system_instruction(user_profile)
-        contents           = _build_contents(message, history)
-        model              = _get_model_name()
+        messages = [{"role": "system", "content": system_instruction}]
+        if history:
+            for turn in history[-(10 * 2):]:
+                role = "user" if turn.get("role") == "user" else "assistant"
+                content = (turn.get("content") or "").strip()
+                if content:
+                    messages.append({"role": role, "content": content})
+        messages.append({"role": "user", "content": message})
 
-        stream = client.models.generate_content_stream(
-            model=model,
-            contents=contents,
-            config={
-                "system_instruction": system_instruction,
-                "temperature": 0.75,
-                "max_output_tokens": 600,
-            },
+        stream = client.chat.completions.create(
+            model=_get_model_name(),
+            messages=messages,
+            temperature=0.75,
+            max_tokens=600,
+            stream=True,
         )
-
         for chunk in stream:
-            if chunk.text:
-                yield chunk.text
+            text = chunk.choices[0].delta.content or ""
+            if text:
+                yield text
 
     except Exception as exc:
         print(f"[AUREA Assistant] Stream error: {exc}")

@@ -59,6 +59,10 @@ class Config:
     # gemini-1.5-flash is fast and cost-effective for real-time chat.
     GEMINI_MODEL: str = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
 
+    # Groq STT via Whisper
+    GROQ_API_KEY: str = os.environ.get("GROQ_API_KEY", "").strip()
+    GROQ_STT_MODEL: str = os.environ.get("GROQ_STT_MODEL", "whisper-large-v3-turbo")
+
     # ── LOLO AUREA Conversation Settings ─────────────────────────────────────
 
     # Maximum number of past messages to include in each AI prompt.

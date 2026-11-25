@@ -512,6 +512,114 @@ private handsFreeRecorder: AudioRecorder | null = null;
     );
   }
 
+  /**
+   * Play pre-fetched base64 audio directly — skips the TTS network call.
+   * Use this when the chat response already includes audioBase64.
+   */
+  public speakFromBase64(
+    audioBase64: string,
+    text: string,
+    onStart?: () => void,
+    onEnd?: () => void,
+  ): void {
+    if (!audioBase64) {
+      onEnd?.();
+      return;
+    }
+    this.stop();
+    this.isSpeakingActive = true;
+    // Re-use the existing playback path by injecting a fake cached result
+    const requestId = ++this.speechRequestId;
+    const fakeResult = { audioBase64, success: true };
+    // Temporarily cache it and call playElevenLabsAudio with the base64 injected
+    void this.playElevenLabsAudioFromBase64(audioBase64, text, requestId, onStart, onEnd);
+  }
+
+  private async playElevenLabsAudioFromBase64(
+    audioBase64: string,
+    text: string,
+    requestId: number,
+    onStart?: () => void,
+    onEnd?: () => void,
+  ): Promise<void> {
+    if (requestId !== this.speechRequestId) return;
+
+    if (this.isWeb) {
+      await this.playWebAudio(audioBase64, text, requestId, onStart, onEnd);
+      return;
+    }
+
+    let fileUri: string | null = null;
+    try {
+      const cacheDirectory = FileSystem.cacheDirectory;
+      if (!cacheDirectory) throw new Error('No cache dir');
+
+      fileUri = `${cacheDirectory}lolo_${Date.now()}.mp3`;
+      await FileSystem.writeAsStringAsync(fileUri, audioBase64, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+
+      if (requestId !== this.speechRequestId) {
+        await FileSystem.deleteAsync(fileUri, { idempotent: true }).catch(() => {});
+        return;
+      }
+
+      await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
+
+      const sound = createAudioPlayer({ uri: fileUri });
+
+      if (!sound.isLoaded) {
+        await new Promise<void>((resolve, reject) => {
+          let settled = false;
+          const timeout = setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            sub.remove();
+            reject(new Error('Audio load timeout'));
+          }, 10000);
+          const sub = sound.addListener('playbackStatusUpdate', (s: any) => {
+            if (!s.isLoaded || settled) return;
+            settled = true;
+            clearTimeout(timeout);
+            sub.remove();
+            resolve();
+          });
+        });
+      }
+
+      sound.volume = 1.0;
+      this.currentSound = sound;
+
+      sound.addListener('playbackStatusUpdate', (s: any) => {
+        if (!s.isLoaded) return;
+        if (typeof s.currentTime === 'number') this.lastPositionSec = s.currentTime;
+        if (typeof s.duration === 'number' && s.duration > 0) this.lastDurationSec = s.duration;
+      });
+
+      sound.addListener('playbackStatusUpdate', (s: any) => {
+        if (!s.isLoaded || !s.didJustFinish) return;
+        this.isSpeakingActive = false;
+        this.stopVisemeAnimation();
+        if (this.currentSound === sound) this.currentSound = null;
+        sound.remove();
+        if (fileUri) FileSystem.deleteAsync(fileUri, { idempotent: true }).catch(() => {});
+        onEnd?.();
+      });
+
+      if (requestId !== this.speechRequestId) { sound.remove(); return; }
+
+      onStart?.();
+      this.startVisemeAnimation(text);
+      sound.play();
+    } catch (error: any) {
+      this.isSpeakingActive = false;
+      this.stopVisemeAnimation();
+      if (this.currentSound) { try { this.currentSound.pause(); } catch {} this.currentSound.remove(); this.currentSound = null; }
+      if (fileUri) FileSystem.deleteAsync(fileUri, { idempotent: true }).catch(() => {});
+      onEnd?.();
+    }
+  }
+
   public speakInstant(
     text: string,
     onStart?: () => void,
@@ -1281,7 +1389,7 @@ if (!sound.isLoaded) {
     this.isListeningActive = false;
 
     if (this.vadTimer) {
-      clearInterval(this.vadTimer);
+      clearTimeout(this.vadTimer);
       this.vadTimer = null;
     }
 
@@ -1364,11 +1472,11 @@ if (!sound.isLoaded) {
 
     this.isListeningActive = true;
 
-    const POLL_MS = 100;
-    const MIN_VOICED_MS = 300;
-    const SILENCE_END_MS = 800;
-    const IDLE_RESTART_MS = 10000;
-    const MAX_UTTERANCE_MS = 20000;
+    const MIN_VOICED_MS    = 250;  // ms of voice needed to trigger speech detection
+    const SILENCE_END_MS   = 450;  // ms of silence after speech ends before sending
+    const IDLE_RESTART_MS  = 12000;
+    const MAX_UTTERANCE_MS = 25000;
+    const POLL_MS          = 60;   // poll faster for snappier silence detection
 
     const cycle = async () => {
       if (!this.handsFreeActive) return;
@@ -1379,87 +1487,148 @@ if (!sound.isLoaded) {
           isMeteringEnabled: true,
         } as any);
 
-        await rec.prepareToRecordAsync();
+        await rec.prepareToRecordAsync({
+          ...RecordingPresets.HIGH_QUALITY,
+          isMeteringEnabled: true,
+        } as any);
+
         rec.record();
         this.handsFreeRecorder = rec;
+        console.log('[LOLO STT] Recording started, uri will be:', (rec as any).uri);
 
-        const startedAt = Date.now();
+        const startedAt    = Date.now();
         const noiseSamples: number[] = [];
-        let threshold = -40;
-        let voicedMs = 0;
+        let threshold      = -38;
+        let voicedMs       = 0;
         let speechDetected = false;
-        let lastVoiceAt = Date.now();
+        let lastVoiceAt    = Date.now();
+        let finished       = false;
 
-        this.vadTimer = setInterval(async () => {
-          if (!this.handsFreeActive || this.handsFreeRecorder !== rec) return;
+        const finish = async (fromIdle: boolean) => {
+          if (finished) return;
+          finished = true;
+          if (this.vadTimer) { clearInterval(this.vadTimer); this.vadTimer = null; }
+          this.handsFreeRecorder = null;
 
+          try { await rec.stop(); } catch {}
+
+          if (fromIdle) { void cycle(); return; }
+
+          try {
+            const uri: string | null = (rec as any).uri ?? null;
+            console.log('[LOLO STT] Stopping, uri:', uri, 'speechDetected:', speechDetected);
+            if (!uri) throw new Error('No recording URI after stop');
+
+            const b64 = await FileSystem.readAsStringAsync(uri, {
+              encoding: FileSystem.EncodingType.Base64,
+            });
+            console.log('[LOLO STT] Audio b64 length:', b64.length, '| sending to', API_BASE_URL);
+
+            // Send directly so we can log the raw response on failure
+            let sttResponse: Response;
+            try {
+              sttResponse = await fetch(`${API_BASE_URL}/api/lolo/speech/stt`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ audio: b64, mimeType: 'audio/m4a', language: 'fil' }),
+              });
+            } catch (netErr) {
+              throw new Error(`Network error reaching STT endpoint: ${netErr instanceof Error ? netErr.message : String(netErr)}`);
+            }
+
+            let res: any;
+            try {
+              res = await sttResponse.json();
+            } catch {
+              throw new Error(`STT HTTP ${sttResponse.status} — response was not JSON`);
+            }
+
+            if (!sttResponse.ok) {
+              throw new Error(`STT HTTP ${sttResponse.status}: ${res?.error || res?.message || 'unknown'}`);
+            }
+
+            console.log('[LOLO STT] STT result:', res.success, '| text:', res.text, '| source:', res.source);
+
+            const text = (res.text || '').trim();
+            if (res.success && text) {
+              this.handsFreeActive   = false;
+              this.isListeningActive = false;
+              onTranscript(text);
+            } else if (res.error === 'quota_exceeded') {
+              // STT quota hit — notify the caller once, stop retrying
+              this.handsFreeActive   = false;
+              this.isListeningActive = false;
+              onError?.(new Error('quota_exceeded'));
+            } else {
+              void cycle();
+            }
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            console.warn('[LOLO STT] STT error:', msg);
+            onError?.(e instanceof Error ? e : new Error(msg));
+            setTimeout(() => void cycle(), 1200);
+          }
+        };
+
+        // Primary: event-based metering
+        const sub = rec.addListener('recordingStatusUpdate', (status: any) => {
+          if (finished) return;
           const now = Date.now();
-          const db = (rec.getStatus() as any)?.metering ?? -160;
+          const db: number =
+            typeof status.metering === 'number' ? status.metering : -160;
 
-          // 1) learn the background noise level for the first 500ms
-          if (now - startedAt < 500) {
-            if (db > -160) noiseSamples.push(db);
-            if (noiseSamples.length) {
-              const avg =
-                noiseSamples.reduce((a, b) => a + b, 0) / noiseSamples.length;
-              threshold = Math.max(avg + 12, -45);
+          console.log('[LOLO VAD] event db:', db.toFixed(1), 'threshold:', threshold.toFixed(1), 'voiced:', voicedMs);
+
+          if (now - startedAt < 600) {
+            if (db > -155) noiseSamples.push(db);
+            if (noiseSamples.length >= 3) {
+              const avg = noiseSamples.reduce((a, b) => a + b, 0) / noiseSamples.length;
+              threshold = Math.max(avg + 10, -42);
             }
             return;
           }
-
-          // 2) voice detection
           if (db > threshold) {
-            voicedMs += POLL_MS;
+            voicedMs  += POLL_MS;
             lastVoiceAt = now;
             if (voicedMs >= MIN_VOICED_MS) speechDetected = true;
           }
-
           const silentFor = now - lastVoiceAt;
-          const finished =
-            speechDetected &&
-            (silentFor > SILENCE_END_MS || now - startedAt > MAX_UTTERANCE_MS);
-          const idleTimeout =
-            !speechDetected && now - startedAt > IDLE_RESTART_MS;
+          if (speechDetected && silentFor > SILENCE_END_MS) { sub.remove(); void finish(false); }
+          if (!speechDetected && now - startedAt > IDLE_RESTART_MS) { sub.remove(); void finish(true); }
+          if (now - startedAt > MAX_UTTERANCE_MS) { sub.remove(); void finish(false); }
+        });
 
-          if (!finished && !idleTimeout) return;
+        // Secondary: setInterval poll as fallback if events don't fire
+        this.vadTimer = setInterval(() => {
+          if (finished) { clearInterval(this.vadTimer!); this.vadTimer = null; return; }
+          const now  = Date.now();
+          const status = (rec as any).getStatus?.() ?? {};
+          const db: number =
+            typeof status.metering === 'number' ? status.metering :
+            typeof (rec as any).metering === 'number' ? (rec as any).metering : -160;
 
-          clearInterval(this.vadTimer);
-          this.vadTimer = null;
-          this.handsFreeRecorder = null;
-          await rec.stop();
-
-          if (idleTimeout) {
-            void cycle(); // nobody spoke, just keep waiting
+          if (now - startedAt < 600) {
+            if (db > -155) noiseSamples.push(db);
+            if (noiseSamples.length >= 3) {
+              const avg = noiseSamples.reduce((a, b) => a + b, 0) / noiseSamples.length;
+              threshold = Math.max(avg + 10, -42);
+            }
             return;
           }
-
-          try {
-            const b64 = await FileSystem.readAsStringAsync(rec.uri!, {
-              encoding: FileSystem.EncodingType.Base64,
-            });
-
-            const res = await sendLoloAudioSTT({
-              audio: b64,
-              mimeType: 'audio/m4a',
-              language: 'fil',
-            });
-
-            const text = (res.text || '').trim();
-
-            if (res.success && text) {
-              this.handsFreeActive = false;
-              this.isListeningActive = false;
-              onTranscript(text);
-            } else {
-              void cycle(); // noise / unclear, keep listening
-            }
-          } catch (e) {
-            onError?.(e);
-            setTimeout(() => void cycle(), 1000);
+          if (db > threshold) {
+            voicedMs  += POLL_MS;
+            lastVoiceAt = now;
+            if (voicedMs >= MIN_VOICED_MS) speechDetected = true;
           }
+          const silentFor = now - lastVoiceAt;
+          if (speechDetected && silentFor > SILENCE_END_MS) { sub.remove(); void finish(false); }
+          if (!speechDetected && now - startedAt > IDLE_RESTART_MS) { sub.remove(); void finish(true); }
+          if (now - startedAt > MAX_UTTERANCE_MS) { sub.remove(); void finish(false); }
         }, POLL_MS);
+
       } catch (e) {
-        onError?.(e);
+        console.warn('[LOLO STT] cycle error:', e instanceof Error ? e.message : String(e));
+        onError?.(e instanceof Error ? e : new Error(String(e)));
         this.isListeningActive = false;
       }
     };

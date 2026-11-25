@@ -1,42 +1,39 @@
 """
 backend/services/stt_service.py
 ─────────────────────────────────────────────────────────────────────────────
-Speech-to-Text (STT) Service for LOLO PAT AI Companion — Phase 8.
+Speech-to-Text service using Groq Whisper.
 
-Transcribes spoken Filipino/Tagalog and English audio using Gemini Multimodal
-Audio processing.
+Groq's whisper-large-v3-turbo is fast, accurate for Filipino/Taglish,
+and free on the Groq API (https://console.groq.com).
 ─────────────────────────────────────────────────────────────────────────────
 """
 
 import base64
 import io
-import re
-from typing import Dict, Any, Optional
+import tempfile
+import os
+from typing import Dict, Any
 from config import Config
 
-# Optional Gemini client
-_genai_client = None
+_groq_client = None
 
 
-def _get_gemini_client():
-    global _genai_client
-    if _genai_client is not None:
-        return _genai_client
-
-    if not Config.GEMINI_API_KEY:
+def _get_groq_client():
+    global _groq_client
+    if _groq_client is not None:
+        return _groq_client
+    if not Config.GROQ_API_KEY:
         return None
-
     try:
-        from google import genai
-        _genai_client = genai.Client(api_key=Config.GEMINI_API_KEY)
-        return _genai_client
+        from groq import Groq
+        _groq_client = Groq(api_key=Config.GROQ_API_KEY)
+        return _groq_client
     except Exception as exc:
-        print(f"[LOLO STT] Failed to initialize Gemini client: {exc}")
+        print(f"[LOLO STT] Failed to initialize Groq client: {exc}")
         return None
 
 
 class STTService:
-    """Core Speech-to-Text service for LOLO PAT."""
 
     @staticmethod
     def transcribe_audio(
@@ -44,10 +41,6 @@ class STTService:
         mime_type: str = "audio/m4a",
         language: str = "fil",
     ) -> Dict[str, Any]:
-        """
-        Transcribes base64-encoded audio.
-        Supports: audio/m4a, audio/mp4, audio/wav, audio/mp3, audio/webm, audio/aac.
-        """
         if not audio_b64:
             return {"success": False, "error": "audio_b64 is required."}
 
@@ -63,65 +56,65 @@ class STTService:
         if len(audio_bytes) < 100:
             return {"success": False, "error": "Audio recording is too short or empty."}
 
-        client = _get_gemini_client()
+        client = _get_groq_client()
+        if not client:
+            return {"success": False, "error": "stt_unavailable", "text": ""}
 
-        if client:
-            try:
-                from google.genai import types
+        # Groq Whisper accepts a file-like object; write bytes to a temp file
+        # so we can pass a named file with the correct extension.
+        ext = "m4a"
+        if "wav" in mime_type:
+            ext = "wav"
+        elif "mp3" in mime_type or "mpeg" in mime_type:
+            ext = "mp3"
+        elif "webm" in mime_type:
+            ext = "webm"
+        elif "ogg" in mime_type:
+            ext = "ogg"
+        elif "flac" in mime_type:
+            ext = "flac"
 
-                # CHANGED (1): the prompt now lets Gemini say "no speech"
-                prompt = (
-                    "You are a precise Speech-to-Text AI for the AUREA app. "
-                    "The speaker is an elderly Filipino speaking Tagalog, Filipino, Taglish, or English. "
-                    "Transcribe verbatim with proper punctuation and spelling. "
-                    "If there is no clearly intelligible human speech (silence, noise, coughing, "
-                    "TV or background sounds), output exactly: [NO_SPEECH]. "
-                    "Output ONLY the transcription, nothing else."
+        # Groq expects language as a 2-letter ISO code
+        iso_lang = "tl" if language in ("fil", "fil-PH", "tl-PH", "tl") else "en"
+
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False) as tmp:
+                tmp.write(audio_bytes)
+                tmp_path = tmp.name
+
+            with open(tmp_path, "rb") as audio_file:
+                transcription = client.audio.transcriptions.create(
+                    model=Config.GROQ_STT_MODEL,
+                    file=(f"audio.{ext}", audio_file, mime_type),
+                    language=iso_lang,
+                    response_format="text",
                 )
 
-                normalized_mime = mime_type or "audio/m4a"
-                if "m4a" in normalized_mime:
-                    normalized_mime = "audio/mp4"
+            text = (transcription if isinstance(transcription, str) else str(transcription)).strip()
 
-                response = client.models.generate_content(
-                    model=Config.GEMINI_MODEL,
-                    contents=[
-                        types.Part.from_bytes(
-                            data=audio_bytes,
-                            mime_type=normalized_mime,
-                        ),
-                        prompt,
-                    ],
-                )
+            if not text or len(text) < 2:
+                return {"success": False, "text": "", "error": "no_speech", "language": language}
 
-                transcribed_text = (response.text or "").strip()
-                transcribed_text = re.sub(r"^```[a-zA-Z]*\n?", "", transcribed_text)
-                transcribed_text = re.sub(r"\n?```$", "", transcribed_text).strip(' "\'')
+            return {
+                "success": True,
+                "text": text,
+                "confidence": 0.95,
+                "language": language,
+                "source": "groq_whisper",
+            }
 
-                # CHANGED (2): treat "no speech" as an empty result
-                if "NO_SPEECH" in transcribed_text.upper() or len(transcribed_text) < 2:
-                    return {
-                        "success": False,
-                        "text": "",
-                        "error": "no_speech",
-                        "language": language,
-                    }
+        except Exception as exc:
+            err_str = str(exc)
+            if "429" in err_str or "rate_limit" in err_str.lower():
+                print(f"[LOLO STT] Groq rate limit hit.")
+                return {"success": False, "text": "", "error": "quota_exceeded", "language": language}
+            print(f"[LOLO STT] Groq transcription error: {exc}")
+            return {"success": False, "text": "", "error": str(exc), "language": language}
 
-                return {
-                    "success": True,
-                    "text": transcribed_text,
-                    "confidence": 0.98,
-                    "language": language,
-                    "source": "gemini_multimodal_stt",
-                }
-            except Exception as exc:
-                print(f"[LOLO STT] Gemini audio transcription error: {exc}")
-
-        # CHANGED (3): the fake "Magandang araw po Lolo Aurea!..." fallback is gone.
-        # If Gemini is unavailable or failed, report failure instead of inventing text.
-        return {
-            "success": False,
-            "text": "",
-            "error": "stt_unavailable",
-            "language": language,
-        }
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass

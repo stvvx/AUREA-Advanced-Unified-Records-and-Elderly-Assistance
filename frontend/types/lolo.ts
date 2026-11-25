@@ -137,6 +137,9 @@ export interface ChatResponse {
 
   /** Optional error message if success is false. */
   error?: string;
+
+  /** Pre-generated TTS audio — skip the separate /speech/tts round-trip. */
+  audioBase64?: string;
 }
 
 // ─── Memory ───────────────────────────────────────────────────────────────────
