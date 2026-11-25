@@ -20,6 +20,7 @@ type BlenderElder3DProps = {
 // ================================================================
 
 const TARGET_HEIGHT = 3;
+const MAX_RENDER_FPS = 30;
 
 // Bust-shot camera
 const CAMERA_FOV = 32;
@@ -1408,6 +1409,7 @@ export default function BlenderElder3D({
     const clock = new THREE.Clock();
 
     let animationFrameId: number | null = null;
+    let lastRenderTime = 0;
 
     const setEyeScaleY = (factor: number): void => {
       if (eye1Ref.current && eye1OpenScaleRef.current) {
@@ -1419,12 +1421,18 @@ export default function BlenderElder3D({
       }
     };
 
-    const animate = (): void => {
+    const animate = (timestamp: number): void => {
       if (disposedRef.current) {
         return;
       }
 
       animationFrameId = requestAnimationFrame(animate);
+
+      if (timestamp - lastRenderTime < 1000 / MAX_RENDER_FPS) {
+        return;
+      }
+
+      lastRenderTime = timestamp;
 
       const delta = clock.getDelta();
 
@@ -1550,7 +1558,7 @@ export default function BlenderElder3D({
       gl.endFrameEXP();
     };
 
-    animate();
+    animate(performance.now());
 
     // ============================================================
     // CLEANUP
