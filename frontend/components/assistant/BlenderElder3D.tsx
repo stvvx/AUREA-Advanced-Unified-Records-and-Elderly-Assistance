@@ -1,5 +1,5 @@
-import React, { useEffect, useRef } from 'react';
-import { View, StyleSheet, Image } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { View, StyleSheet, Image, ActivityIndicator } from 'react-native';
 import { GLView } from 'expo-gl';
 import type { ExpoWebGLRenderingContext } from 'expo-gl';
 import { Asset } from 'expo-asset';
@@ -377,6 +377,26 @@ type PreparedGlb = {
   baseColorImage: Record<number, number>;
 };
 
+let preparedGlbPromise: Promise<PreparedGlb> | null = null;
+
+const readAssetArrayBuffer = async (uri: string): Promise<ArrayBuffer> => {
+  try {
+    const response = await fetch(uri);
+
+    if (response.ok) {
+      return await response.arrayBuffer();
+    }
+  } catch {
+    // Expo file-system fallback for runtimes that do not support file:// fetch.
+  }
+
+  const base64 = await FileSystem.readAsStringAsync(uri, {
+    encoding: FileSystem.EncodingType.Base64,
+  });
+
+  return base64ToBytes(base64).buffer as ArrayBuffer;
+};
+
 // ================================================================
 // PREPARE GLB
 // ================================================================
@@ -415,36 +435,35 @@ const prepareGlb = async (
   const textureFiles: Record<number, TextureFile> = {};
   const images: any[] = json.images || [];
 
-  for (let i = 0; i < images.length; i++) {
-    const img = images[i];
+  await Promise.all(
+    images.map(async (img: any, i: number) => {
+      if (img.bufferView === undefined) {
+        return;
+      }
 
-    if (img.bufferView === undefined) {
-      continue;
-    }
+      const bv = json.bufferViews[img.bufferView];
+      const offset = bv.byteOffset || 0;
+      const bytes = binChunk.subarray(offset, offset + bv.byteLength);
 
-    const bv = json.bufferViews[img.bufferView];
-    const offset = bv.byteOffset || 0;
-    const bytes = binChunk.subarray(offset, offset + bv.byteLength);
+      const ext =
+        img.mimeType === 'image/jpeg'
+          ? 'jpg'
+          : img.mimeType === 'image/webp'
+            ? 'webp'
+            : 'png';
 
-    const ext =
-      img.mimeType === 'image/jpeg'
-        ? 'jpg'
-        : img.mimeType === 'image/webp'
-          ? 'webp'
-          : 'png';
+      const uri = `${cacheDirectory}lolo_texture_${i}.${ext}`;
 
-    const uri = `${cacheDirectory}lolo_texture_${i}.${ext}`;
+      await FileSystem.writeAsStringAsync(uri, bytesToBase64(bytes), {
+        encoding: FileSystem.EncodingType.Base64,
+      });
 
-    await FileSystem.writeAsStringAsync(uri, bytesToBase64(bytes), {
-      encoding: FileSystem.EncodingType.Base64,
-    });
+      const { width, height } = await getImageSize(uri);
+      textureFiles[i] = { uri, width, height };
 
-    const { width, height } = await getImageSize(uri);
-
-    textureFiles[i] = { uri, width, height };
-
-    console.log(`[LOLO] Texture ${i}: ${width}x${height} ${ext}`);
-  }
+      console.log(`[LOLO] Texture ${i}: ${width}x${height} ${ext}`);
+    })
+  );
 
   // --------------------------------------------------------------
   // Remember base-color images
@@ -521,6 +540,47 @@ const prepareGlb = async (
   return { glb: out, textureFiles, baseColorImage };
 };
 
+const getPreparedGlb = async (): Promise<PreparedGlb> => {
+  if (preparedGlbPromise) {
+    return preparedGlbPromise;
+  }
+
+  preparedGlbPromise = (async () => {
+    const asset = Asset.fromModule(require('../../assets/lolo.glb'));
+    await asset.downloadAsync();
+
+    const glbUri = asset.localUri || asset.uri;
+
+    if (!glbUri) {
+      throw new Error('[LOLO] GLB URI is missing.');
+    }
+
+    const cacheDirectory = FileSystem.cacheDirectory;
+
+    if (!cacheDirectory) {
+      throw new Error('[LOLO] Cache directory is unavailable.');
+    }
+
+    console.log('[LOLO] Reading GLB as binary...');
+
+    const glbBytes = await readAssetArrayBuffer(glbUri);
+
+    console.log('[LOLO] Preparing GLB...');
+
+    return await withTimeout(
+      prepareGlb(glbBytes, cacheDirectory),
+      60000,
+      'prepareGlb'
+    );
+  })();
+
+  preparedGlbPromise.catch(() => {
+    preparedGlbPromise = null;
+  });
+
+  return preparedGlbPromise;
+};
+
 // ================================================================
 // TEXTURE HELPER
 // ================================================================
@@ -569,6 +629,7 @@ export default function BlenderElder3D({
   height = 300,
 }: BlenderElder3DProps): React.ReactElement {
   const isSpeakingRef = useRef<boolean>(isSpeaking);
+  const [isLoaded, setIsLoaded] = useState(false);
 
   // --------------------------------------------------------------
   // MOUTH (two parts)
@@ -668,6 +729,11 @@ export default function BlenderElder3D({
       cleanupRef.current?.();
       cleanupRef.current = null;
     };
+  }, []);
+
+  // Prepare and cache the model while the GL context is being initialized.
+  useEffect(() => {
+    void getPreparedGlb();
   }, []);
 
   // ==============================================================
@@ -876,36 +942,6 @@ export default function BlenderElder3D({
 
     console.log('[LOLO] Loading GLB...');
 
-    const asset = Asset.fromModule(require('../../assets/lolo.glb'));
-
-    await asset.downloadAsync();
-
-    const glbUri = asset.localUri || asset.uri;
-
-    if (!glbUri) {
-      throw new Error('[LOLO] GLB URI is missing.');
-    }
-
-    const fileInfo = await FileSystem.getInfoAsync(glbUri);
-
-    if (!fileInfo.exists) {
-      throw new Error(`[LOLO] GLB file does not exist: ${glbUri}`);
-    }
-
-    const base64 = await FileSystem.readAsStringAsync(glbUri, {
-      encoding: FileSystem.EncodingType.Base64,
-    });
-
-    const glbBytes = base64ToBytes(base64);
-
-    console.log('[LOLO] GLB bytes:', glbBytes.byteLength);
-
-    const cacheDirectory = FileSystem.cacheDirectory;
-
-    if (!cacheDirectory) {
-      throw new Error('[LOLO] Cache directory is unavailable.');
-    }
-
     // ------------------------------------------------------------
     // navigator shim
     // ------------------------------------------------------------
@@ -923,13 +959,7 @@ export default function BlenderElder3D({
     // Prepare GLB
     // ------------------------------------------------------------
 
-    console.log('[LOLO] Preparing GLB...');
-
-    const prepared = await withTimeout(
-      prepareGlb(glbBytes.buffer as ArrayBuffer, cacheDirectory),
-      60000,
-      'prepareGlb'
-    );
+    const prepared = await getPreparedGlb();
 
     // ------------------------------------------------------------
     // Parse GLB
@@ -1558,6 +1588,7 @@ export default function BlenderElder3D({
       gl.endFrameEXP();
     };
 
+    setIsLoaded(true);
     animate(performance.now());
 
     // ============================================================
@@ -1598,6 +1629,11 @@ export default function BlenderElder3D({
   return (
     <View style={[styles.container, { height }]}>
       <GLView style={styles.glView} onContextCreate={onContextCreate} />
+      {!isLoaded && (
+        <View style={styles.loadingOverlay} pointerEvents="none">
+          <ActivityIndicator size="small" color="#6B8F71" />
+        </View>
+      )}
     </View>
   );
 }
@@ -1617,5 +1653,11 @@ const styles = StyleSheet.create({
   glView: {
     width: '100%',
     height: '100%',
+  },
+
+  loadingOverlay: {
+    ...StyleSheet.absoluteFill,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });

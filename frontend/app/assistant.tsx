@@ -824,24 +824,18 @@ export default function AssistantScreen() {
           <TouchableOpacity
             style={[
               styles.micButton,
-
-              isListening &&
-                styles.micButtonActive,
+              !handsFree && styles.micButtonActive,
             ]}
             onPress={handleToggleListening}
             accessibilityLabel={
-              isListening
-                ? 'Tapusin ang pagsasalita'
-                : 'Magsalita kay Lolo Aurea'
+              handsFree
+                ? 'I-mute ang mikropono'
+                : 'I-unmute ang mikropono'
             }
           >
 
             <Ionicons
-              name={
-                isListening
-                  ? 'radio'
-                  : 'mic'
-              }
+              name={handsFree ? 'mic' : 'mic-off'}
               size={26}
               color="#FFFFFF"
             />
